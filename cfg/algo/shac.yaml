@@ -1,0 +1,11 @@
+name: shac
+
+actor_lr: 0.001
+critic_lr: 0.01
+gamma: 0.99
+lmbda: 0.05
+actor_grad_norm: 1.
+critic_grad_norm: 
+n_minibatch: 8
+
+entropy_weight: 0.001

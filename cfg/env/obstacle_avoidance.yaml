@@ -1,0 +1,118 @@
+name: obstacle_avoidance
+
+dt: 0.0333
+length: 7.5
+n_envs: 256
+max_time: 20
+max_vel: 5.
+
+min_action: [-15, -15, 0]
+max_action: [15, 15, 15]
+
+n_substeps: 1
+
+quad:
+  m: 1.0                  # total mass
+  arm_l: 0.23             # arm length
+  c_tau: 0.0133           # torque constant
+  g: 9.81                 # gravity
+  J: [0.01, 0.01, 0.02]   # inertia
+  D: [0.6, 0.6, 0.6]      # drag
+  max_w_xy: 5.0           # max angular velocity (xy)
+  max_w_z: 1.0            # max angular velocity (z)
+  max_T: 4.179            # max thrust
+  min_T: 0.0              # min thrust
+
+  lmbda: 0.1              # acc exp smoothing
+
+render:
+  headless: False
+  n_envs: ${env.n_envs}
+  env_spacing: ${env.length}
+  physics_engine: "physx"
+  ground_plane: True
+  image_size: [1, 12, 12]
+
+  sim:
+    dt: ${env.dt}
+    substeps: 1
+    # gravity: [0., 0., -9.81]
+    gravity: [0., 0., 0.]
+    up_axis: 1 # 0 is y, 1 is z
+    use_gpu_pipeline: True
+    physx:
+      # use_gpu: True
+      num_threads: 10
+      solver_type: 1 # 0: pgs, 1: tgs
+      num_position_iterations: 4
+      num_velocity_iterations: 0
+      contact_offset: 0.01 # [m]
+      rest_offset: 0.0 # [m]
+      bounce_threshold_velocity: 0.5
+      max_depenetration_velocity: 1.0
+      max_gpu_contact_pairs: 8388608 # 2**23
+      default_buffer_size_multiplier: 4
+      # num_subscenes: 4 # Splits the simulation into N physics scenes and runs each one in a separate thread
+      # contact_collection: 0 # 0: never, 1: last sub-step, 2: all sub-steps (default=2)
+  
+  viewer:
+    ref_env: 0
+    pos: [-5, -5, 4]
+    lookat: [0, 0, 0]
+  
+  camera:
+    enable_tensors: True
+    width: ${env.render.image_size[1]}
+    height: ${env.render.image_size[2]}
+    horizontal_fov: 90.0
+    supersampling_horizontal: 1
+    supersampling_vertical: 1
+    near_plane: 
+    far_plane: 20.0
+    use_collision_geometry: False
+    
+    transform:
+      p: [0.2, 0., 0.05]
+      r: [0., 0., 0., 1.]
+  
+  robot_asset:
+    file: "resources/robots/simple_quad.urdf"
+    name: "simple_quad"
+    base_link_name: "base_link"
+    foot_name: "None"
+    penalize_contacts_on: []
+    terminate_after_contacts_on: []
+    
+    disable_gravity: True
+    collapse_fixed_joints: True
+    fix_base_link: False
+    collision_mask: 0
+    replace_cylinder_with_capsule: False
+    flip_visual_attachments: True
+    density: 100.
+    angular_damping: 0.
+    linear_damping: 0.
+    max_angular_velocity: 100.
+    max_linear_velocity: 100.
+    armature: 0. # added to the diagonal element of the inertia matrix of each actor
+    override_inertia: True
+  
+  env_asset:
+    n_assets: 15
+    segmentation_id: 1
+    collision_mask: 1
+    walls: True
+    ground_plane: True
+
+    disable_gravity: True
+    collapse_fixed_joints: True
+    fix_base_link: True
+    replace_cylinder_with_capsule: False
+    flip_visual_attachments: True
+    density: 100.
+    angular_damping: 0.
+    linear_damping: 0.
+    max_angular_velocity: 100.
+    max_linear_velocity: 100.
+    armature: 0. # added to the diagonal element of the inertia matrix of each actor
+    override_inertia: False

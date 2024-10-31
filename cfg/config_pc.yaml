@@ -1,0 +1,16 @@
+defaults:
+  - algo: apg
+  - env: position_control
+  - _self_
+  # - override hydra/launcher: joblib
+
+l_rollout: 20
+n_updates: 1000
+device: 
+
+index: 0
+hydra:
+  sweep:
+    dir: ./outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+#   launcher:
+#     n_jobs: 8

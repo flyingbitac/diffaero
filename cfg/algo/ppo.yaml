@@ -1,0 +1,17 @@
+name: ppo
+
+hidden_dim: [256, 256]
+
+lr: 0.001
+eps: 1e-5
+gamma: 0.99
+lmbda: 0.95
+entropy_weight: 0.001
+value_weight: 1
+clip_coef: 0.2
+clip_value_loss: True
+norm_adv: True
+actor_grad_norm: 1.
+critic_grad_norm: 
+n_minibatch: 8
+n_epoch: 4
