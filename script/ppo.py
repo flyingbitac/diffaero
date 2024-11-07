@@ -7,17 +7,16 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 from line_profiler import LineProfiler
 
-from quaddif.env import *
-from quaddif.algo.PPO import PPO
+from quaddif.env import PointMassPositionControl
+from quaddif.algo.PPO import PPO, learn
 from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
 from quaddif.utils.logger import Logger
 
-ENV_CLASS = PointMassPositionControl
 AGENT_CLASS = PPO
 
 profiler = LineProfiler()
-profiler.add_function(ENV_CLASS.step)
+profiler.add_function(PointMassPositionControl.step)
 
 @hydra.main(config_path="../cfg", config_name="config_pc")
 @profiler
@@ -27,41 +26,13 @@ def main(cfg: DictConfig):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     logger = Logger(cfg)
     
-    env: ENV_CLASS = RecordEpisodeStatistics(ENV_CLASS(cfg.env, device=device))
-    state = env.reset()
-    terminated = torch.zeros(env.n_envs, dtype=torch.float, device=device)
-    
+    env: PointMassPositionControl = RecordEpisodeStatistics(PointMassPositionControl(cfg.env, device=device))    
     agent = AGENT_CLASS.build(cfg, env, device)
-    pbar = tqdm(range(cfg.n_updates))
     
-    for i in pbar:
-        # 超级重要，为了后续轨迹的loss梯度不反向传播到此前的状态，要先把梯度截断
-        # env.cut_grad()
-        with torch.no_grad():
-            for t in range(cfg.l_rollout):
-                action, info = agent.act(state)
-                state, loss, next_terminated, extra = env.step(action)
-                agent.add(state, 1-loss/10, terminated, info)
-                terminated = next_terminated
-        
-        advantages, target_values = agent.bootstrap(extra["state_before_reset"], next_terminated)
-        for _ in range(cfg.algo.n_epoch):
-            losses, grad_norms = agent.train(advantages, target_values)
-        
-        # log data
-        l_episode = extra["stats"]["l"].float().mean().item()
-        success_rate = extra['stats']['success_rate']
-        losses.update(grad_norms)
-        pbar.set_postfix({
-            "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-            "loss": f"{loss.mean():.3f}",
-            "l_episode": f"{l_episode:.3f}",
-            "success_rate": f"{success_rate:.2f}"})
-        logger.log_scalars({
-            "env_loss": extra["loss_components"],
-            "agent_loss": losses,
-            "metrics": {"l_episode": l_episode, "success_rate": success_rate}}, i)
+    learn(cfg, agent, env, logger)
     
+    if not cfg.env.render.headless:
+        env.renderer.close()
     global logdir
     logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
 

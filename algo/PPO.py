@@ -1,32 +1,29 @@
-from ast import DictComp
-from typing import Tuple, Dict, List
+from typing import Callable, List, Tuple, Dict, Union, Optional
 from collections import defaultdict
 import os
 
 from omegaconf import DictConfig
 import torch
+from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 
+from quaddif.env.base_env import BaseEnv
 from quaddif.utils.nn import mlp
+from quaddif.utils.logger import Logger, CallBack
 
 class PPOAgent(nn.Module):
     def __init__(
         self,
         state_dim: int,
         hidden_dim: int,
-        action_dim: int,
-        min_action: torch.Tensor,
-        max_action: torch.Tensor,
+        action_dim: int
     ):
         super().__init__()
         self.critic = mlp(state_dim, hidden_dim, 1, hidden_act=nn.ELU())
         self.actor_mean = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU())
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
-        
-        self.register_buffer("max_action", max_action)
-        self.register_buffer("min_action", min_action)
-        self.min_action: torch.Tensor; self.max_action: torch.Tensor
 
     def get_value(self, obs):
         return self.critic(obs).squeeze(-1)
@@ -43,7 +40,7 @@ class PPOAgent(nn.Module):
             sample = probs.sample()
         elif test:
             sample = action_mean.detach()
-        action = (self.max_action - self.min_action) * (torch.tanh(sample) * 0.5 + 0.5) + self.min_action
+        action = torch.tanh(sample)
         logprob = probs.log_prob(sample) - torch.log(1. - torch.tanh(sample).pow(2) + 1e-8)
         # entropy = (-logprob * logprob.exp()).sum(-1)
         entropy = probs.entropy().sum(-1)
@@ -58,20 +55,16 @@ class PPORPLAgent(PPOAgent):
         anchor_state_dim: int,
         hidden_dim: int,
         action_dim: int,
-        min_action: torch.Tensor,
-        max_action: torch.Tensor,
     ):
         super().__init__(
             state_dim=state_dim+action_dim,
             hidden_dim=hidden_dim,
-            action_dim=action_dim,
-            min_action=min_action,
-            max_action=max_action)
+            action_dim=action_dim)
         
         torch.nn.init.zeros_(self.actor_mean[-1].weight)
         torch.nn.init.zeros_(self.actor_mean[-1].bias)
         
-        self.anchor_agent = PPOAgent(anchor_state_dim, hidden_dim, action_dim, min_action, max_action)
+        self.anchor_agent = PPOAgent(anchor_state_dim, hidden_dim, action_dim)
         self.anchor_agent.load_state_dict(torch.load(os.path.join(anchor_ckpt, "agent.pt")))
         self.anchor_agent.eval()
         self.anchor_state_dim = anchor_state_dim
@@ -88,7 +81,7 @@ class PPORPLAgent(PPOAgent):
                 obs[..., :self.anchor_state_dim], test=True)
         obs = torch.cat([obs, anchor_action], dim=-1)
         action, sample, logprob, entropy, value = super().get_action_and_value(obs, sample, test)
-        action = (action + anchor_action).clamp(self.min_action, self.max_action)
+        action = (action + anchor_action).clamp(min=-1, max=1)
         return action, sample, logprob, entropy, value
 
 
@@ -103,17 +96,18 @@ class RolloutBuffer:
         self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
         self.dones = torch.zeros((l_rollout, num_envs), **factory_kwargs)
         self.values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.advantages = torch.zeros_like(self.rewards, **factory_kwargs)
+        self.clear()
+    
+    def clear(self):
         self.step = 0
         
     def add(self, state, sample, logprob, reward, done, value):
-        self.states[self.step] = state
-        self.samples[self.step] = sample
-        self.logprobs[self.step] = logprob
-        self.rewards[self.step] = reward
-        self.dones[self.step] = done.float()
-        self.values[self.step] = value
-        self.step = (self.step + 1) % self.l_rollout
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
+        for buf, input in zip(
+            [self.states, self.samples, self.logprobs, self.rewards, self.dones, self.values],
+            [state, sample, logprob, reward, done, value]):
+            buf[self.step] = input.detach().to(buf.dtype)
+        self.step += 1
 
 
 class PPO:
@@ -123,8 +117,6 @@ class PPO:
         state_dim: int,
         hidden_dim: List[int],
         action_dim: int,
-        min_action: torch.Tensor,
-        max_action: torch.Tensor,
         n_envs: int,
         l_rollout: int,
         device: torch.device
@@ -132,7 +124,7 @@ class PPO:
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.agent = PPOAgent(
-            state_dim, hidden_dim, action_dim, min_action, max_action).to(device)
+            state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
         self.buffer = RolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
         
@@ -155,7 +147,7 @@ class PPO:
         action, sample, logprob, entropy, value = self.agent.get_action_and_value(state)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
-    @torch.no_grad
+    @torch.no_grad()
     def bootstrap(self, final_state, final_terminated):
         final_value = self.agent.get_value(final_state)
         advantages = torch.zeros_like(self.buffer.rewards)
@@ -211,7 +203,7 @@ class PPO:
             else:
                 v_loss = F.mse_loss(newvalue, target_values[mb_indices])
             # total loss
-            loss = 1e-5 * pg_loss + self.value_weight * v_loss + self.entropy_weight * entropy_loss
+            loss = pg_loss + self.value_weight * v_loss + self.entropy_weight * entropy_loss
             self.optim.zero_grad()
             loss.backward()
             
@@ -250,8 +242,6 @@ class PPO:
             state_dim=env.state_dim,
             hidden_dim=list(cfg.algo.hidden_dim),
             action_dim=env.action_dim,
-            min_action=env.min_action,
-            max_action=env.max_action,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
@@ -264,8 +254,6 @@ class PPO_RPL(PPO):
         anchor_state_dim: int,
         hidden_dim: int,
         action_dim: int,
-        min_action: torch.Tensor,
-        max_action: torch.Tensor,
         discount: float,
         gae_lambda: float,
         lr: float,
@@ -280,14 +268,61 @@ class PPO_RPL(PPO):
         device: torch.device,
     ):
         super().__init__(
-            state_dim, hidden_dim, action_dim, min_action, max_action,
+            state_dim, hidden_dim, action_dim,
             discount, gae_lambda, lr, eps, max_grad_norm, l_rollout,
             clip_coef, clip_vloss, entropy_coef, value_coef, norm_adv, device)
         self.agent = PPORPLAgent(
             anchor_ckpt, state_dim, anchor_state_dim, hidden_dim,
-            action_dim, min_action, max_action).to(device)
+            action_dim).to(device)
         self.optim = torch.optim.Adam([
             {"params": self.agent.actor_mean.parameters()},
             {"params": self.agent.actor_logstd},
             {"params": self.agent.critic.parameters()},
         ], lr=lr, eps=eps)
+
+def learn(cfg, agent, env, logger, callback=None):
+    # type: (DictConfig, Union[PPO, PPO_RPL], BaseEnv, Logger, Optional[CallBack]) -> None
+    state = env.reset()
+    terminated = torch.zeros(env.n_envs, dtype=torch.float, device=env.device)
+    pbar = tqdm(range(cfg.n_updates))
+    for i in pbar:
+        t1 = pbar._time()
+        # 超级重要，为了后续轨迹的loss梯度不反向传播到此前的状态，要先把梯度截断
+        env.detach()
+        agent.buffer.clear()
+        with torch.no_grad():
+            for t in range(cfg.l_rollout):
+                action, info = agent.act(state)
+                state, loss, next_terminated, extra = env.step(action)
+                agent.add(state, 1-loss*0.2, terminated, info)
+                terminated = next_terminated
+                if callback is not None:
+                    callback.on_step(
+                        state=state,
+                        action=action,
+                        loss=loss)
+            
+        advantages, target_values = agent.bootstrap(extra["state_before_reset"], next_terminated)
+        for _ in range(cfg.algo.n_epoch):
+            losses, grad_norms = agent.train(advantages, target_values)
+        
+        # log data
+        l_episode = extra["stats"]["l"].float().mean().item()
+        success_rate = extra['stats']['success_rate']
+        losses.update(grad_norms)
+        pbar.set_postfix({
+            "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
+            "loss": f"{loss.mean():.3f}",
+            "l_episode": f"{l_episode:.3f}",
+            "success_rate": f"{success_rate:.2f}",
+            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):.2f}"})
+        log_info = {
+            "env_loss": extra["loss_components"],
+            "agent_loss": losses,
+            "metrics": {"l_episode": l_episode, "success_rate": success_rate}
+        }
+        logger.log_scalars(log_info, i)
+
+        if callback is not None:
+            callback.on_update(log_info=log_info)
+

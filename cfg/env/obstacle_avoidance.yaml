@@ -4,7 +4,11 @@ dt: 0.0333
 length: 7.5
 n_envs: 256
 max_time: 20
-max_vel: 5.
+max_vel: 2.
+vel_ema_factor: 0.1
+align_yaw_with_vel_direction: True
+
+vision: False
 
 min_action: [-15, -15, 0]
 max_action: [15, 15, 15]

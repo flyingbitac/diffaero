@@ -6,4 +6,4 @@ actor_lr: 0.001
 gamma: 0.99
 max_grad_norm: 1.
 
-entropy_weight: 0.001
+entropy_weight: 0.003

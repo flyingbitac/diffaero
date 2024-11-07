@@ -5,6 +5,8 @@ length: 10
 n_envs: 4096
 max_time: 20
 max_vel: 5.
+vel_ema_factor: 0.1
+align_yaw_with_vel_direction: True
 
 min_action: [-15, -15, 0]
 max_action: [15, 15, 15]

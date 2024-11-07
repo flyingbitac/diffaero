@@ -241,10 +241,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.n_obstacles = cfg.env_asset.n_assets
         self.r_obstacles = torch.zeros(cfg.n_envs, self.n_obstacles, device=f"cuda:{device}")
         super().__init__(cfg, device)
-        self.target_positions = torch.zeros_like(self.drone_positions)
-        self.total_dists = torch.zeros_like(self.drone_positions[..., 0])
-        self.dist2target = torch.zeros(self.n_envs, device=self.device)
-        self.collisions = torch.zeros(self.n_envs, device=self.device, dtype=bool)
+        self.target_pos = torch.zeros_like(self.drone_positions)
         self.camera_tensor = torch.zeros((
             self.n_envs, *list(cfg.image_size)), device=self.device)
     
@@ -343,10 +340,13 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
     def check_collisions(self):
         return self.contact_forces[:, :self.robot_num_bodies].abs().sum(dim=-1).norm(dim=-1) > 0.1
     
-    def step(self, state: torch.Tensor):
+    def step(self, state: torch.Tensor, target_pos: torch.Tensor):
         self.root_states.copy_(state)
         self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
+        self.target_pos.copy_(target_pos)
         self.simulation_step()
+    
+    def render_camera(self):
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
         if self.camera_tensor.size(1) == 1:
@@ -355,4 +355,20 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             new_camera = torch.stack(self.camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255
         self.gym.end_access_image_tensors(self.sim)
         self.camera_tensor.copy_(new_camera)
-        return self.camera_tensor
+    
+    def render(self, add_lines=True, *args, **kwargs):
+        add_lines = add_lines and self.viewer is not None
+        if add_lines:
+            lines = torch.concat(
+                [self.drone_positions, self.target_pos], dim=-1).cpu().numpy()
+            factory_kwargs = {"dtype": torch.float32, "device": self.device}
+            colors = torch.zeros(self.n_envs, 3, **factory_kwargs)
+            white = torch.tensor([[1., 1., 1.]], **factory_kwargs)
+            green = torch.tensor([[0., 1., 0.]], **factory_kwargs)
+            colors[:] = white
+            colors[(self.drone_positions-self.target_pos).norm(dim=-1)<0.5] = green
+            for i, env in enumerate(self.env_handles):
+                self.gym.add_lines(self.viewer, env, 1, lines[i:i+1].T, colors[i:i+1].T.cpu().numpy())
+        super().render(*args, **kwargs)
+        if add_lines:
+            self.gym.clear_lines(self.viewer)
