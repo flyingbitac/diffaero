@@ -1,3 +1,4 @@
+import os
 import sys
 sys.path.append('..')
 
@@ -56,7 +57,6 @@ def main(cfg: DictConfig):
     logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
 
 if __name__ == "__main__":
-    import os
     main()
     with open(os.path.join(logdir, "runtime_profile.txt"), "w", encoding="utf-8") as f:
         profiler.print_stats(stream=f, output_unit=1e-3)

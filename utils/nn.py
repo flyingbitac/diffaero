@@ -71,37 +71,23 @@ def mlp(in_dim, mlp_dims, out_dim, hidden_act=nn.Mish(inplace=True), output_act=
         mlp.append(layer_init(nn.Linear(dims[-2], dims[-1]), std=0.01))
     return nn.Sequential(*mlp)
 
-class PPOAgent(nn.Module):
+class StochasticActorCritic(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        action_dim: int,
-        min_action: torch.Tensor,
-        max_action: torch.Tensor,
+        hidden_dim: int,
+        action_dim: int
     ):
         super().__init__()
-        self.critic = nn.Sequential(
-            nn.Linear(state_dim, 64),
-            nn.LayerNorm(64),
-            nn.LeakyReLU(),
-            nn.Linear(64, 1))
-        self.actor_mean = nn.Sequential(
-            nn.Linear(state_dim, 64),
-            nn.LayerNorm(64),
-            nn.LeakyReLU(),
-            nn.Linear(64, action_dim))
+        self.critic = mlp(state_dim, hidden_dim, 1, hidden_act=nn.ELU())
+        self.actor_mean = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU())
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
-        
-        self.register_buffer("min_action", torch.tensor(min_action))
-        self.register_buffer("max_action", torch.tensor(max_action))
-        self.min_action: torch.Tensor
-        self.max_action: torch.Tensor
 
-    def get_value(self, state):
-        return self.critic(state.view(-1, state.size(-1))).squeeze(-1)
+    def get_value(self, obs):
+        return self.critic(obs).squeeze(-1)
 
-    def get_action_value(self, state, sample=None, test=False):
-        action_mean = self.actor_mean(state.view(-1, state.size(-1)))
+    def get_action(self, obs, sample=None, test=False):
+        action_mean = self.actor_mean(obs)
         LOG_STD_MAX = 2
         LOG_STD_MIN = -5
         action_logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
@@ -110,11 +96,14 @@ class PPOAgent(nn.Module):
         probs = torch.distributions.Normal(action_mean, action_std)
         if sample is None and not test:
             sample = torch.randn_like(action_mean) * action_std + action_mean
+            # sample = probs.sample()
         elif test:
             sample = action_mean.detach()
-        action = self.min_action + (self.max_action - self.min_action) * (torch.tanh(sample)+1)
+        action = torch.tanh(sample)
         logprob = probs.log_prob(sample) - torch.log(1. - torch.tanh(sample).pow(2) + 1e-8)
+        # entropy = (-logprob * logprob.exp()).sum(-1)
         entropy = probs.entropy().sum(-1)
-        with torch.no_grad():
-            value = self.get_value(state)
-        return action, sample, logprob.sum(-1), entropy, value
+        return action, sample, logprob.sum(-1), entropy
+
+    def get_action_and_value(self, obs, sample=None, test=False):
+        return *self.get_action(obs, sample, test), self.get_value(obs)

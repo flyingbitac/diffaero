@@ -2,7 +2,7 @@ name: obstacle_avoidance
 
 dt: 0.0333
 length: 7.5
-n_envs: 256
+n_envs: 64
 max_time: 20
 max_vel: 2.
 vel_ema_factor: 0.1

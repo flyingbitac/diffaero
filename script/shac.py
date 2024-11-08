@@ -1,13 +1,15 @@
-import torch
-import hydra
+import os
 import sys
 sys.path.append('..')
-from omegaconf import DictConfig, OmegaConf
-from tqdm import tqdm
+
+import isaacgym
+import torch
+import hydra
+from omegaconf import DictConfig
 from line_profiler import LineProfiler
 
-from quaddif.env import PointMassPositionControl
-from quaddif.algo.SHAC import SHAC
+from quaddif.env import PointMassPositionControl, PointMassObstacleAvoidance
+from quaddif.algo.SHAC import SHAC, learn
 from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
 from quaddif.utils.logger import Logger
@@ -23,51 +25,14 @@ def main(cfg: DictConfig):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     logger = Logger(cfg)
     
-    env: PointMassPositionControl = RecordEpisodeStatistics(PointMassPositionControl(cfg.env, device=device))
-    state = env.reset()
-    terminated = env.terminated()
+    ENV_CLASS = {
+        "position_control": PointMassPositionControl,
+        "obstacle_avoidance": PointMassObstacleAvoidance
+    }[cfg.env.name]
+    env = RecordEpisodeStatistics(ENV_CLASS(cfg.env, device=device))
+    agent = SHAC.build(cfg, env, device)
     
-    agent = SHAC(
-        cfg=cfg.algo,
-        state_dim=env.state_dim,
-        action_dim=env.action_dim,
-        min_action=-15,
-        max_action=15,
-        n_envs=cfg.env.n_envs,
-        l_rollout=cfg.l_rollout,
-        device=device)
-    pbar = tqdm(range(cfg.n_updates))
-    
-    for i in pbar:
-        # 超级重要，为了后续轨迹的loss梯度不反向传播到此前的状态，要先把梯度截断
-        env.cut_grad()
-        # print(agent.actor_loss, state, agent.buffer.states, agent.buffer.values, agent.buffer.logprobs)
-        for t in range(cfg.l_rollout):
-            action, info = agent.act(state)
-            next_state, loss, next_terminated, extra = env.step(action)
-            agent.record_loss(loss, info, extra, last_step=(t==cfg.l_rollout-1))
-            agent.buffer.add(
-                state, 1-loss/10, terminated, info["value"].detach())
-            state, terminated = next_state, next_terminated
-        target_values = agent.bootstrap2(extra["state_before_reset"].detach(), next_terminated)
-        actor_loss, actor_grad_norm = agent.update_actor()
-        agent.clear_loss()
-        critic_loss, critic_grad_norm = agent.update_critic(target_values)
-        agent.buffer.clear()
-        
-        # log data
-        l_episode = extra["stats"]["l"].float().mean().item()
-        success_rate = extra['stats']['success_rate']
-        pbar.set_postfix({
-            "param_norm": f"({actor_grad_norm:.3f}, {critic_grad_norm:.3f})",
-            "loss": f"({actor_loss:.3f}, {critic_loss:.3f})",
-            "l_episode": f"{l_episode:.3f}",
-            "success_rate": f"{success_rate:.2f}"})
-        logger.log_scalars({
-            "param_norm": {"actor": actor_grad_norm, "critic": critic_grad_norm},
-            "loss": {"actor": actor_loss, "critic": critic_loss},
-            "l_episode": l_episode,
-            "success_rate": success_rate}, i)
+    learn(cfg, agent, env, logger)
     
     global logdir
     logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir

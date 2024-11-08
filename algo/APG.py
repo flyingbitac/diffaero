@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Union, Optional
+from typing import Sequence, Tuple, Dict, Union, Optional
 
 from omegaconf import DictConfig
 import torch
@@ -16,7 +16,7 @@ class APG:
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: List[int],
+        hidden_dim: Sequence[int],
         action_dim: int,
         l_rollout: int,
         device: torch.device
@@ -24,9 +24,9 @@ class APG:
         self.actor = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU()).to(device)
         self.optimizer = torch.optim.Adam(
             self.actor.parameters(), lr=cfg.actor_lr)
-        self.discount = cfg.gamma
-        self.max_grad_norm = cfg.max_grad_norm
-        self.l_rollout = l_rollout
+        self.discount: float = cfg.gamma
+        self.max_grad_norm: float = cfg.max_grad_norm
+        self.l_rollout: int = l_rollout
         self.actor_loss = torch.zeros(1, device=device)
         self.device = device
     
@@ -35,9 +35,11 @@ class APG:
         return torch.tanh(self.actor(state)), {}
     
     def record_loss(self, loss, info, extra):
+        # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor]) -> None
         self.actor_loss += loss.mean()
     
     def update_actor(self):
+        # type: () -> Tuple[Dict[str, float], Dict[str, float]]
         self.actor_loss = self.actor_loss / self.l_rollout
         self.optimizer.zero_grad()
         self.actor_loss.backward()
@@ -47,7 +49,7 @@ class APG:
         self.optimizer.step()
         actor_loss = self.actor_loss.item()
         self.actor_loss = torch.zeros(1, device=self.device)
-        return actor_loss, grad_norm
+        return {"actor_loss": actor_loss}, {"actor_grad_norm": grad_norm}
 
     @staticmethod
     def build(cfg, env, device):
@@ -65,7 +67,7 @@ class APG_stocastic(APG):
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: List[int],
+        hidden_dim: Sequence[int],
         action_dim: int,
         l_rollout: int,
         device: torch.device
@@ -76,7 +78,8 @@ class APG_stocastic(APG):
         self.optimizer = torch.optim.Adam([
             {"params": self.actor.parameters()},
             {"params": self.actor_logstd}], lr=cfg.actor_lr)
-        self.entropy_weight = cfg.entropy_weight
+        self.entropy_loss = torch.zeros(1, device=device)
+        self.entropy_weight: float = cfg.entropy_weight
 
     def act(self, state, sample=None):
         # type: (Tensor, Optional[Tensor]) -> Tuple[Tensor, Dict[str, Tensor]]
@@ -95,7 +98,24 @@ class APG_stocastic(APG):
         return action, {"sample": sample, "logprob": logprob.sum(-1), "entropy": entropy}
     
     def record_loss(self, loss, info, extra):
-        self.actor_loss += (loss - self.entropy_weight * info["entropy"]).mean()
+        # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor]) -> None
+        self.actor_loss += loss.mean()
+        self.entropy_loss -= info["entropy"].mean()
+    
+    def update_actor(self):
+        # type: () -> Tuple[Dict[str, float], Dict[str, float]]
+        actor_loss = self.actor_loss / self.l_rollout
+        entropy_loss = self.entropy_loss / self.l_rollout
+        total_loss = actor_loss + self.entropy_weight * entropy_loss
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.actor.parameters()]) ** 0.5
+        if self.max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=self.max_grad_norm)
+        self.optimizer.step()
+        self.actor_loss = torch.zeros(1, device=self.device)
+        self.entropy_loss = torch.zeros(1, device=self.device)
+        return {"actor_loss": actor_loss, "entropy_loss": entropy_loss}, {"actor_grad_norm": grad_norm}
 
     @staticmethod
     def build(cfg, env, device):
@@ -114,7 +134,6 @@ def learn(cfg, agent, env, logger, callback=None):
     pbar = tqdm(range(cfg.n_updates))
     for i in pbar:
         t1 = pbar._time()
-        # 超级重要，为了后续轨迹的loss梯度不反向传播到此前的状态，要先把梯度截断
         env.detach()
         for _ in range(cfg.l_rollout):
             action, info = agent.act(state)
@@ -127,24 +146,23 @@ def learn(cfg, agent, env, logger, callback=None):
                     loss=loss,
                     extra=extra)
             
-        actor_loss, grad_norm = agent.update_actor()
-        
+        losses, grad_norms = agent.update_actor()
         # log data
         l_episode = extra["stats"]["l"].float().mean().item()
         success_rate = extra['stats']['success_rate']
         pbar.set_postfix({
-            "param_norm": f"{grad_norm:.3f}",
+            "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
             "loss": f"{loss.mean().item():.3f}",
             "l_episode": f"{l_episode:.3f}",
             "success_rate": f"{success_rate:.2f}",
-            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):.2f}"})
+            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
         log_info = {
             "env_loss": extra["loss_components"],
-            "agent_loss": {"actor_loss": actor_loss, "actor_grad_norm": grad_norm},
+            "agent_loss": losses,
+            "agent_grad_norm": grad_norms,
             "metrics": {"l_episode": l_episode, "success_rate": success_rate}
         }
         logger.log_scalars(log_info, i)
 
         if callback is not None:
             callback.on_update(log_info=log_info)
-

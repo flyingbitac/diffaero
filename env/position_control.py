@@ -64,7 +64,7 @@ class QuadrotorDynamicsPositionControl:
             "l": self.progress.clone(),
             "reset_indicies": reset_indices,
             "success": success,
-            "state_before_reset": self.state(with_grad=True)
+            "next_state_before_reset": self.state(with_grad=True)
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
@@ -140,7 +140,7 @@ class PointMassPositionControl(BaseEnv):
             "reset": reset,
             "reset_indicies": reset_indices,
             "success": success,
-            "state_before_reset": self.state(with_grad=True),
+            "next_state_before_reset": self.state(with_grad=True),
             "loss_components": loss_components
         }
         if reset_indices.numel() > 0:

@@ -1,53 +1,18 @@
-from typing import Callable, List, Tuple, Dict, Union, Optional
+from typing import List, Tuple, Dict, Optional
 from collections import defaultdict
 import os
 
 from omegaconf import DictConfig
 import torch
 from torch import Tensor
-import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
 from quaddif.env.base_env import BaseEnv
-from quaddif.utils.nn import mlp
+from quaddif.utils.nn import StochasticActorCritic
 from quaddif.utils.logger import Logger, CallBack
 
-class PPOAgent(nn.Module):
-    def __init__(
-        self,
-        state_dim: int,
-        hidden_dim: int,
-        action_dim: int
-    ):
-        super().__init__()
-        self.critic = mlp(state_dim, hidden_dim, 1, hidden_act=nn.ELU())
-        self.actor_mean = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU())
-        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
-
-    def get_value(self, obs):
-        return self.critic(obs).squeeze(-1)
-
-    def get_action_and_value(self, obs, sample=None, test=False):
-        action_mean = self.actor_mean(obs)
-        LOG_STD_MAX = 2
-        LOG_STD_MIN = -5
-        action_logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
-            torch.tanh(self.actor_logstd) + 1)  # From SpinUp / Denis Yarats
-        action_std = torch.exp(action_logstd).expand_as(action_mean)
-        probs = torch.distributions.Normal(action_mean, action_std)
-        if sample is None and not test:
-            sample = probs.sample()
-        elif test:
-            sample = action_mean.detach()
-        action = torch.tanh(sample)
-        logprob = probs.log_prob(sample) - torch.log(1. - torch.tanh(sample).pow(2) + 1e-8)
-        # entropy = (-logprob * logprob.exp()).sum(-1)
-        entropy = probs.entropy().sum(-1)
-        return action, sample, logprob.sum(-1), entropy, self.critic(obs).squeeze(-1)
-
-
-class PPORPLAgent(PPOAgent):
+class PPORPLAgent(StochasticActorCritic):
     def __init__(
         self,
         anchor_ckpt: str,
@@ -64,7 +29,7 @@ class PPORPLAgent(PPOAgent):
         torch.nn.init.zeros_(self.actor_mean[-1].weight)
         torch.nn.init.zeros_(self.actor_mean[-1].bias)
         
-        self.anchor_agent = PPOAgent(anchor_state_dim, hidden_dim, action_dim)
+        self.anchor_agent = StochasticActorCritic(anchor_state_dim, hidden_dim, action_dim)
         self.anchor_agent.load_state_dict(torch.load(os.path.join(anchor_ckpt, "agent.pt")))
         self.anchor_agent.eval()
         self.anchor_state_dim = anchor_state_dim
@@ -94,18 +59,18 @@ class RolloutBuffer:
         self.samples = torch.zeros((l_rollout, num_envs, action_dim), **factory_kwargs)
         self.logprobs = torch.zeros((l_rollout, num_envs), **factory_kwargs)
         self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.dones = torch.zeros((l_rollout, num_envs), **factory_kwargs)
+        self.next_dones = torch.zeros((l_rollout, num_envs), **factory_kwargs)
         self.values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.clear()
+        self.next_values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
     
     def clear(self):
         self.step = 0
         
-    def add(self, state, sample, logprob, reward, done, value):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
+    def add(self, state, sample, logprob, reward, next_done, value, next_value):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
         for buf, input in zip(
-            [self.states, self.samples, self.logprobs, self.rewards, self.dones, self.values],
-            [state, sample, logprob, reward, done, value]):
+            [self.states, self.samples, self.logprobs, self.rewards, self.next_dones, self.values, self.next_values],
+            [state, sample, logprob, reward, next_done, value, next_value]):
             buf[self.step] = input.detach().to(buf.dtype)
         self.step += 1
 
@@ -123,7 +88,7 @@ class PPO:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = PPOAgent(
+        self.agent = StochasticActorCritic(
             state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
         self.buffer = RolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
@@ -148,17 +113,12 @@ class PPO:
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
     @torch.no_grad()
-    def bootstrap(self, final_state, final_terminated):
-        final_value = self.agent.get_value(final_state)
+    def bootstrap(self):
         advantages = torch.zeros_like(self.buffer.rewards)
         lastgaelam = 0
         for t in reversed(range(self.l_rollout)):
-            if t == self.l_rollout - 1:
-                nextnonterminal = 1.0 - final_terminated.float()
-                nextvalues = final_value
-            else:
-                nextnonterminal = 1.0 - self.buffer.dones[t + 1]
-                nextvalues = self.buffer.values[t + 1]
+            nextnonterminal = 1.0 - self.buffer.next_dones[t]
+            nextvalues = self.buffer.next_values[t]
             # TD-error / vanilla advantage function.
             delta = self.buffer.rewards[t] + self.discount * nextvalues * nextnonterminal - self.buffer.values[t]
             # Generalized Advantage Estimation bootstraping formula.
@@ -167,6 +127,7 @@ class PPO:
         return advantages.view(-1), target_values.view(-1)
     
     def train(self, advantages, target_values):
+        # type: (Tensor, Tensor) -> Tuple[Dict[str, float], Dict[str, float]]
         T, N, Ds, Da = self.l_rollout, self.n_envs, self.state_dim, self.action_dim
         states = self.buffer.states.view(T*N, Ds)
         samples = self.buffer.samples.view(T*N, Da)
@@ -219,21 +180,14 @@ class PPO:
             losses["actor_loss"].append(pg_loss.item())
             losses["entropy_loss"].append(entropy_loss.item())
             losses["critic_loss"].append(v_loss.item())
-            # losses["total_loss"].append(loss.item())
             grad_norms["actor_grad_norm"].append(actor_grad_norm)
             grad_norms["critic_grad_norm"].append(critic_grad_norm)
         losses = {k: sum(v) / len(v) for k, v in losses.items()}
         grad_norms = {k: sum(v) / len(v) for k, v in grad_norms.items()}
         return losses, grad_norms
     
-    def add(self, state, reward, terminated, info):
-        self.buffer.add(
-            state=state,
-            sample=info["sample"],
-            logprob=info["logprob"],
-            reward=reward,
-            done=terminated,
-            value=info["value"])
+    def add(self, state, sample, logprob, reward, done, value, next_value):
+        self.buffer.add(state, sample, logprob, reward, done, value, next_value)
 
     @staticmethod
     def build(cfg, env, device):
@@ -281,9 +235,8 @@ class PPO_RPL(PPO):
         ], lr=lr, eps=eps)
 
 def learn(cfg, agent, env, logger, callback=None):
-    # type: (DictConfig, Union[PPO, PPO_RPL], BaseEnv, Logger, Optional[CallBack]) -> None
+    # type: (DictConfig, PPO, BaseEnv, Logger, Optional[CallBack]) -> None
     state = env.reset()
-    terminated = torch.zeros(env.n_envs, dtype=torch.float, device=env.device)
     pbar = tqdm(range(cfg.n_updates))
     for i in pbar:
         t1 = pbar._time()
@@ -293,32 +246,40 @@ def learn(cfg, agent, env, logger, callback=None):
         with torch.no_grad():
             for t in range(cfg.l_rollout):
                 action, info = agent.act(state)
-                state, loss, next_terminated, extra = env.step(action)
-                agent.add(state, 1-loss*0.2, terminated, info)
-                terminated = next_terminated
+                next_state, loss, terminated, extra = env.step(action)
+                agent.add(
+                    state=state,
+                    sample=info["sample"],
+                    logprob=info["logprob"],
+                    reward=1-loss*0.2,
+                    done=terminated,
+                    value=info["value"],
+                    next_value=agent.agent.get_value(extra["next_state_before_reset"]))
+                # terminated = next_terminated
+                state = next_state
                 if callback is not None:
                     callback.on_step(
                         state=state,
                         action=action,
                         loss=loss)
             
-        advantages, target_values = agent.bootstrap(extra["state_before_reset"], next_terminated)
+        advantages, target_values = agent.bootstrap()
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = agent.train(advantages, target_values)
         
         # log data
         l_episode = extra["stats"]["l"].float().mean().item()
         success_rate = extra['stats']['success_rate']
-        losses.update(grad_norms)
         pbar.set_postfix({
             "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
             "loss": f"{loss.mean():.3f}",
             "l_episode": f"{l_episode:.3f}",
             "success_rate": f"{success_rate:.2f}",
-            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):.2f}"})
+            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
         log_info = {
             "env_loss": extra["loss_components"],
             "agent_loss": losses,
+            "agent_grad_norm": grad_norms,
             "metrics": {"l_episode": l_episode, "success_rate": success_rate}
         }
         logger.log_scalars(log_info, i)
