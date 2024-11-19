@@ -90,12 +90,3 @@ class Logger:
                 with open(overrides_path, "r") as f:
                     overrides = [line.strip('- ') for line in f.readlines()]
                     self.writer.add_text("Overrides", ' '.join(overrides), 0)
-
-class CallBack(ABC):
-    @abstractmethod
-    def on_step(self, *args, **kwargs):
-        pass
-
-    @abstractmethod
-    def on_update(self, *args, **kwargs):
-        pass

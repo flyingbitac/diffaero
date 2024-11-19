@@ -126,7 +126,7 @@ class PointMassPositionControl(BaseEnv):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         action = self.rescale_action(action)
         self._state = self.model(self._state, action)
-        self._vel_ema.lerp_(self._v, self.vel_ema_factor)
+        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
         self.progress += 1
         terminated, truncated = self.terminated(), self.truncated()
         reset = terminated | truncated
@@ -161,13 +161,13 @@ class PointMassPositionControl(BaseEnv):
         vel_diff = (self._vel_ema - target_vel).norm(dim=-1)
         vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
         
-        stable_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
+        jerk_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
         
-        # total_loss = pos_diff * 0.2 + vel_loss + 0.01 * stable_loss
-        total_loss = vel_loss + 0.003 * stable_loss
+        # total_loss = pos_diff * 0.2 + vel_loss + 0.01 * jerk_loss
+        total_loss = vel_loss + 0.003 * jerk_loss
         loss_components = {
             "vel_loss": vel_loss.mean().item(),
-            "stable_loss": stable_loss.mean().item(),
+            "jerk_loss": jerk_loss.mean().item(),
             "total_loss": total_loss.mean().item()
         }
         return total_loss, loss_components

@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import Tuple
 
 import torch
+from pytorch3d import transforms as T
 from isaacgym import gymapi, gymutil, gymtorch
 from omegaconf import DictConfig
 from tqdm import tqdm
@@ -136,10 +137,10 @@ class BaseRenderer:
         self.gym.refresh_net_contact_force_tensor(self.sim)
 
     def render(self, sync_frame_time=True):
-        if self.headless: return
         # self.gym.fetch_results(self.sim, True) # use only when device is not "cpu"
         # Step graphics. Skipping this causes the onboard robot camera tensors to not be updated
         self.gym.step_graphics(self.sim)
+        if self.headless: return
         
         # if viewer exists update it based on requirement
         if self.viewer:
@@ -233,17 +234,16 @@ class PositionControlRenderer(BaseRenderer):
 
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
-    def __init__(self, cfg: DictConfig, device):
+    def __init__(self, cfg: DictConfig, device: int, r_obstacles: torch.Tensor):
         self.env_spacing = cfg.env_spacing
         self.camera_handles = []
         self.camera_tensor_list = []
         self.env_asset_handles = defaultdict(list)
         self.n_obstacles = cfg.env_asset.n_assets
-        self.r_obstacles = torch.zeros(cfg.n_envs, self.n_obstacles, device=f"cuda:{device}")
+        self.r_obstacles = r_obstacles
         super().__init__(cfg, device)
         self.target_pos = torch.zeros_like(self.drone_positions)
-        self.camera_tensor = torch.zeros((
-            self.n_envs, *list(cfg.image_size)), device=self.device)
+        self.camera = self.cfg.camera.type == "isaacgym"
     
     def create_envs(self):
         print("Creating environment...")
@@ -299,24 +299,20 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             )
             self.actor_handles.append(actor_handle)
             
-            # create camera
-            cam_handle = self.gym.create_camera_sensor(env_handle, camera_props)
-            self.gym.attach_camera_to_body(cam_handle, env_handle, actor_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
-            self.camera_handles.append(cam_handle)
-            cam_type = gymapi.IMAGE_DEPTH if list(self.cfg.image_size)[0] == 1 else gymapi.IMAGE_COLOR
-            _camera_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_handle, cam_handle, cam_type)
-            camera_tensor: torch.Tensor = gymtorch.wrap_tensor(_camera_tensor)
-            if camera_tensor.ndim < 3:
-                camera_tensor = camera_tensor.unsqueeze(0)
-            self.camera_tensor_list.append(camera_tensor)
+            if self.cfg.camera.type == "isaacgym":
+                # create camera
+                cam_handle = self.gym.create_camera_sensor(env_handle, camera_props)
+                self.gym.attach_camera_to_body(cam_handle, env_handle, actor_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
+                self.camera_handles.append(cam_handle)
+                cam_type = gymapi.IMAGE_DEPTH # gymapi.IMAGE_DEPTH or gymapi.IMAGE_COLOR
+                _camera_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_handle, cam_handle, cam_type)
+                camera_tensor: torch.Tensor = gymtorch.wrap_tensor(_camera_tensor)
+                if camera_tensor.ndim < 3:
+                    camera_tensor = camera_tensor.unsqueeze(0)
+                self.camera_tensor_list.append(camera_tensor)
             
             # create environment assets
-            env_asset_list, radius_tensor = self.asset_manager.generate_env_assets(
-                r_min=0.4,
-                r_max=2.0,
-                r_step=0.2
-            )
-            self.r_obstacles[i] = radius_tensor
+            env_asset_list = self.asset_manager.generate_env_assets(self.r_obstacles[i])
             for j, path in enumerate(env_asset_list):
                 env_asset_root = os.path.dirname(path)
                 env_asset_file = os.path.basename(path)
@@ -346,29 +342,37 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.target_pos.copy_(target_pos)
         self.simulation_step()
     
-    def render_camera(self):
+    def render_camera(self) -> torch.Tensor:
+        if not self.camera:
+            raise Exception("Camera is not initialized")
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
-        if self.camera_tensor.size(1) == 1:
-            new_camera = 1 - (-torch.stack(self.camera_tensor_list, dim=0) / self.cfg.camera.far_plane).clamp(0, 1)
-        else:
-            new_camera = torch.stack(self.camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255
+        new_camera = 1 - (-torch.concat(self.camera_tensor_list, dim=0) / self.cfg.camera.far_plane).clamp(0, 1)
+        # new_camera = torch.stack(self.camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255 # for rgb camera
         self.gym.end_access_image_tensors(self.sim)
-        self.camera_tensor.copy_(new_camera)
+        return new_camera
     
-    def render(self, add_lines=True, *args, **kwargs):
+    def render(self, add_lines=True, sync_frame_time=True):
         add_lines = add_lines and self.viewer is not None
         if add_lines:
+            vel = torch.zeros(self.n_envs, 3, device=self.device)
+            vel[:, 0] = 1
+            # vel = self.drone_positions + T.quaternion_apply(self.drone_quats.roll(1, dims=-1), vel)
+            vel = self.drone_positions + self.drone_linvels
+            vel = torch.concat([self.drone_positions, vel], dim=-1).cpu().numpy()
             lines = torch.concat(
                 [self.drone_positions, self.target_pos], dim=-1).cpu().numpy()
             factory_kwargs = {"dtype": torch.float32, "device": self.device}
             colors = torch.zeros(self.n_envs, 3, **factory_kwargs)
             white = torch.tensor([[1., 1., 1.]], **factory_kwargs)
+            red = torch.tensor([[1., 0., 0.]], **factory_kwargs)
+            yellow = torch.tensor([[0.7, 0.7, 0.2]], **factory_kwargs)
             green = torch.tensor([[0., 1., 0.]], **factory_kwargs)
             colors[:] = white
             colors[(self.drone_positions-self.target_pos).norm(dim=-1)<0.5] = green
             for i, env in enumerate(self.env_handles):
                 self.gym.add_lines(self.viewer, env, 1, lines[i:i+1].T, colors[i:i+1].T.cpu().numpy())
-        super().render(*args, **kwargs)
+                self.gym.add_lines(self.viewer, env, 1, vel[i:i+1].T, yellow.T.cpu().numpy())
+        super().render(sync_frame_time=sync_frame_time)
         if add_lines:
             self.gym.clear_lines(self.viewer)

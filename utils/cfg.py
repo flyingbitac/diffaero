@@ -27,7 +27,7 @@ def get_asset_options(asset_cfg):
     exclude_keys = [
         'file', 'name', 'base_link_name', 'foot_name', 'penalize_contacts_on',
         'terminate_after_contacts_on', 'collision_mask', 'assets_per_env', 'segmentation_id',
-        'walls', 'ground_plane']
+        'walls', 'ground_plane', 'n_assets']
     for k, v in dict(asset_cfg).items():
         if hasattr(asset_options, k) and v is not None:
             setattr(asset_options, k, v)
@@ -38,7 +38,7 @@ def get_asset_options(asset_cfg):
 def get_camera_properties(camera_cfg):
     # Set Camera Properties
     camera_props = gymapi.CameraProperties()
-    exclude_keys = ['enable', 'transform']
+    exclude_keys = ['enable', 'transform', 'type']
     for k, v in dict(camera_cfg).items():
         if hasattr(camera_props, k) and v is not None:
             setattr(camera_props, k, v)

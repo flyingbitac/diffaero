@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Optional
+from typing import Callable, List, Tuple, Dict, Optional
 from collections import defaultdict
 import os
 
@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from quaddif.env.base_env import BaseEnv
 from quaddif.utils.nn import StochasticActorCritic
-from quaddif.utils.logger import Logger, CallBack
+from quaddif.utils.logger import Logger
 
 class PPORPLAgent(StochasticActorCritic):
     def __init__(
@@ -88,8 +88,7 @@ class PPO:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCritic(
-            state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCritic(state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
         self.buffer = RolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
         
@@ -200,6 +199,63 @@ class PPO:
             l_rollout=cfg.l_rollout,
             device=device)
 
+    @staticmethod
+    def learn(cfg, agent, env, logger, on_step_cb=None, on_update_cb=None):
+        # type: (DictConfig, PPO, BaseEnv, Logger, Optional[Callable], Optional[Callable]) -> None
+        state = env.reset()
+        pbar = tqdm(range(cfg.n_updates))
+        for i in pbar:
+            t1 = pbar._time()
+            # 超级重要，为了后续轨迹的loss梯度不反向传播到此前的状态，要先把梯度截断
+            env.detach()
+            agent.buffer.clear()
+            with torch.no_grad():
+                for t in range(cfg.l_rollout):
+                    action, policy_info = agent.act(state)
+                    next_state, loss, terminated, env_info = env.step(action)
+                    agent.add(
+                        state=state,
+                        sample=policy_info["sample"],
+                        logprob=policy_info["logprob"],
+                        reward=1-loss*0.2,
+                        done=terminated,
+                        value=policy_info["value"],
+                        next_value=agent.agent.get_value(env_info["next_state_before_reset"]))
+                    # terminated = next_terminated
+                    state = next_state
+                    if on_step_cb is not None:
+                        on_step_cb(
+                            state=state,
+                            action=action,
+                            policy_info=policy_info,
+                            env_info=env_info)
+                
+            advantages, target_values = agent.bootstrap()
+            for _ in range(cfg.algo.n_epoch):
+                losses, grad_norms = agent.train(advantages, target_values)
+            
+            # log data
+            l_episode = env_info["stats"]["l"].float().mean().item()
+            success_rate = env_info['stats']['success_rate']
+            pbar.set_postfix({
+                "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
+                "loss": f"{loss.mean():.3f}",
+                "l_episode": f"{l_episode:.1f}",
+                "success_rate": f"{success_rate:.2f}",
+                "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
+            log_info = {
+                "value": policy_info["value"].mean().item(),
+                "env_loss": env_info["loss_components"],
+                "agent_loss": losses,
+                "agent_grad_norm": grad_norms,
+                "metrics": {"l_episode": l_episode, "success_rate": success_rate}
+            }
+            logger.log_scalars(log_info, i)
+
+            if on_update_cb is not None:
+                on_update_cb(log_info=log_info)
+
+
 class PPO_RPL(PPO):
     def __init__(
         self,
@@ -233,57 +289,3 @@ class PPO_RPL(PPO):
             {"params": self.agent.actor_logstd},
             {"params": self.agent.critic.parameters()},
         ], lr=lr, eps=eps)
-
-def learn(cfg, agent, env, logger, callback=None):
-    # type: (DictConfig, PPO, BaseEnv, Logger, Optional[CallBack]) -> None
-    state = env.reset()
-    pbar = tqdm(range(cfg.n_updates))
-    for i in pbar:
-        t1 = pbar._time()
-        # 超级重要，为了后续轨迹的loss梯度不反向传播到此前的状态，要先把梯度截断
-        env.detach()
-        agent.buffer.clear()
-        with torch.no_grad():
-            for t in range(cfg.l_rollout):
-                action, info = agent.act(state)
-                next_state, loss, terminated, extra = env.step(action)
-                agent.add(
-                    state=state,
-                    sample=info["sample"],
-                    logprob=info["logprob"],
-                    reward=1-loss*0.2,
-                    done=terminated,
-                    value=info["value"],
-                    next_value=agent.agent.get_value(extra["next_state_before_reset"]))
-                # terminated = next_terminated
-                state = next_state
-                if callback is not None:
-                    callback.on_step(
-                        state=state,
-                        action=action,
-                        loss=loss)
-            
-        advantages, target_values = agent.bootstrap()
-        for _ in range(cfg.algo.n_epoch):
-            losses, grad_norms = agent.train(advantages, target_values)
-        
-        # log data
-        l_episode = extra["stats"]["l"].float().mean().item()
-        success_rate = extra['stats']['success_rate']
-        pbar.set_postfix({
-            "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-            "loss": f"{loss.mean():.3f}",
-            "l_episode": f"{l_episode:.3f}",
-            "success_rate": f"{success_rate:.2f}",
-            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
-        log_info = {
-            "env_loss": extra["loss_components"],
-            "agent_loss": losses,
-            "agent_grad_norm": grad_norms,
-            "metrics": {"l_episode": l_episode, "success_rate": success_rate}
-        }
-        logger.log_scalars(log_info, i)
-
-        if callback is not None:
-            callback.on_update(log_info=log_info)
-

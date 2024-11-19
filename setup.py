@@ -18,7 +18,8 @@ setup(
         'six',
         'h5py',
         'isaacgym',
-        "welford_torch"
+        "welford_torch",
+        'opencv-python'
         # Add any other dependencies here
     ],
     author='Xinhong Zhang',

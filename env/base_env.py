@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
 
-from quaddif.utils.render import PositionControlRenderer
 from quaddif.utils.math import unitization, axis_rotmat, rand_range
 
 class BaseEnv:
@@ -60,7 +59,6 @@ class BaseEnv:
         else:
             yaw = torch.atan2(target_relpos[:, 1], target_relpos[:, 0])
         mat_yaw = axis_rotmat("Z", yaw)
-        quat_yaw = T.matrix_to_quaternion(mat_yaw)
         new_up = (mat_yaw.transpose(1, 2) @ up.unsqueeze(-1)).squeeze(-1)
         z = torch.zeros_like(new_up)
         z[..., -1] = 1.
@@ -71,9 +69,11 @@ class BaseEnv:
         quat_pitch_roll_xyz = quat_axis * torch.sin(0.5 * quat_angle).unsqueeze(-1)
         quat_pitch_roll_w = torch.cos(0.5 * quat_angle).unsqueeze(-1)
         quat_pitch_roll = T.standardize_quaternion(torch.cat([quat_pitch_roll_w, quat_pitch_roll_xyz], dim=-1))
+        yaw_2 = yaw.unsqueeze(-1) / 2
+        quat_yaw = torch.concat([torch.cos(yaw_2), torch.sin(yaw_2) * z], dim=-1) # T.matrix_to_quaternion(mat_yaw)
         quat_wxyz = T.quaternion_multiply(quat_yaw, quat_pitch_roll)
         return quat_wxyz.roll(-1, dims=-1)
-        
+    
     def step(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         raise NotImplementedError
@@ -82,6 +82,7 @@ class BaseEnv:
         # type: () -> Tensor
         raise NotImplementedError
     
+    @property
     def target_vel(self):
         target_relpos = self.target_pos - self.p
         target_dist = target_relpos.norm(dim=-1)

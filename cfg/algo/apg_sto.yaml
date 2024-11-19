@@ -1,4 +1,4 @@
-name: apg
+name: apg_sto
 
 hidden_dim: [128, 128]
 

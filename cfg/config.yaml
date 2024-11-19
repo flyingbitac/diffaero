@@ -4,9 +4,12 @@ defaults:
   - _self_
   # - override hydra/launcher: joblib
 
+n_envs: 4096
 l_rollout: 20
 n_updates: 1000
-device: 
+device: 0
+
+headless: True
 
 index: 0
 hydra:

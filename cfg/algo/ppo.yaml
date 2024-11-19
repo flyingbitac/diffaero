@@ -1,12 +1,12 @@
 name: ppo
 
-hidden_dim: [256, 256]
+hidden_dim: [128]
 
-lr: 0.001
+lr: 0.0026
 eps: 1e-8
 gamma: 0.99
 lmbda: 0.95
-entropy_weight: 0.001
+entropy_weight: 0.01
 value_weight: 2
 clip_coef: 0.2
 clip_value_loss: True

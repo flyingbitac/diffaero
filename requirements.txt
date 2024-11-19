@@ -7,3 +7,4 @@ line_profiler
 memory_profiler
 tensorboard
 gpustat
+opencv-python

@@ -2,7 +2,7 @@ name: position_control
 
 dt: 0.0333
 length: 10
-n_envs: 4096
+n_envs: ${n_envs}
 max_time: 20
 max_vel: 5.
 vel_ema_factor: 0.1
@@ -28,7 +28,7 @@ quad:
   lmbda: 0.1              # acc exp smoothing
 
 render:
-  headless: False
+  headless: ${headless}
   n_envs: ${env.n_envs}
   env_spacing: 1
   physics_engine: "physx"
