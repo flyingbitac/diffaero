@@ -10,7 +10,7 @@ from utils.assets import ObstacleManager
 from quaddif.env.base_env import BaseEnv
 from quaddif.model.quad import QuadrotorModel, PointMassModel
 from quaddif.utils.render import ObstacleAvoidanceRenderer
-from quaddif.utils.math import unitization, axis_rotmat, rand_range
+from quaddif.utils.math import rand_range
 
 @torch.jit.script
 def raydist3d(

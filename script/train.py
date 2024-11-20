@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 sys.path.append('..')
 
@@ -49,6 +50,12 @@ def main(cfg: DictConfig):
     device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
     print("Using device", device_idx)
     device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() else "cpu")
+    
+    if cfg.seed != -1:
+        random.seed(cfg.seed)
+        np.random.seed(cfg.seed)
+        torch.manual_seed(cfg.seed)
+        torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
     ENV_CLASS = {
         "position_control": PointMassPositionControl,

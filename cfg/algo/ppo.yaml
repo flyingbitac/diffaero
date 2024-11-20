@@ -1,6 +1,7 @@
 name: ppo
 
-hidden_dim: [128]
+hidden_dim: [256, 128]
+l_rollout: 32
 
 lr: 0.0026
 eps: 1e-8

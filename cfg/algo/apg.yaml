@@ -1,8 +1,9 @@
 name: apg
 
-hidden_dim: [128, 128]
+hidden_dim: [256, 128]
+l_rollout: 32
 
-actor_lr: 0.001
+lr: 0.001
 gamma: 0.99
 max_grad_norm: 1.
 

@@ -1,11 +1,13 @@
 name: shac
 
-hidden_dim: [128]
+hidden_dim: [256, 128]
+l_rollout: 32
 
 actor_lr: 0.001
 critic_lr: 0.003
 gamma: 0.99
 lmbda: 0.95
+value_weight: 1.
 entropy_weight: 0.01
 actor_grad_norm: 1.
 critic_grad_norm: 

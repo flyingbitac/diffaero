@@ -6,7 +6,27 @@ import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
 
-from quaddif.utils.math import unitization, axis_rotmat, rand_range
+from quaddif.utils.math import axis_rotmat, rand_range
+
+# @torch.jit.script
+def point_mass_quat(a: Tensor, orientation: Tensor) -> Tensor:
+    up: Tensor = F.normalize(a, dim=-1)
+    yaw = torch.atan2(orientation[:, 1], orientation[:, 0])
+    mat_yaw = axis_rotmat("Z", yaw)
+    new_up = (mat_yaw.transpose(1, 2) @ up.unsqueeze(-1)).squeeze(-1)
+    z = torch.zeros_like(new_up)
+    z[..., -1] = 1.
+    quat_axis = F.normalize(torch.cross(z, new_up, dim=-1), dim=-1)
+    cos = torch.cosine_similarity(new_up, z, dim=-1)
+    sin = torch.norm(new_up[:, :2], dim=-1) / (torch.norm(new_up, dim=-1) + 1e-7)
+    quat_angle = torch.atan2(sin, cos)
+    quat_pitch_roll_xyz = quat_axis * torch.sin(0.5 * quat_angle).unsqueeze(-1)
+    quat_pitch_roll_w = torch.cos(0.5 * quat_angle).unsqueeze(-1)
+    quat_pitch_roll = T.standardize_quaternion(torch.cat([quat_pitch_roll_w, quat_pitch_roll_xyz], dim=-1))
+    yaw_2 = yaw.unsqueeze(-1) / 2
+    quat_yaw = torch.concat([torch.cos(yaw_2), torch.sin(yaw_2) * z], dim=-1) # T.matrix_to_quaternion(mat_yaw)
+    quat_wxyz = T.quaternion_multiply(quat_yaw, quat_pitch_roll)
+    return quat_wxyz.roll(-1, dims=-1)
 
 class BaseEnv:
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -52,28 +72,17 @@ class BaseEnv:
         Returns:
             Tensor: attitude quaternion of the drone with real part last.
         """
-        target_relpos = self.target_pos - self.p
-        up: Tensor = unitization(self.a, dim=-1)
         if self.align_yaw_with_vel_direction:
-            yaw = torch.atan2(self.v[:, 1], self.v[:, 0])
+            return point_mass_quat(self.a, orientation=self.v)
         else:
-            yaw = torch.atan2(target_relpos[:, 1], target_relpos[:, 0])
-        mat_yaw = axis_rotmat("Z", yaw)
-        new_up = (mat_yaw.transpose(1, 2) @ up.unsqueeze(-1)).squeeze(-1)
-        z = torch.zeros_like(new_up)
-        z[..., -1] = 1.
-        quat_axis = unitization(torch.cross(z, new_up, dim=-1))
-        cos = torch.cosine_similarity(new_up, z, dim=-1)
-        sin = torch.norm(new_up[:, :2], dim=-1) / (torch.norm(new_up, dim=-1) + 1e-7)
-        quat_angle = torch.atan2(sin, cos)
-        quat_pitch_roll_xyz = quat_axis * torch.sin(0.5 * quat_angle).unsqueeze(-1)
-        quat_pitch_roll_w = torch.cos(0.5 * quat_angle).unsqueeze(-1)
-        quat_pitch_roll = T.standardize_quaternion(torch.cat([quat_pitch_roll_w, quat_pitch_roll_xyz], dim=-1))
-        yaw_2 = yaw.unsqueeze(-1) / 2
-        quat_yaw = torch.concat([torch.cos(yaw_2), torch.sin(yaw_2) * z], dim=-1) # T.matrix_to_quaternion(mat_yaw)
-        quat_wxyz = T.quaternion_multiply(quat_yaw, quat_pitch_roll)
-        return quat_wxyz.roll(-1, dims=-1)
-    
+            target_relpos = self.target_pos - self.p
+            return point_mass_quat(self.a, orientation=target_relpos)
+    @property
+    def target_vel(self):
+        target_relpos = self.target_pos - self.p
+        target_dist = target_relpos.norm(dim=-1)
+        return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
+
     def step(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         raise NotImplementedError
@@ -81,12 +90,6 @@ class BaseEnv:
     def state_for_render(self):
         # type: () -> Tensor
         raise NotImplementedError
-    
-    @property
-    def target_vel(self):
-        target_relpos = self.target_pos - self.p
-        target_dist = target_relpos.norm(dim=-1)
-        return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
     
     def loss_fn(self, target_vel, action):
         # type: (Tensor, Tensor) -> Tuple[Tensor, Dict[str, float]]

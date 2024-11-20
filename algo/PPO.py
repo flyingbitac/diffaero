@@ -250,7 +250,7 @@ class PPO:
                 "agent_grad_norm": grad_norms,
                 "metrics": {"l_episode": l_episode, "success_rate": success_rate}
             }
-            logger.log_scalars(log_info, i)
+            logger.log_scalars(log_info, i+1)
 
             if on_update_cb is not None:
                 on_update_cb(log_info=log_info)

@@ -2,11 +2,11 @@ import os
 from typing import Optional, Tuple, List
 
 import numpy as np
-from isaacgym.torch_utils import quat_from_euler_xyz
 import torch
+from torch.nn import functional as F
 
 from quaddif import QUADDIF_ROOT_DIR
-from quaddif.utils.math import random_quat_from_eular_zyx, unitization
+from quaddif.utils.math import quat_from_euler_xyz
 
 class AssetManager:
     def __init__(self, cfg, device):
@@ -80,12 +80,12 @@ class ObstacleManager:
         
         rel_pos = target_pos - drone_init_pos
         # target_axis: unit vector in the direction of the target's relative position
-        target_axis = unitization(rel_pos)
+        target_axis = F.normalize(rel_pos, dim=-1)
         # horizontal_axis: unit vector in the horizontal plane, perpendicular to the target_axis
-        horizontal_axis = unitization(torch.stack([
+        horizontal_axis = F.normalize(torch.stack([
             -rel_pos[:, 1],
             rel_pos[:, 0],
-            torch.zeros(len(env_idx), device=self.device)], dim=-1))
+            torch.zeros(len(env_idx), device=self.device)], dim=-1), dim=-1)
         # third_axis: unit vector perpendicular to two other vectors
         third_axis = torch.cross(target_axis, horizontal_axis, dim=-1)
         

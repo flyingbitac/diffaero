@@ -23,7 +23,7 @@ class APG:
     ):
         self.actor = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU()).to(device)
         self.optimizer = torch.optim.Adam(
-            self.actor.parameters(), lr=cfg.actor_lr)
+            self.actor.parameters(), lr=cfg.lr)
         self.discount: float = cfg.gamma
         self.max_grad_norm: float = cfg.max_grad_norm
         self.l_rollout: int = l_rollout
@@ -96,7 +96,7 @@ class APG:
                 "agent_grad_norm": grad_norms,
                 "metrics": {"l_episode": l_episode, "success_rate": success_rate}
             }
-            logger.log_scalars(log_info, i)
+            logger.log_scalars(log_info, i+1)
 
             if on_update_cb is not None:
                 on_update_cb(log_info=log_info)
@@ -117,7 +117,7 @@ class APG_stochastic(APG):
         del self.optimizer
         self.optimizer = torch.optim.Adam([
             {"params": self.actor.parameters()},
-            {"params": self.actor_logstd}], lr=cfg.actor_lr)
+            {"params": self.actor_logstd}], lr=cfg.lr)
         self.entropy_loss = torch.zeros(1, device=device)
         self.entropy_weight: float = cfg.entropy_weight
 

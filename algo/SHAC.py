@@ -49,10 +49,10 @@ class SHAC:
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.agent = StochasticActorCritic(state_dim, hidden_dim, action_dim).to(device)
-        self.actor_optim = torch.optim.Adam([
-            {"params": self.agent.actor_mean.parameters()},
-            {"params": self.agent.actor_logstd}], lr=cfg.actor_lr)
-        self.value_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
+        self.optim = torch.optim.Adam([
+            {"params": self.agent.actor_mean.parameters(), "lr": cfg.actor_lr},
+            {"params": self.agent.actor_logstd, "lr": cfg.actor_lr},
+            {"params": self.agent.critic.parameters(), "lr": cfg.critic_lr}])
         self.buffer = SHACRolloutBuffer(l_rollout, n_envs, state_dim, device)
         self._critic_target = deepcopy(self.agent.critic)
         for p in self._critic_target.parameters():
@@ -61,6 +61,7 @@ class SHAC:
         self.discount: float = cfg.gamma
         self.lmbda: float = cfg.lmbda
         self.entropy_weight: float = cfg.entropy_weight
+        self.value_weight: float = cfg.value_weight
         self.actor_grad_norm: float = cfg.actor_grad_norm
         self.critic_grad_norm: float = cfg.critic_grad_norm
         self.n_minibatch: int = cfg.n_minibatch
@@ -141,69 +142,35 @@ class SHAC:
         self.cumulated_loss = torch.zeros(self.n_envs, device=self.device)
         self.entropy_loss = torch.tensor(0., device=self.device)
     
-    def update_actor(self) -> Dict[str, float]:
+    def train(self, target_values: Tensor) -> Dict[str, float]:
         actor_loss = self.actor_loss / (self.n_envs * self.l_rollout)
         entropy_loss = self.entropy_loss / (self.n_envs * self.l_rollout)
-        total_loss = actor_loss + self.entropy_weight * entropy_loss
-        self.actor_optim.zero_grad()
+        T, N, D = self.buffer.states.shape
+        states = self.buffer.states.reshape(T*N, D)
+        values = self.agent.get_value(states)
+        critic_loss = F.mse_loss(values, target_values)
+        
+        total_loss = actor_loss + self.entropy_weight * entropy_loss + self.value_weight * critic_loss
+        self.optim.zero_grad()
         total_loss.backward()
-        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor_mean.parameters()]) ** 0.5
+        actor_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor_mean.parameters()]) ** 0.5
         if self.actor_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.agent.actor_mean.parameters(), max_norm=self.actor_grad_norm)
-        self.actor_optim.step()
-        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm}
-    
-    def update_critic(self, target_values: Tensor) -> Dict[str, float]:
-        T, N, D = self.buffer.states.shape
-        batch_indices = torch.randperm(T*N, device=self.device)
-        mb_size = T*N // self.n_minibatch
-        states = self.buffer.states.reshape(T*N, D)
-        for start in range(0, T*N, mb_size):
-            end = start + mb_size
-            mb_indices = batch_indices[start:end]
-            values = self.agent.get_value(states[mb_indices])
-            critic_loss = F.mse_loss(values, target_values[mb_indices])
-            self.value_optim.zero_grad()
-            critic_loss.backward()
-            grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
-            if self.critic_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
-            self.value_optim.step()
+        critic_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
+        if self.critic_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+        self.optim.step()
+        
         for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
             p_t.data.lerp_(p.data, 5e-3)
-        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
-    
-    def update_actor(self) -> Dict[str, float]:
-        actor_loss = self.actor_loss / (self.n_envs * self.l_rollout)
-        entropy_loss = self.entropy_loss / (self.n_envs * self.l_rollout)
-        total_loss = actor_loss + self.entropy_weight * entropy_loss
-        self.actor_optim.zero_grad()
-        total_loss.backward()
-        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor_mean.parameters()]) ** 0.5
-        if self.actor_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.agent.actor_mean.parameters(), max_norm=self.actor_grad_norm)
-        self.actor_optim.step()
-        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm}
-    
-    def update_critic(self, target_values: Tensor) -> Dict[str, float]:
-        T, N, D = self.buffer.states.shape
-        batch_indices = torch.randperm(T*N, device=self.device)
-        mb_size = T*N // self.n_minibatch
-        states = self.buffer.states.reshape(T*N, D)
-        for start in range(0, T*N, mb_size):
-            end = start + mb_size
-            mb_indices = batch_indices[start:end]
-            values = self.agent.get_value(states[mb_indices])
-            critic_loss = F.mse_loss(values, target_values[mb_indices])
-            self.value_optim.zero_grad()
-            critic_loss.backward()
-            grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
-            if self.critic_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
-            self.value_optim.step()
-        for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
-            p_t.data.lerp_(p.data, 5e-3)
-        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
+        losses = {
+            "actor_loss": actor_loss.item(),
+            "entropy_loss": entropy_loss.item(),
+            "critic_loss": critic_loss.item()}
+        grad_norms = {
+            "actor_grad_norm": actor_grad_norm,
+            "critic_grad_norm": critic_grad_norm}
+        return losses, grad_norms
 
     @staticmethod
     def build(cfg, env, device):
@@ -240,12 +207,7 @@ class SHAC:
                         env_info=env_info)
 
             target_values = agent.bootstrap_gae()
-            actor_loss, actor_grad_norm = agent.update_actor()
-            critic_loss, critic_grad_norm = agent.update_critic(target_values)
-            
-            # log data
-            losses = {**actor_loss, **critic_loss}
-            grad_norms = {**actor_grad_norm, **critic_grad_norm}
+            losses, grad_norms = agent.train(target_values)
             l_episode = env_info["stats"]["l"].float().mean().item()
             success_rate = env_info['stats']['success_rate']
             pbar.set_postfix({
@@ -261,7 +223,7 @@ class SHAC:
                 "agent_grad_norm": grad_norms,
                 "metrics": {"l_episode": l_episode, "success_rate": success_rate}
             }
-            logger.log_scalars(log_info, i)
+            logger.log_scalars(log_info, i+1)
 
             if on_update_cb is not None:
                 on_update_cb(log_info=log_info)

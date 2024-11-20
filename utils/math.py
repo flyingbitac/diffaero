@@ -110,10 +110,6 @@ def quat_mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 def quat_inv(q: torch.Tensor) -> torch.Tensor:
     return torch.cat([-q[..., :3], q[..., 3:4]], dim=-1)
 
-@torch.jit.script
-def unitization(tensor: torch.Tensor, dim: int = -1, epsilon: float = 1e-8) -> torch.Tensor:
-    return tensor / (torch.norm(tensor, dim=dim, keepdim=True) + epsilon)
-
 def axis_rotmat(axis: str, angle: torch.Tensor) -> torch.Tensor:
     """
     Return the rotation matrices for one of the rotations about an axis
