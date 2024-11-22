@@ -1,7 +1,7 @@
 name: ppo
 
 hidden_dim: [256, 128]
-l_rollout: 32
+l_rollout: 16
 
 lr: 0.0026
 eps: 1e-8

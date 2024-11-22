@@ -5,12 +5,12 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
-from utils.assets import ObstacleManager
 
-from quaddif.env.base_env import BaseEnv
 from quaddif.model.quad import QuadrotorModel, PointMassModel
+from quaddif.env.base_env import BaseEnv
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.math import rand_range
+from quaddif.utils.assets import ObstacleManager
 
 @torch.jit.script
 def raydist3d(
@@ -103,35 +103,34 @@ class Camera:
         
         return forward + vertical_offset + horizontal_offset # [H, W, 3]
 
-class PointMassObstacleAvoidance(BaseEnv):
-    def __init__(self, cfg: DictConfig, device: torch.device):
-        self.model = PointMassModel(cfg.quad, cfg.dt, cfg.n_substeps, device)
-        self.camera_type = cfg.camera.type
-        self.obstacle_manager = ObstacleManager(cfg, device)
+class ObstacleAvoidance(BaseEnv):
+    def __init__(self, env_cfg: DictConfig, model_cfg: DictConfig, device: torch.device):
+        super(ObstacleAvoidance, self).__init__(env_cfg, model_cfg, device)
+        self.camera_type = env_cfg.camera.type
+        self.obstacle_manager = ObstacleManager(env_cfg, device)
         self.r_obstacles = self.obstacle_manager.generate_obstacles(r_min=0.2, r_max=2.0, r_step=0.2)
         self.n_obstacles = self.obstacle_manager.n_obstacles
         
         if self.camera_type is not None:
-            H, W = cfg.camera.height, cfg.camera.width
-            self.state_dim = 13 + H * W # flattened depth image as additional observation
-            self.camera_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
+            H, W = env_cfg.camera.height, env_cfg.camera.width
+            self.state_dim = self.model.state_dim + 4 + H * W # flattened depth image as additional observation
+            self.camera_tensor = torch.zeros((env_cfg.n_envs, H, W), device=device)
             if self.camera_type == "raydist":
-                self.camera = Camera(cfg.camera, device=device)
+                self.camera = Camera(env_cfg.camera, device=device)
         else:
             # relative position of obstacles as additional observation
-            self.state_dim = 13 + self.n_obstacles * 3
+            self.state_dim = self.model.state_dim + self.n_obstacles * 3
         
-        if not cfg.render.headless or self.camera_type == "isaacgym":
-            self.renderer = ObstacleAvoidanceRenderer(cfg.render, device.index, self.r_obstacles)
+        if not env_cfg.render.headless or self.camera_type == "isaacgym":
+            self.renderer = ObstacleAvoidanceRenderer(env_cfg.render, device.index, self.r_obstacles)
             self.asset_poses = torch.zeros(
-                cfg.n_envs, self.renderer.asset_manager.assets_per_env, 7, device=device)
+                env_cfg.n_envs, self.renderer.asset_manager.assets_per_env, 7, device=device)
         else:
             self.renderer = None # headless and camera_type == "raydist"
-        self.p_obstacles = torch.zeros(cfg.n_envs, self.n_obstacles, 3, device=device)
+        self.p_obstacles = torch.zeros(env_cfg.n_envs, self.n_obstacles, 3, device=device)
         
-        self.action_dim = 3
-        self.r_drone = cfg.r_drone
-        super(PointMassObstacleAvoidance, self).__init__(cfg, device)
+        self.action_dim = self.model.action_dim
+        self.r_drone = env_cfg.r_drone
     
     def state(self, with_grad=False):
         state = [self.target_vel, self._v, self._a, self.q]
@@ -147,7 +146,7 @@ class PointMassObstacleAvoidance(BaseEnv):
         return state if with_grad else state.detach()
     
     def render_camera(self):
-        if self.camera_type == "isaacgym":
+        if self.renderer is not None and self.camera_type == "isaacgym":
             self.camera_tensor.copy_(self.renderer.render_camera())
         elif self.camera_type == "raydist":
             H, W = self.camera_tensor.shape[1:]
@@ -160,8 +159,7 @@ class PointMassObstacleAvoidance(BaseEnv):
     def step(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         action = self.rescale_action(action)
-        self._state = self.model(self._state, action)
-        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
+        self.model.step(action)
         self.progress += 1
         terminated, truncated = self.terminated(), self.truncated()
         reset = terminated | truncated
@@ -180,7 +178,9 @@ class PointMassObstacleAvoidance(BaseEnv):
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         if self.renderer is not None:
-            self.renderer.step(*self.state_for_render())
+            if self.renderer.enable_viewer_sync or self.camera_type == "isaacgym":
+                print("FUCK")
+                self.renderer.step(*self.state_for_render())
             self.renderer.render()
         if self.camera_type is not None:
             self.render_camera()
@@ -188,7 +188,7 @@ class PointMassObstacleAvoidance(BaseEnv):
         return self.state(), loss, terminated, extra
     
     def state_for_render(self):
-        w = torch.zeros_like(self.v)
+        w = torch.zeros_like(self.v) if isinstance(self.model, PointMassModel) else self.w
         drone_state = torch.concat([self.p, self.q, self.v, w], dim=-1)
         assets_state = torch.cat([
             self.asset_poses,
@@ -198,44 +198,60 @@ class PointMassObstacleAvoidance(BaseEnv):
     
     def loss_fn(self, target_vel, action):
         # type: (Tensor, Tensor) -> Tuple[Tensor, Dict[str, float]]
-        pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
-        
-        vel_diff = (self._vel_ema - target_vel).norm(dim=-1)
-        vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-        
-        obstacle_relpos = self.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
-        dist2surface = (obstacle_relpos.norm(dim=-1) - self.r_obstacles).clamp(min=0.1)
-        approaching_vel = torch.sum(F.normalize(obstacle_relpos, dim=-1) * self._v.unsqueeze(1), dim=-1)
-        oa_loss = (approaching_vel.clamp(min=0) / dist2surface.exp()).max(dim=-1).values
-    
-        # obstacle_relpos = self.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
-        # dist2surface = (obstacle_relpos.norm(dim=-1) - self.r_obstacles).clamp(min=0.1)
-        # approaching_vel = (F.normalize(obstacle_relpos, dim=-1) * self._v.unsqueeze(1)).norm(dim=-1).clamp(min=0)
-        # dangerous = dist2surface < 0.7
-        # oa_loss = (approaching_vel * dangerous.float()).max(dim=-1).values
-        
-        jerk_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
-        
-        total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss
-        loss_components = {
-            "vel_loss": vel_loss.mean().item(),
-            "pos_loss": pos_loss.mean().item(),
-            "jerk_loss": jerk_loss.mean().item(),
-            "oa_loss": oa_loss.mean().item(),
-            "total_loss": total_loss.mean().item()
-        }
-        
+        if isinstance(self.model, PointMassModel):
+            pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
+            
+            vel_diff = (self.model._vel_ema - target_vel).norm(dim=-1)
+            vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
+            
+            obstacle_relpos = self.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
+            dist2surface = (obstacle_relpos.norm(dim=-1) - self.r_obstacles).clamp(min=0.1)
+            approaching_vel = torch.sum(F.normalize(obstacle_relpos, dim=-1) * self._v.unsqueeze(1), dim=-1)
+            dangerous = torch.lt(dist2surface, 1.5)
+            oa_loss = (approaching_vel.clamp(min=0) * (dangerous / dist2surface.exp())).max(dim=-1).values
+            
+            jerk_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
+            
+            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss
+            loss_components = {
+                "vel_loss": vel_loss.mean().item(),
+                "pos_loss": pos_loss.mean().item(),
+                "jerk_loss": jerk_loss.mean().item(),
+                "oa_loss": oa_loss.mean().item(),
+                "total_loss": total_loss.mean().item()
+            }
+        else:
+            pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
+            
+            vel_diff = (self._v - target_vel).norm(dim=-1)
+            vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
+            
+            obstacle_relpos = self.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
+            dist2surface = (obstacle_relpos.norm(dim=-1) - self.r_obstacles).clamp(min=0.1)
+            approaching_vel = torch.sum(F.normalize(obstacle_relpos, dim=-1) * self._v.unsqueeze(1), dim=-1)
+            oa_loss = (approaching_vel.clamp(min=0) / dist2surface.exp()).max(dim=-1).values
+            
+            jerk_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
+            
+            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss
+            loss_components = {
+                "vel_loss": vel_loss.mean().item(),
+                "pos_loss": pos_loss.mean().item(),
+                "jerk_loss": jerk_loss.mean().item(),
+                "oa_loss": oa_loss.mean().item(),
+                "total_loss": total_loss.mean().item()
+            }
         return total_loss, loss_components
 
     def reset_idx(self, env_idx):
         n_resets = len(env_idx)
-        state_mask = torch.zeros_like(self._state)
+        state_mask = torch.zeros_like(self.model._state)
         state_mask[env_idx] = 1
-        p_new = rand_range(-self.L+1, self.L-1, size=(self.n_envs, 3), device=self.device)
-        v_new = torch.zeros_like(self.v)
-        a_new = torch.zeros_like(self.a)
-        new_state = torch.cat([p_new, v_new, a_new], dim=-1)
-        self._state = torch.where(state_mask.bool(), new_state, self._state)
+        p_new = rand_range(-self.L+0.5, self.L-0.5, size=(self.n_envs, 3), device=self.device)
+        new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.model.state_dim-3, device=self.device)], dim=-1)
+        if isinstance(self.model, QuadrotorModel):
+            new_state[:, 6] = 1 # real part of the quaternion
+        self.model._state = torch.where(state_mask.bool(), new_state, self.model._state)
         
         # target position
         min_init_dist = 1.5 * self.L
@@ -243,7 +259,7 @@ class PointMassObstacleAvoidance(BaseEnv):
         x = y = z = torch.linspace(-self.L+1, self.L-1, N, device=self.device)
         random_idx = torch.randperm(N**3, device=self.device)
         xyz = torch.stack(torch.meshgrid(x, y, z), dim=-1).reshape(N**3, 3)[random_idx]
-        validility: torch.BoolTensor = (xyz[None, ...] - self.p[env_idx, None, :]).norm(dim=-1) > min_init_dist
+        validility = torch.gt((xyz[None, ...] - self.p[env_idx, None, :]).norm(dim=-1), min_init_dist)
         sub_idx = validility.nonzero()
         env_sub_idx = torch.tensor([(sub_idx[:, 0] == i).sum() for i in range(n_resets)]).roll(1, dims=0)
         env_sub_idx[0] = 0
@@ -266,7 +282,7 @@ class PointMassObstacleAvoidance(BaseEnv):
     
     def reset(self):
         super().reset()
-        if self.camera_type == "isaacgym":
+        if self.renderer is not None and self.camera_type == "isaacgym":
             self.renderer.step(*self.state_for_render())
         return self.state()
     

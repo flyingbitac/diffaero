@@ -2,81 +2,62 @@ from typing import Tuple, Dict, Union
 
 from omegaconf import DictConfig
 import torch
-import torch.nn.functional as F
 from torch import Tensor
-from pytorch3d import transforms as T
 
-from quaddif.utils.math import axis_rotmat, rand_range
-
-# @torch.jit.script
-def point_mass_quat(a: Tensor, orientation: Tensor) -> Tensor:
-    up: Tensor = F.normalize(a, dim=-1)
-    yaw = torch.atan2(orientation[:, 1], orientation[:, 0])
-    mat_yaw = axis_rotmat("Z", yaw)
-    new_up = (mat_yaw.transpose(1, 2) @ up.unsqueeze(-1)).squeeze(-1)
-    z = torch.zeros_like(new_up)
-    z[..., -1] = 1.
-    quat_axis = F.normalize(torch.cross(z, new_up, dim=-1), dim=-1)
-    cos = torch.cosine_similarity(new_up, z, dim=-1)
-    sin = torch.norm(new_up[:, :2], dim=-1) / (torch.norm(new_up, dim=-1) + 1e-7)
-    quat_angle = torch.atan2(sin, cos)
-    quat_pitch_roll_xyz = quat_axis * torch.sin(0.5 * quat_angle).unsqueeze(-1)
-    quat_pitch_roll_w = torch.cos(0.5 * quat_angle).unsqueeze(-1)
-    quat_pitch_roll = T.standardize_quaternion(torch.cat([quat_pitch_roll_w, quat_pitch_roll_xyz], dim=-1))
-    yaw_2 = yaw.unsqueeze(-1) / 2
-    quat_yaw = torch.concat([torch.cos(yaw_2), torch.sin(yaw_2) * z], dim=-1) # T.matrix_to_quaternion(mat_yaw)
-    quat_wxyz = T.quaternion_multiply(quat_yaw, quat_pitch_roll)
-    return quat_wxyz.roll(-1, dims=-1)
+from quaddif.model.quad import PointMassModel, QuadrotorModel, point_mass_quat
 
 class BaseEnv:
-    def __init__(self, cfg: DictConfig, device: torch.device):
-        self.min_action = torch.tensor([list(cfg.min_action)], device=device)
-        self.max_action = torch.tensor([list(cfg.max_action)], device=device)
-        self._state = torch.zeros(cfg.n_envs, 9, device=device)
-        self._vel_ema = torch.zeros(cfg.n_envs, 3, device=device)
-        self.vel_ema_factor = cfg.vel_ema_factor
-        self.dt = cfg.dt
-        self.L = cfg.length
-        self.n_envs = cfg.n_envs
+    def __init__(self, env_cfg: DictConfig, model_cfg: DictConfig, device: torch.device):
+        assert model_cfg.name in ["point_mass_dynamics", "quadrotor_dynamics"]
+        self.model: Union[PointMassModel, QuadrotorModel] = {
+            "point_mass_dynamics": PointMassModel,
+            "quadrotor_dynamics": QuadrotorModel
+        }[model_cfg.name](model_cfg, env_cfg.n_envs, env_cfg.dt, env_cfg.n_substeps, device)
+        self.dt: float = env_cfg.dt
+        self.L: float = env_cfg.length
+        self.n_envs: int = env_cfg.n_envs
         self.target_pos = torch.zeros(self.n_envs, 3, device=device)
         self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.int)
-        self.max_steps = cfg.max_time / cfg.dt
-        self.max_vel = cfg.max_vel
+        self.max_steps: float = env_cfg.max_time / env_cfg.dt
+        self.max_vel: float = env_cfg.max_vel
         self.reset_indices = None
-        self.align_yaw_with_vel_direction = cfg.align_yaw_with_vel_direction
         self.device = device
     
     def state(self, with_grad=False):
         raise NotImplementedError
     
     def detach(self):
-        self._state = self._state.detach()
-        self._vel_ema = self._vel_ema.detach()
+        self.model.detach()
     
     @property
-    def p(self): return self._state[:, 0:3].detach()
+    def p(self): return self.model.p
     @property
-    def v(self): return self._state[:, 3:6].detach()
+    def v(self): return self.model.v
     @property
-    def a(self): return self._state[:, 6:9].detach()
+    def a(self): return self.model.a
     @property
-    def _p(self): return self._state[:, 0:3]
-    @property
-    def _v(self): return self._state[:, 3:6]
-    @property
-    def _a(self): return self._state[:, 6:9]
+    def w(self): return self.model.w
     @property
     def q(self) -> Tensor:
-        """Compute the drone pose using target direction and thrust acceleration direction.
-
-        Returns:
-            Tensor: attitude quaternion of the drone with real part last.
-        """
-        if self.align_yaw_with_vel_direction:
-            return point_mass_quat(self.a, orientation=self.v)
+        if isinstance(self.model, PointMassModel): # Ugly implementation of quaternion for point mass
+            if self.model.align_yaw_with_vel_direction:
+                return self.model.q
+            else:
+                target_relpos = self.target_pos - self.p
+                return point_mass_quat(self.a, orientation=target_relpos)
         else:
-            target_relpos = self.target_pos - self.p
-            return point_mass_quat(self.a, orientation=target_relpos)
+            return self.model.q
+    @property
+    def _p(self): return self.model._p
+    @property
+    def _v(self): return self.model._v
+    @property
+    def _a(self): return self.model._a
+    @property
+    def _w(self): return self.model._w
+    @property
+    def _q(self): return self.model._q
+    
     @property
     def target_vel(self):
         target_relpos = self.target_pos - self.p
@@ -95,18 +76,17 @@ class BaseEnv:
         # type: (Tensor, Tensor) -> Tuple[Tensor, Dict[str, float]]
         raise NotImplementedError
 
-    def reset_idx(self, env_idx):
-        # type: (Tensor) -> None
+    def reset_idx(self, env_idx: Tensor):
         raise NotImplementedError
     
     def reset(self):
         self.reset_idx(torch.arange(self.n_envs, device=self.device))
     
-    def terminated(self) -> torch.Tensor:
+    def terminated(self) -> Tensor:
         raise NotImplementedError
     
-    def truncated(self) -> torch.Tensor:
+    def truncated(self) -> Tensor:
         return self.progress > self.max_steps
     
     def rescale_action(self, action: Tensor) -> Tensor:
-        return self.min_action + (self.max_action - self.min_action) * (action + 1) / 2
+        return self.model.min_action + (self.model.max_action - self.model.min_action) * (action + 1) / 2

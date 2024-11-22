@@ -5,30 +5,12 @@ length: 7.5
 n_envs: ${n_envs}
 max_time: 20
 max_vel: 2.
-vel_ema_factor: 0.1
-align_yaw_with_vel_direction: True
 r_drone: 0.2
 n_obstacles: 15
 
 vision: True
 
-min_action: [-15, -15, 0]
-max_action: [15, 15, 15]
-
 n_substeps: 1
-
-quad:
-  m: 1.0                  # total mass
-  arm_l: 0.23             # arm length
-  c_tau: 0.0133           # torque constant
-  g: 9.81                 # gravity
-  J: [0.01, 0.01, 0.02]   # inertia
-  D: [0.6, 0.6, 0.6]      # drag
-  max_w_xy: 5.0           # max angular velocity (xy)
-  max_w_z: 1.0            # max angular velocity (z)
-  max_T: 4.179            # max thrust
-  min_T: 0.0              # min thrust
-  lmbda: 0.1              # acc exp smoothing
 
 camera:
   type: "raydist" # "isaacgym" or "raydist"

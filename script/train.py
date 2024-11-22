@@ -11,7 +11,7 @@ from omegaconf import DictConfig
 from line_profiler import LineProfiler
 import cv2
 
-from quaddif.env import PointMassPositionControl, PointMassObstacleAvoidance
+from quaddif.env import PositionControl, ObstacleAvoidance
 from quaddif.algo import SHAC, APG_stochastic, APG, PPO, SHAC
 from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
@@ -37,11 +37,11 @@ profiler.add_function(APG_stochastic.learn)
 profiler.add_function(APG.learn)
 profiler.add_function(PPO.learn)
 profiler.add_function(SHAC.learn)
-profiler.add_function(PointMassObstacleAvoidance.step)
-profiler.add_function(PointMassObstacleAvoidance.state)
-profiler.add_function(PointMassObstacleAvoidance.loss_fn)
-profiler.add_function(PointMassObstacleAvoidance.reset_idx)
-profiler.add_function(PointMassObstacleAvoidance.render_camera)
+profiler.add_function(ObstacleAvoidance.step)
+profiler.add_function(ObstacleAvoidance.state)
+profiler.add_function(ObstacleAvoidance.loss_fn)
+profiler.add_function(ObstacleAvoidance.reset_idx)
+profiler.add_function(ObstacleAvoidance.render_camera)
 profiler.add_function(ObstacleManager.randomize_asset_pose)
 
 @hydra.main(config_path="../cfg", config_name="config")
@@ -58,10 +58,10 @@ def main(cfg: DictConfig):
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
     ENV_CLASS = {
-        "position_control": PointMassPositionControl,
-        "obstacle_avoidance": PointMassObstacleAvoidance
+        "position_control": PositionControl,
+        "obstacle_avoidance": ObstacleAvoidance
     }[cfg.env.name]
-    env = RecordEpisodeStatistics(ENV_CLASS(cfg.env, device=device))
+    env = RecordEpisodeStatistics(ENV_CLASS(cfg.env, cfg.dynamics, device=device))
     
     AGENT_CLASS = {
         "ppo": PPO,
