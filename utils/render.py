@@ -228,9 +228,9 @@ class PositionControlRenderer(BaseRenderer):
             self.actor_handles.append(actor_handle)
             
     def step(self, drone_state: torch.Tensor):
+        self.drone_states.copy_(drone_state)
         self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
         self.simulation_step()
-        self.drone_states.copy_(drone_state)
 
 
 class ObstacleAvoidanceRenderer(BaseRenderer):

@@ -1,4 +1,4 @@
-from typing import Tuple, Dict, Union, Optional
+from typing import Tuple, Dict, Union, Optional, List
 from copy import deepcopy
 
 import torch
@@ -54,7 +54,12 @@ class NormedLinear(nn.Linear):
             f"bias={self.bias is not None}, "\
             f"act={self.act.__class__.__name__})"
 
-def mlp(in_dim, mlp_dims, out_dim, hidden_act=nn.Mish(inplace=True), output_act=None):
+def mlp(
+    in_dim: int,
+    mlp_dims: Union[int, List[int]],
+    out_dim: int,
+    hidden_act: nn.Module = nn.Mish(inplace=True),
+    output_act: Optional[nn.Module] = None):
     """
     Basic building block of TD-MPC2.
     MLP with LayerNorm, Mish activations.
@@ -75,7 +80,7 @@ class StochasticActorCritic(nn.Module):
     def __init__(
         self,
         state_dim: int,
-        hidden_dim: int,
+        hidden_dim: Union[int, List[int]],
         action_dim: int
     ):
         super().__init__()

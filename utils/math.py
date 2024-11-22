@@ -1,9 +1,11 @@
-from typing import Union, Optional, Tuple
+from typing import Callable, Union, Optional, Tuple
 
 import torch
+from torch import Tensor
 
 # Runge-Kutta 4th Order Method
 def rk4(f, X0, U, dt, M=1):
+    # type: (Callable[[Tensor, Tensor], Tensor], Tensor, Tensor, float, int) -> Tensor
     DT = dt / M
     X1 = X0
     for _ in range(M):
@@ -16,6 +18,7 @@ def rk4(f, X0, U, dt, M=1):
 
 # Euler Integration
 def EulerIntegral(f, X0, U, dt, M=1):
+    # type: (Callable[[Tensor, Tensor], Tensor], Tensor, Tensor, float, int) -> Tensor
     DT = dt / M
     X1 = X0
     for _ in range(M):
@@ -24,6 +27,7 @@ def EulerIntegral(f, X0, U, dt, M=1):
 
 @torch.jit.script
 def quat_from_euler_xyz(roll, pitch, yaw):
+    # type: (Tensor, Tensor, Tensor) -> Tensor
     cy = torch.cos(yaw * 0.5)
     sy = torch.sin(yaw * 0.5)
     cr = torch.cos(roll * 0.5)
@@ -63,28 +67,22 @@ def random_quat_from_eular_zyx(
     return quat_xyzw
 
 @torch.jit.script
-def quat_rotate(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-    shape = q.shape
+def quat_rotate(q: Tensor, v: Tensor) -> Tensor:
     q_w = q[..., -1]
     q_vec = q[..., :3]
-    a = v * (2.0 * q_w ** 2 - 1.0).unsqueeze(-1)
-    b = torch.cross(q_vec, v, dim=-1) * q_w.unsqueeze(-1) * 2.0
-    c = q_vec * \
-        torch.bmm(q_vec.view(shape[0], 1, 3), v.view(
-            shape[0], 3, 1)).squeeze(-1) * 2.0
+    a = v * (q_w ** 2 - q_vec.pow(2).sum(dim=-1)).unsqueeze(-1)
+    b = 2. * q_w.unsqueeze(-1) * torch.cross(q_vec, v, dim=-1)
+    c = 2. * q_vec * (q_vec * v).sum(dim=-1, keepdim=True)
     return a + b + c
 
 @torch.jit.script
-def quat_axis(q: torch.Tensor, axis: int = 0) -> torch.Tensor:
+def quat_axis(q: Tensor, axis: int = 0) -> Tensor:
     basis_vec = torch.zeros(q.shape[0], 3, device=q.device)
     basis_vec[..., axis] = 1
     return quat_rotate(q, basis_vec)
 
-def rand_range(size, *, min=0, max=1, device=None):
-    return torch.rand(*size, device=device) * (max - min) + min
-
 @torch.jit.script
-def quat_mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def quat_mul(a: Tensor, b: Tensor) -> Tensor:
     assert a.shape == b.shape
     shape = a.shape
     a = a.reshape(-1, 4)
@@ -107,10 +105,10 @@ def quat_mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return quat
 
 @torch.jit.script
-def quat_inv(q: torch.Tensor) -> torch.Tensor:
+def quat_inv(q: Tensor) -> Tensor:
     return torch.cat([-q[..., :3], q[..., 3:4]], dim=-1)
 
-def axis_rotmat(axis: str, angle: torch.Tensor) -> torch.Tensor:
+def axis_rotmat(axis: str, angle: Tensor) -> Tensor:
     """
     Return the rotation matrices for one of the rotations about an axis
     of which Euler angles describe, for each value of the angle given.
@@ -130,12 +128,12 @@ def axis_rotmat(axis: str, angle: torch.Tensor) -> torch.Tensor:
 
     if axis == "X":
         R_flat = (one, zero, zero, zero, cos, -sin, zero, sin, cos)
-    if axis == "Y":
+    elif axis == "Y":
         R_flat = (cos, zero, sin, zero, one, zero, -sin, zero, cos)
-    if axis == "Z":
+    else: # axis == "Z"
         R_flat = (cos, -sin, zero, sin, cos, zero, zero, zero, one)
 
     return torch.stack(R_flat, -1).reshape(angle.shape + (3, 3))
 
-def rand_range(min, max, size, device=None):
+def rand_range(min: float, max: float, size: Tuple[int, int], device: Optional[torch.device]=None):
     return torch.rand(*size, device=device) * (max - min) + min

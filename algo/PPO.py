@@ -217,7 +217,7 @@ class PPO:
                         state=state,
                         sample=policy_info["sample"],
                         logprob=policy_info["logprob"],
-                        reward=1-loss*0.2,
+                        reward=1-loss*0.1,
                         done=terminated,
                         value=policy_info["value"],
                         next_value=agent.agent.get_value(env_info["next_state_before_reset"]))
