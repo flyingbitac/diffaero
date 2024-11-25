@@ -1,17 +1,16 @@
+from typing import Optional, Tuple, List
 import sys
 import os
 from collections import defaultdict
-from typing import Tuple
 
 import torch
-from pytorch3d import transforms as T
 from isaacgym import gymapi, gymutil, gymtorch
 from omegaconf import DictConfig
 from tqdm import tqdm
 
 from quaddif import QUADDIF_ROOT_DIR
 from quaddif.utils.cfg import get_sim_params, get_asset_options, get_camera_properties
-from quaddif.utils.assets import AssetManager
+from quaddif.utils.assets import ObstacleManager, create_ball, create_cube
 
 class BaseRenderer:
     def __init__(self, cfg: DictConfig, device):
@@ -234,16 +233,26 @@ class PositionControlRenderer(BaseRenderer):
 
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
-    def __init__(self, cfg: DictConfig, device: int, r_obstacles: torch.Tensor):
+    def __init__(self, cfg: DictConfig, device: int, obstacle_manager: ObstacleManager):
         self.env_spacing = cfg.env_spacing
         self.camera_handles = []
         self.camera_tensor_list = []
         self.env_asset_handles = defaultdict(list)
         self.n_obstacles = cfg.env_asset.n_assets
-        self.r_obstacles = r_obstacles
+        self.obstacle_manager = obstacle_manager
         super().__init__(cfg, device)
         self.target_pos = torch.zeros_like(self.drone_positions)
         self.camera = self.cfg.camera.type == "isaacgym"
+        self.asset_positions = torch.empty(self.n_envs, self.n_obstacles, 3, device=self.device)
+        self.asset_quats = torch.empty(self.n_envs, self.n_obstacles, 4, device=self.device)
+        
+    @staticmethod
+    def generate_env_assets(r_spheres, lwh_cubes):
+        # type: (torch.Tensor, torch.Tensor) -> List[str]
+        Ls, Ws, Hs = lwh_cubes.unbind(dim=-1)
+        selected_files = [create_ball(r.item()) for r in r_spheres] + \
+                         [create_cube(l.item(), w.item(), h.item()) for l, w, h in zip(Ls, Ws, Hs)]
+        return selected_files
     
     def create_envs(self):
         print("Creating environment...")
@@ -260,7 +269,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.robot_num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
         self.bodies_per_env = self.robot_num_bodies
         
-        self.asset_manager = AssetManager(self.cfg, self.device)
         env_asset_options = get_asset_options(self.cfg.env_asset)
 
         start_pose = gymapi.Transform()
@@ -312,7 +320,9 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
                 self.camera_tensor_list.append(camera_tensor)
             
             # create environment assets
-            env_asset_list = self.asset_manager.generate_env_assets(self.r_obstacles[i])
+            env_asset_list = self.generate_env_assets(
+                r_spheres=self.obstacle_manager.r_spheres[i],
+                lwh_cubes=self.obstacle_manager.lwh_cubes[i])
             for j, path in enumerate(env_asset_list):
                 env_asset_root = os.path.dirname(path)
                 env_asset_file = os.path.basename(path)
@@ -323,7 +333,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
                     env_handle,
                     env_asset,
                     start_pose, 
-                    "env_asset_"+str(i*self.asset_manager.assets_per_env+j),
+                    "env_asset_"+str(i*self.n_obstacles+j),
                     i,
                     self.cfg.env_asset.collision_mask,
                     self.cfg.env_asset.segmentation_id

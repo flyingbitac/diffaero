@@ -13,9 +13,9 @@ from quaddif.utils.math import rand_range
 from quaddif.utils.assets import ObstacleManager
 
 @torch.jit.script
-def raydist3d(
-    obst_pos: Tensor, # [n_envs, n_obstacles, 3]
-    obst_r: Tensor, # [n_envs, n_obstacles]
+def raydist3d_sphere(
+    obst_pos: Tensor, # [n_envs, n_spheres, 3]
+    obst_r: Tensor, # [n_envs, n_spheres]
     start: Tensor, # [n_envs, n_rays, 3]
     direction: Tensor, # [n_envs, n_rays, 3]
     max_dist: float
@@ -34,19 +34,52 @@ def raydist3d(
     Returns:
         torch.Tensor: The distance of the ray to the nearest obstacle's surface.
     """    
-    rel_pos = obst_pos.unsqueeze(1) - start.unsqueeze(2) # [n_envs, n_rays, n_obstacles, 3]
-    # rel_pos = rel_pos.unsqueeze(-2) # [n_envs, n_agents, n_obstacles, 1, 3]
-    rel_dist = torch.norm(rel_pos, dim=-1) # [n_envs, n_agents, n_obstacles]
-    costheta = torch.cosine_similarity(rel_pos, direction.unsqueeze(2), dim=-1) # [n_envs, n_rays, n_obstacles]
-    sintheta = torch.where(costheta>0, torch.sqrt(1 - costheta**2), 0.9) # [n_envs, n_rays, n_obstacles]
-    dist_center2ray = rel_dist * sintheta # [n_envs, n_rays, n_obstacles]
-    obst_r = obst_r.unsqueeze(1) # [n_envs, 1, n_obstacles]
-    raydist = rel_dist * costheta - torch.sqrt(torch.pow(obst_r, 2) - torch.pow(dist_center2ray, 2)) # [n_envs, n_rays, n_obstacles]
+    rel_pos = obst_pos.unsqueeze(1) - start.unsqueeze(2) # [n_envs, n_rays, n_spheres, 3]
+    rel_dist = torch.norm(rel_pos, dim=-1) # [n_envs, n_agents, n_spheres]
+    costheta = torch.cosine_similarity(rel_pos, direction.unsqueeze(2), dim=-1) # [n_envs, n_rays, n_spheres]
+    sintheta = torch.where(costheta>0, torch.sqrt(1 - costheta**2), 0.9) # [n_envs, n_rays, n_spheres]
+    dist_center2ray = rel_dist * sintheta # [n_envs, n_rays, n_spheres]
+    obst_r = obst_r.unsqueeze(1) # [n_envs, 1, n_spheres]
+    raydist = rel_dist * costheta - torch.sqrt(torch.pow(obst_r, 2) - torch.pow(dist_center2ray, 2)) # [n_envs, n_rays, n_spheres]
     valid = torch.logical_and(dist_center2ray < obst_r, costheta > 0)
     valid = torch.logical_and(valid, raydist < max_dist)
-    # valid = (dist_center2ray < obst_r) & (costheta > 0) & (raydist < max_dist) # [n_envs, n_rays, n_obstacles]
-    raydist_valid = torch.where(valid, raydist, max_dist) # [n_envs, n_rays, n_obstacles]
+    # valid = (dist_center2ray < obst_r) & (costheta > 0) & (raydist < max_dist) # [n_envs, n_rays, n_spheres]
+    raydist_valid = torch.where(valid, raydist, max_dist) # [n_envs, n_rays, n_spheres]
     return raydist_valid.min(dim=-1).values # [n_envs, n_rays]
+
+@torch.jit.script
+def raydist3d_cube(
+    obst_pos: Tensor, # [n_envs, n_cubes, 3]
+    obst_lwh: Tensor, # [n_envs, n_cubes, 3]
+    start: Tensor, # [n_envs, n_rays, 3]
+    direction: Tensor, # [n_envs, n_rays, 3]
+    max_dist: float
+) -> Tensor:
+    """Compute the ray distance based on the start of the ray,
+    the direction of the ray, and the position and radius of 
+    the cubic obstacles.
+
+    Args:
+        obst_pos (torch.Tensor): The center position of the sphcubicere obstacles.
+        obst_lwh (torch.Tensor): The length, width and height of the cubic obstacles.
+        start (torch.Tensor): The start point of the ray.
+        direction (torch.Tensor): The direction of the ray.
+        max_dist (float): The maximum traveling distance of the ray.
+
+    Returns:
+        torch.Tensor: The distance of the ray to the nearest obstacle's surface.
+    """
+    box_min = obst_pos - obst_lwh / 2.0 # [n_envs, n_cubes, 3]
+    box_max = obst_pos + obst_lwh / 2.0 # [n_envs, n_cubes, 3]
+    _tmin = (box_min.unsqueeze(1) - start.unsqueeze(2)) / direction.unsqueeze(2) # [n_envs, n_rays, n_cubes, 3]
+    _tmax = (box_max.unsqueeze(1) - start.unsqueeze(2)) / direction.unsqueeze(2) # [n_envs, n_rays, n_cubes, 3]
+    tmin = torch.where(direction.unsqueeze(2) < 0, _tmax, _tmin) # [n_envs, n_rays, n_cubes, 3]
+    tmax = torch.where(direction.unsqueeze(2) < 0, _tmin, _tmax) # [n_envs, n_rays, n_cubes, 3]
+    tentry = torch.max(tmin, dim=-1).values # [n_envs, n_rays, n_cubes]
+    texit = torch.min(tmax, dim=-1).values # [n_envs, n_rays, n_cubes]
+    valid = torch.logical_and(tentry <= texit, texit >= 0) # [n_envs, n_rays, n_cubes]
+    raydist = torch.where(valid, tentry, max_dist) # [n_envs, n_rays, n_cubes]
+    return raydist.min(dim=-1).values # [n_envs, n_rays]
 
 class Camera:
     def __init__(self, cfg, device):
@@ -61,13 +94,17 @@ class Camera:
     
     def get_raydist(
         self,
-        obst_pos: Tensor, # [n_envs, n_obstacles, 3]
-        obst_r: Tensor, # [n_envs, n_obstacles]
+        sphere_pos: Tensor, # [n_envs, n_spheres, 3]
+        sphere_r: Tensor, # [n_envs, n_spheres]
+        cube_pos: Tensor, # [n_envs, n_cubes, 3]
+        cube_lwh: Tensor, # [n_envs, n_cubes, 3]
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
     ) -> Tensor: # [n_envs, n_rays]
         ray_directions = self.world2body(quat_xyzw) # [n_envs, n_rays, 3]
-        raydist: Tensor = raydist3d(obst_pos, obst_r, start, ray_directions, self.max_dist) # [n_envs, n_rays, n_obstacles]
+        raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, self.max_dist) # [n_envs, n_rays]
+        raydist_cube: Tensor = raydist3d_cube(cube_pos, cube_lwh, start, ray_directions, self.max_dist) # [n_envs, n_rays]
+        raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
         depth = 1. - raydist.reshape(-1, self.H, self.W) / self.max_dist # [n_envs, H, W]
         return depth
     
@@ -122,12 +159,11 @@ class ObstacleAvoidance(BaseEnv):
             self.state_dim = self.model.state_dim + self.n_obstacles * 3
         
         if not env_cfg.render.headless or self.camera_type == "isaacgym":
-            self.renderer = ObstacleAvoidanceRenderer(env_cfg.render, device.index, self.r_obstacles)
-            self.asset_poses = torch.zeros(
-                env_cfg.n_envs, self.renderer.asset_manager.assets_per_env, 7, device=device)
+            self.renderer = ObstacleAvoidanceRenderer(env_cfg.render, device.index, self.obstacle_manager)
+            self.asset_poses = torch.zeros( # TODO: replace this with self.obstacle_manager.p_obstacles and self.obstacle_manager.q_obstacles
+                env_cfg.n_envs, self.renderer.n_obstacles, 7, device=device)
         else:
             self.renderer = None # headless and camera_type == "raydist"
-        self.p_obstacles = torch.zeros(env_cfg.n_envs, self.n_obstacles, 3, device=device)
         
         self.action_dim = self.model.action_dim
         self.r_drone = env_cfg.r_drone
@@ -137,7 +173,7 @@ class ObstacleAvoidance(BaseEnv):
         if self.camera_type is not None:
             state.append(self.camera_tensor.flatten(1))
         elif self.camera_type is None:
-            obst_relpos = self.asset_poses[:, :self.n_obstacles, :3] - self._p.unsqueeze(1)
+            obst_relpos = self.obstacle_manager.p_obstacles - self._p.unsqueeze(1)
             sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
             state.append(obst_relpos.gather(dim=1, index=sorted_idx).flatten(1))
         else:
@@ -151,8 +187,10 @@ class ObstacleAvoidance(BaseEnv):
         elif self.camera_type == "raydist":
             H, W = self.camera_tensor.shape[1:]
             self.camera_tensor.copy_(self.camera.get_raydist(
-                obst_pos=self.p_obstacles,
-                obst_r=self.r_obstacles,
+                sphere_pos=self.obstacle_manager.p_spheres,
+                sphere_r=self.obstacle_manager.r_spheres,
+                cube_pos=self.obstacle_manager.p_cubes,
+                cube_lwh=self.obstacle_manager.lwh_cubes,
                 start=self.p.unsqueeze(1).expand(-1, H*W, -1),
                 quat_xyzw=self.q))
     
@@ -179,7 +217,6 @@ class ObstacleAvoidance(BaseEnv):
             self.reset_idx(reset_indices)
         if self.renderer is not None:
             if self.renderer.enable_viewer_sync or self.camera_type == "isaacgym":
-                print("FUCK")
                 self.renderer.step(*self.state_for_render())
             self.renderer.render()
         if self.camera_type is not None:
@@ -204,7 +241,7 @@ class ObstacleAvoidance(BaseEnv):
             vel_diff = (self.model._vel_ema - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
-            obstacle_relpos = self.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
+            obstacle_relpos = self.obstacle_manager.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
             dist2surface = (obstacle_relpos.norm(dim=-1) - self.r_obstacles).clamp(min=0.1)
             approaching_vel = torch.sum(F.normalize(obstacle_relpos, dim=-1) * self._v.unsqueeze(1), dim=-1)
             dangerous = torch.lt(dist2surface, 1.5)
@@ -226,7 +263,7 @@ class ObstacleAvoidance(BaseEnv):
             vel_diff = (self._v - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
-            obstacle_relpos = self.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
+            obstacle_relpos = self.obstacle_manager.p_obstacles - self.p.unsqueeze(1) # [n_envs, n_obstacles, 3]
             dist2surface = (obstacle_relpos.norm(dim=-1) - self.r_obstacles).clamp(min=0.1)
             approaching_vel = torch.sum(F.normalize(obstacle_relpos, dim=-1) * self._v.unsqueeze(1), dim=-1)
             oa_loss = (approaching_vel.clamp(min=0) / dist2surface.exp()).max(dim=-1).values
@@ -269,14 +306,14 @@ class ObstacleAvoidance(BaseEnv):
         assert torch.all((self.p[env_idx] - self.target_pos[env_idx]).norm(dim=-1) > min_init_dist).item()
         
         # obstacle position
-        self.p_obstacles[env_idx], mask = self.obstacle_manager.randomize_asset_pose(
+        mask = self.obstacle_manager.randomize_asset_pose(
             env_idx=env_idx,
             drone_init_pos=self.p[env_idx],
             target_pos=self.target_pos[env_idx],
             safety_range=self.r_obstacles.max().item()+0.5
         )
         if self.renderer is not None:
-            self.asset_poses[env_idx, :self.n_obstacles, :3] = self.p_obstacles[env_idx]
+            self.asset_poses[env_idx, :self.n_obstacles, :3] = self.obstacle_manager.p_obstacles[env_idx]
             
         self.progress[env_idx] = 0
     
@@ -289,7 +326,7 @@ class ObstacleAvoidance(BaseEnv):
     def terminated(self) -> Tensor:
         # out_of_bound = torch.any(self.p < -1.5*self.L, dim=-1) | \
         #                torch.any(self.p >  1.5*self.L, dim=-1)
-        dist2obst = torch.norm(self.p.unsqueeze(1) - self.p_obstacles[:, :, :3], dim=-1)
+        dist2obst = torch.norm(self.p.unsqueeze(1) - self.obstacle_manager.p_obstacles[:, :, :3], dim=-1)
         collision = torch.any(dist2obst < (self.r_obstacles + self.r_drone), dim=-1)
         return collision
     
