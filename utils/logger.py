@@ -1,10 +1,7 @@
-from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple, Union
 import os
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
-import torch
 from torch.utils.tensorboard import SummaryWriter
 
 class Logger:
@@ -12,22 +9,22 @@ class Logger:
         self,
         cfg: DictConfig,
         type: str = 'tensorboard',
-        run_name: Optional[str] = None
+        run_name: str = ""
     ):
         assert type.lower() in ['tensorboard', 'wandb']
         self.cfg = cfg
         self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-        if run_name is None:
-            run_name = f"{cfg.env.name}__{cfg.algo.name}"
+        if run_name != "":
+            run_name = "__" + run_name
+        run_name = f"{cfg.env.name}__{cfg.algo.name}__{cfg.seed}" + run_name
         if type.lower() == 'tensorboard':
-            from torch.utils.tensorboard import SummaryWriter
             print("Using Tensorboard Logger.")
             self.writer = SummaryWriter(
                 log_dir=os.path.join(self.logdir, run_name)
             )
             self.log_hparams()
         else:
-            print("Using Weights and Biases Logger.")
+            print("Using W&B Logger.")
             assert "wandb" in list(dict(cfg).keys())
             import wandb
             wandb.init(

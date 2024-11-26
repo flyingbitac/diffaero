@@ -191,12 +191,6 @@ class PointMassModel:
         new_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
         self._state = new_state
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
-        
-        # action = U.detach().clone().requires_grad_(True)
-        # new_state = self.solver(self.dynamics, self._state, action, dt=self.dt, M=self.n_substeps)
-        # new_state.sum().backward(retain_graph=True)
-        # print(action.grad)
-        # self._state = new_state
     
     @property
     def p(self) -> Tensor: return self._state[:, 0:3].detach()
