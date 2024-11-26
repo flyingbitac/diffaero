@@ -61,45 +61,20 @@ class APG:
             l_rollout=cfg.l_rollout,
             device=device)
 
-    @staticmethod
-    def learn(cfg, agent, env, logger, on_step_cb=None, on_update_cb=None):
-        # type: (DictConfig, Union[APG, APG_stochastic], BaseEnv, Logger, Optional[Callable], Optional[Callable]) -> None
-        state = env.reset()
-        pbar = tqdm(range(cfg.n_updates))
-        for i in pbar:
-            t1 = pbar._time()
-            env.detach()
-            for _ in range(cfg.l_rollout):
-                action, policy_info = agent.act(state)
-                state, loss, terminated, env_info = env.step(action)
-                agent.record_loss(loss, policy_info, env_info)
-                if on_step_cb is not None:
-                    on_step_cb(
-                        state=state,
-                        action=action,
-                        policy_info=policy_info,
-                        env_info=env_info)
-                
-            losses, grad_norms = agent.update_actor()
-            # log data
-            l_episode = env_info["stats"]["l"].float().mean().item()
-            success_rate = env_info['stats']['success_rate']
-            pbar.set_postfix({
-                "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-                "loss": f"{loss.mean().item():.3f}",
-                "l_episode": f"{l_episode:.1f}",
-                "success_rate": f"{success_rate:.2f}",
-                "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
-            log_info = {
-                "env_loss": env_info["loss_components"],
-                "agent_loss": losses,
-                "agent_grad_norm": grad_norms,
-                "metrics": {"l_episode": l_episode, "success_rate": success_rate}
-            }
-            logger.log_scalars(log_info, i+1)
-
-            if on_update_cb is not None:
-                on_update_cb(log_info=log_info)
+    def step(self, cfg, env, state, on_step_cb=None):
+        for _ in range(cfg.l_rollout):
+            action, policy_info = self.act(state)
+            state, loss, terminated, env_info = env.step(action)
+            self.record_loss(loss, policy_info, env_info)
+            if on_step_cb is not None:
+                on_step_cb(
+                    state=state,
+                    action=action,
+                    policy_info=policy_info,
+                    env_info=env_info)
+            
+        losses, grad_norms = self.update_actor()
+        return policy_info, env_info, losses, grad_norms
 
 
 class APG_stochastic(APG):
@@ -131,7 +106,7 @@ class APG_stochastic(APG):
         action_std = torch.exp(action_logstd).expand_as(action_mean)
         probs = torch.distributions.Normal(action_mean, action_std)
         if sample is None:
-            sample = torch.randn_like(action_mean) * action_std + action_mean
+            sample: Tensor = torch.randn_like(action_mean) * action_std + action_mean
         action = torch.tanh(sample)
         logprob = probs.log_prob(sample) - torch.log(1. - torch.tanh(sample).pow(2) + 1e-8)
         entropy = probs.entropy().sum(-1)
@@ -155,7 +130,7 @@ class APG_stochastic(APG):
         self.optimizer.step()
         self.actor_loss = torch.zeros(1, device=self.device)
         self.entropy_loss = torch.zeros(1, device=self.device)
-        return {"actor_loss": actor_loss, "entropy_loss": entropy_loss}, {"actor_grad_norm": grad_norm}
+        return {"actor_loss": actor_loss.mean().item(), "entropy_loss": entropy_loss.mean().item()}, {"actor_grad_norm": grad_norm}
 
     @staticmethod
     def build(cfg, env, device):

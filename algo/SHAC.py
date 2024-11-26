@@ -182,49 +182,22 @@ class SHAC:
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
-
-    @staticmethod
-    def learn(cfg, agent, env, logger, on_step_cb=None, on_update_cb=None):
-        # type: (DictConfig, SHAC, BaseEnv, Logger, Optional[Callable], Optional[Callable]) -> None
-        state = env.reset()
-        pbar = tqdm(range(cfg.n_updates))
-        for i in pbar:
-            t1 = pbar._time()
-            env.detach()
-            agent.buffer.clear()
-            agent.clear_loss()
-            for t in range(cfg.l_rollout):
-                action, policy_info = agent.act(state)
-                next_state, loss, terminated, env_info = env.step(action)
-                next_value = agent.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
-                agent.buffer.add(state, loss, policy_info["value"], env_info["reset"], terminated, next_value)
-                state = next_state
-                if on_step_cb is not None:
-                    on_step_cb(
-                        state=state,
-                        action=action,
-                        policy_info=policy_info,
-                        env_info=env_info)
-
-            target_values = agent.bootstrap_gae()
-            losses, grad_norms = agent.train(target_values)
-            l_episode = env_info["stats"]["l"].float().mean().item()
-            success_rate = env_info['stats']['success_rate']
-            pbar.set_postfix({
-                "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-                "loss": f"{loss.mean():.3f}",
-                "l_episode": f"{l_episode:.1f}",
-                "success_rate": f"{success_rate:.2f}",
-                "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
-            log_info = {
-                "value": policy_info["value"].mean().item(),
-                "env_loss": env_info["loss_components"],
-                "agent_loss": losses,
-                "agent_grad_norm": grad_norms,
-                "metrics": {"l_episode": l_episode, "success_rate": success_rate}
-            }
-            logger.log_scalars(log_info, i+1)
-
-            if on_update_cb is not None:
-                on_update_cb(log_info=log_info)
-        
+    
+    def step(self, cfg, env, state, on_step_cb=None):
+        self.buffer.clear()
+        self.clear_loss()
+        for t in range(cfg.l_rollout):
+            action, policy_info = self.act(state)
+            next_state, loss, terminated, env_info = env.step(action)
+            next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
+            self.buffer.add(state, loss, policy_info["value"], env_info["reset"], terminated, next_value)
+            state = next_state
+            if on_step_cb is not None:
+                on_step_cb(
+                    state=state,
+                    action=action,
+                    policy_info=policy_info,
+                    env_info=env_info)
+        target_values = self.bootstrap_gae()
+        losses, grad_norms = self.train(target_values)
+        return policy_info, env_info, losses, grad_norms
