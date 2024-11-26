@@ -50,8 +50,7 @@ class SHAC:
         self.action_dim = action_dim
         self.agent = StochasticActorCritic(state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam([
-            {"params": self.agent.actor_mean.parameters(), "lr": cfg.actor_lr},
-            {"params": self.agent.actor_logstd, "lr": cfg.actor_lr},
+            {"params": self.agent.actor.parameters(), "lr": cfg.actor_lr},
             {"params": self.agent.critic.parameters(), "lr": cfg.critic_lr}])
         self.buffer = SHACRolloutBuffer(l_rollout, n_envs, state_dim, device)
         self._critic_target = deepcopy(self.agent.critic)
@@ -69,9 +68,9 @@ class SHAC:
         self.l_rollout: int = l_rollout
         self.device = device
     
-    def act(self, state):
-        # type: (Tensor) -> Tuple[Tensor, Dict[str, Tensor]]
-        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state)
+    def act(self, state, test=False):
+        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
     def value_target(self, state):
@@ -153,9 +152,9 @@ class SHAC:
         total_loss = actor_loss + self.entropy_weight * entropy_loss + self.value_weight * critic_loss
         self.optim.zero_grad()
         total_loss.backward()
-        actor_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor_mean.parameters()]) ** 0.5
+        actor_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
         if self.actor_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.agent.actor_mean.parameters(), max_norm=self.actor_grad_norm)
+            torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
         critic_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
         if self.critic_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
@@ -172,16 +171,11 @@ class SHAC:
             "critic_grad_norm": critic_grad_norm}
         return losses, grad_norms
 
-    @staticmethod
-    def build(cfg, env, device):
-        return SHAC(
-            cfg=cfg.algo,
-            state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
-            action_dim=env.action_dim,
-            n_envs=env.n_envs,
-            l_rollout=cfg.l_rollout,
-            device=device)
+    def save(self, path):
+        self.agent.save(path)
+    
+    def load(self, path):
+        self.agent.load(path)
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
@@ -201,3 +195,14 @@ class SHAC:
         target_values = self.bootstrap_gae()
         losses, grad_norms = self.train(target_values)
         return policy_info, env_info, losses, grad_norms
+        
+    @staticmethod
+    def build(cfg, env, device):
+        return SHAC(
+            cfg=cfg.algo,
+            state_dim=env.state_dim,
+            hidden_dim=list(cfg.algo.hidden_dim),
+            action_dim=env.action_dim,
+            n_envs=env.n_envs,
+            l_rollout=cfg.l_rollout,
+            device=device)

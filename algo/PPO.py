@@ -106,9 +106,9 @@ class PPO:
         self.l_rollout = l_rollout
         self.device = device
     
-    def act(self, state):
-        # type: (torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]
-        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state)
+    def act(self, state, test=False):
+        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
     @torch.no_grad()
@@ -167,9 +167,9 @@ class PPO:
             self.optim.zero_grad()
             loss.backward()
             
-            actor_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor_mean.parameters()]) ** 0.5
+            actor_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
             if self.actor_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.agent.actor_mean.parameters(), max_norm=self.actor_grad_norm)
+                torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
             critic_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
             if self.critic_grad_norm is not None:
                 torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
@@ -187,17 +187,12 @@ class PPO:
     
     def add(self, state, sample, logprob, reward, done, value, next_value):
         self.buffer.add(state, sample, logprob, reward, done, value, next_value)
-
-    @staticmethod
-    def build(cfg, env, device):
-        return PPO(
-            cfg=cfg.algo,
-            state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
-            action_dim=env.action_dim,
-            n_envs=env.n_envs,
-            l_rollout=cfg.l_rollout,
-            device=device)
+    
+    def save(self, path):
+        self.agent.save(path)
+    
+    def load(self, path):
+        self.agent.load(path)
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
@@ -226,6 +221,17 @@ class PPO:
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = self.train(advantages, target_values)
         return policy_info, env_info, losses, grad_norms
+
+    @staticmethod
+    def build(cfg, env, device):
+        return PPO(
+            cfg=cfg.algo,
+            state_dim=env.state_dim,
+            hidden_dim=list(cfg.algo.hidden_dim),
+            action_dim=env.action_dim,
+            n_envs=env.n_envs,
+            l_rollout=cfg.l_rollout,
+            device=device)
 
 
 class PPO_RPL(PPO):

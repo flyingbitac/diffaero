@@ -86,11 +86,14 @@ class PositionControl(BaseEnv):
             
             jerk_loss = self._w.norm(dim=-1)
             
-            total_loss = vel_loss + jerk_loss
+            pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
+            
+            total_loss = vel_loss + jerk_loss + pos_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
                 "attitute_loss": attitute_loss.mean().item(),
+                "pos_loss": pos_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
         return total_loss, loss_components

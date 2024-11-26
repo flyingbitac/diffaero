@@ -14,6 +14,7 @@ headless: True
 
 seed: -1
 torch_deterministic: False
+checkpoint: 
 hydra:
   sweep:
     dir: ./outputs/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}

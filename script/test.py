@@ -8,8 +8,7 @@ import isaacgym
 import torch
 import numpy as np
 import hydra
-from omegaconf import DictConfig
-from line_profiler import LineProfiler
+from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import cv2
 
@@ -17,7 +16,6 @@ from quaddif.env import PositionControl, ObstacleAvoidance
 from quaddif.algo import SHAC, APG_stochastic, APG, PPO
 from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
-from quaddif.utils.logger import Logger
 
 def on_step_cb(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
@@ -32,60 +30,46 @@ def on_step_cb(state, action, policy_info, env_info):
         cv2.imshow('image', disp_image)
         cv2.waitKey(1)
 
-profiler = LineProfiler()
-profiler.add_function(SHAC.step)
-profiler.add_function(APG_stochastic.step)
-profiler.add_function(APG.step)
-profiler.add_function(PPO.step)
-profiler.add_function(SHAC.step)
-profiler.add_function(ObstacleAvoidance.step)
-profiler.add_function(ObstacleAvoidance.state)
-profiler.add_function(ObstacleAvoidance.loss_fn)
-profiler.add_function(ObstacleAvoidance.reset_idx)
-profiler.add_function(ObstacleAvoidance.render_camera)
-
-@profiler
-def learn(
+@torch.no_grad()
+def test(
     cfg: DictConfig,
     agent: Union[SHAC, APG, APG_stochastic, PPO],
     env: Union[PositionControl, ObstacleAvoidance],
-    logger: Logger,
-    on_step_cb: Optional[Callable] = None,
-    on_update_cb: Optional[Callable] = None
+    on_step_cb: Optional[Callable] = None
 ):
     state = env.reset()
-    pbar = tqdm(range(cfg.n_updates))
+    pbar = tqdm(range(50000))
     for i in pbar:
         t1 = pbar._time()
         env.detach()
-        policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
+        action, policy_info = agent.act(state, test=True)
+        state, loss, terminated, env_info = env.step(action)
         l_episode = env_info["stats"]["l"].float().mean().item()
         success_rate = env_info['stats']['success_rate']
         pbar.set_postfix({
-            "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
             "loss": f"{env_info['loss_components']['total_loss']:.3f}",
             "l_episode": f"{l_episode:.1f}",
             "success_rate": f"{success_rate:.2f}",
-            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
-        log_info = {
-            "env_loss": env_info["loss_components"],
-            "agent_loss": losses,
-            "agent_grad_norm": grad_norms,
-            "metrics": {"l_episode": l_episode, "success_rate": success_rate}
-        }
-        if "value" in policy_info.keys():
-            log_info["value"] = policy_info["value"].mean().item()
-        logger.log_scalars(log_info, i+1)
-
-        if on_update_cb is not None:
-            on_update_cb(log_info=log_info)
-
+            "fps": f"{cfg.env.n_envs/(pbar._time()-t1):,.0f}"})
+        if on_step_cb is not None:
+            on_step_cb(
+                state=state,
+                action=action,
+                policy_info=policy_info,
+                env_info=env_info)
 
 @hydra.main(config_path="../cfg", config_name="config")
 def main(cfg: DictConfig):
     device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
     print("Using device", device_idx)
     device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() else "cpu")
+    
+    assert cfg.checkpoint is not None
+    cfg_path = os.path.join(cfg.checkpoint, ".hydra", "config.yaml")
+    print(cfg.checkpoint, cfg_path)
+    ckpt_cfg = OmegaConf.load(cfg_path)
+    cfg.algo = ckpt_cfg.algo
+    cfg.dynamics = ckpt_cfg.dynamics
     
     if cfg.seed != -1:
         random.seed(cfg.seed)
@@ -106,22 +90,13 @@ def main(cfg: DictConfig):
         "apg_sto": APG_stochastic
     }[cfg.algo.name]
     agent = AGENT_CLASS.build(cfg, env, device)
+    agent.load(os.path.join(cfg.checkpoint, "checkpoints"))
     
-    logger = Logger(cfg)
-    try:
-        # learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
-        learn(cfg, agent, env, logger)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        agent.save(os.path.join(logger.logdir, "checkpoints"))
+    # test(cfg, agent, env, on_step_cb=on_step_cb)
+    test(cfg, agent, env)
     
     if env.renderer is not None:
         env.renderer.close()
-    global logdir
-    logdir = logger.logdir
 
 if __name__ == "__main__":
     main()
-    with open(os.path.join(logdir, "runtime_profile.txt"), "w", encoding="utf-8") as f:
-        profiler.print_stats(stream=f, output_unit=1e-3)

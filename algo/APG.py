@@ -4,11 +4,8 @@ from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 from torch import Tensor
-from tqdm import tqdm
 
-from quaddif.env.base_env import BaseEnv
-from quaddif.utils.nn import mlp
-from quaddif.utils.logger import Logger
+from quaddif.utils.nn import DeterministicActor, StochasticActor, mlp
 
 
 class APG:
@@ -21,18 +18,18 @@ class APG:
         l_rollout: int,
         device: torch.device
     ):
-        self.actor = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU()).to(device)
-        self.optimizer = torch.optim.Adam(
-            self.actor.parameters(), lr=cfg.lr)
+        # self.actor = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU()).to(device)
+        self.actor = DeterministicActor(state_dim, hidden_dim, action_dim).to(device)
+        self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.discount: float = cfg.gamma
         self.max_grad_norm: float = cfg.max_grad_norm
         self.l_rollout: int = l_rollout
         self.actor_loss = torch.zeros(1, device=device)
         self.device = device
     
-    def act(self, state):
-        # type: (Tensor) -> Tuple[Tensor, Dict[str, Tensor]]
-        return torch.tanh(self.actor(state)), {}
+    def act(self, state, test=False):
+        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        return self.actor(state), {}
     
     def record_loss(self, loss, policy_info, env_info):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor]) -> None
@@ -51,16 +48,6 @@ class APG:
         self.actor_loss = torch.zeros(1, device=self.device)
         return {"actor_loss": actor_loss}, {"actor_grad_norm": grad_norm}
 
-    @staticmethod
-    def build(cfg, env, device):
-        return APG(
-            cfg=cfg.algo,
-            state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
-            action_dim=env.action_dim,
-            l_rollout=cfg.l_rollout,
-            device=device)
-
     def step(self, cfg, env, state, on_step_cb=None):
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(state)
@@ -75,6 +62,22 @@ class APG:
             
         losses, grad_norms = self.update_actor()
         return policy_info, env_info, losses, grad_norms
+    
+    def save(self, path):
+        self.actor.save(path)
+    
+    def load(self, path):
+        self.actor.load(path)
+
+    @staticmethod
+    def build(cfg, env, device):
+        return APG(
+            cfg=cfg.algo,
+            state_dim=env.state_dim,
+            hidden_dim=list(cfg.algo.hidden_dim),
+            action_dim=env.action_dim,
+            l_rollout=cfg.l_rollout,
+            device=device)
 
 
 class APG_stochastic(APG):
@@ -88,29 +91,16 @@ class APG_stochastic(APG):
         device: torch.device
     ):
         super().__init__(cfg, state_dim, hidden_dim, action_dim, l_rollout, device)
-        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim, device=device))
-        del self.optimizer
-        self.optimizer = torch.optim.Adam([
-            {"params": self.actor.parameters()},
-            {"params": self.actor_logstd}], lr=cfg.lr)
+        del self.optimizer; del self.actor
+        self.actor = StochasticActor(state_dim, hidden_dim, action_dim).to(device)
+        self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.entropy_loss = torch.zeros(1, device=device)
         self.entropy_weight: float = cfg.entropy_weight
 
-    def act(self, state, sample=None):
-        # type: (Tensor, Optional[Tensor]) -> Tuple[Tensor, Dict[str, Tensor]]
-        action_mean = self.actor(state.view(-1, state.size(-1)))
-        LOG_STD_MAX = 2
-        LOG_STD_MIN = -5
-        action_logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
-            torch.tanh(self.actor_logstd) + 1)  # From SpinUp / Denis Yarats
-        action_std = torch.exp(action_logstd).expand_as(action_mean)
-        probs = torch.distributions.Normal(action_mean, action_std)
-        if sample is None:
-            sample: Tensor = torch.randn_like(action_mean) * action_std + action_mean
-        action = torch.tanh(sample)
-        logprob = probs.log_prob(sample) - torch.log(1. - torch.tanh(sample).pow(2) + 1e-8)
-        entropy = probs.entropy().sum(-1)
-        return action, {"sample": sample, "logprob": logprob.sum(-1), "entropy": entropy}
+    def act(self, state, test=False):
+        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        action, sample, logprob, entropy = self.actor(state, test=test)
+        return action, {"sample": sample, "logprob": logprob, "entropy": entropy}
     
     def record_loss(self, loss, policy_info, env_info):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor]) -> None
