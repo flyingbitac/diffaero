@@ -182,7 +182,8 @@ class SHAC:
             action, policy_info = self.act(state)
             next_state, loss, terminated, env_info = env.step(action)
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
-            self.buffer.add(state, loss, policy_info["value"], env_info["reset"], terminated, next_value)
+            # divide by 10 to avoid disstability
+            self.buffer.add(state, loss/10, policy_info["value"], env_info["reset"], terminated, next_value)
             state = next_state
             if on_step_cb is not None:
                 on_step_cb(
