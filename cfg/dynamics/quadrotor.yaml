@@ -1,4 +1,4 @@
-name: quadrotor_dynamics
+name: quadrotor
 
 m: 1.0                  # total mass
 arm_l: 0.23             # arm length

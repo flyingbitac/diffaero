@@ -22,7 +22,7 @@ class PositionControl(BaseEnv):
             self.renderer = PositionControlRenderer(env_cfg.render, device.index)
     
     def state(self, with_grad=False):
-        if isinstance(self.model, PointMassModel):
+        if self.dynamic_type == "pointmass":
             state = [self.target_vel, self._v, self._a]
         else:
             state = [self.target_vel, self._q, self._v, self._a]
@@ -58,13 +58,13 @@ class PositionControl(BaseEnv):
         return self.state(), loss, terminated, extra
     
     def state_for_render(self) -> Tensor:
-        w = torch.zeros_like(self.v) if isinstance(self.model, PointMassModel) else self.w
+        w = torch.zeros_like(self.v) if self.dynamic_type == "pointmass" else self.w
         state = torch.concat([self.p, self.q, self.v, w], dim=-1)
         return state
     
     def loss_fn(self, target_vel, action):
         # type: (Tensor, Tensor) -> Tuple[Tensor, Dict[str, float]]
-        if isinstance(self.model, PointMassModel):
+        if self.dynamic_type == "pointmass":
             vel_diff = (self.model._vel_ema - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             

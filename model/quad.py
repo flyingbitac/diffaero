@@ -108,7 +108,6 @@ class QuadrotorModel:
         q_dot = 0.5 * quat_mul(q, torch.cat((w, torch.zeros((q.size(0), 1), device=self.device)), dim=-1))
         
         # State derivatives
-        # X_dot = torch.concat([v, q_dot.detach(), acc, w_dot.detach()], dim=-1)
         X_dot = torch.concat([v, q_dot, acc, w_dot], dim=-1)
         
         return X_dot

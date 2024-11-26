@@ -8,11 +8,12 @@ from quaddif.model.quad import PointMassModel, QuadrotorModel, point_mass_quat
 
 class BaseEnv:
     def __init__(self, env_cfg: DictConfig, model_cfg: DictConfig, device: torch.device):
-        assert model_cfg.name in ["point_mass_dynamics", "quadrotor_dynamics"]
+        self.dynamic_type = model_cfg.name
+        assert self.dynamic_type in ["pointmass", "quadrotor"]
         self.model: Union[PointMassModel, QuadrotorModel] = {
-            "point_mass_dynamics": PointMassModel,
-            "quadrotor_dynamics": QuadrotorModel
-        }[model_cfg.name](model_cfg, env_cfg.n_envs, env_cfg.dt, env_cfg.n_substeps, device)
+            "pointmass": PointMassModel,
+            "quadrotor": QuadrotorModel
+        }[self.dynamic_type](model_cfg, env_cfg.n_envs, env_cfg.dt, env_cfg.n_substeps, device)
         self.dt: float = env_cfg.dt
         self.L: float = env_cfg.length
         self.n_envs: int = env_cfg.n_envs

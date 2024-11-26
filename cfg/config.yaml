@@ -1,7 +1,7 @@
 defaults:
   - algo: apg
-  - env: position_control
-  - dynamics: pointmass
+  - env: pc
+  - dynamics: pointmass # [pointmass, quadrotor]
   - _self_
   # - override hydra/launcher: joblib
 
