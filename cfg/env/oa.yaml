@@ -20,6 +20,14 @@ camera:
   max_dist: 20.0
   onboard_pos: [0.2, 0., 0.05]
 
+obstacles:
+  n_obstacles: ${env.n_obstacles}
+  sphere_percentage: 0.5
+  sphere_radius_range: [0.2, 2.0, 0.2] # [min, max, step]
+  cube_lwh_range: [0.4, 1.6, 0.2] # [min, max, step]
+  randpos_std_min: 1.
+  randpos_std_max: 1.
+
 render:
   headless: ${headless}
   n_envs: ${env.n_envs}
