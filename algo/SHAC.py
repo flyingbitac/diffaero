@@ -5,11 +5,8 @@ from omegaconf import DictConfig
 import torch
 from torch import Tensor
 import torch.nn.functional as F
-from tqdm import tqdm
 
-from quaddif.env.base_env import BaseEnv
 from quaddif.utils.nn import StochasticActorCritic
-from quaddif.utils.logger import Logger
 
 class SHACRolloutBuffer:
     def __init__(self, num_steps, num_envs, state_dim, device):
@@ -49,9 +46,8 @@ class SHAC:
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.agent = StochasticActorCritic(state_dim, hidden_dim, action_dim).to(device)
-        self.optim = torch.optim.Adam([
-            {"params": self.agent.actor.parameters(), "lr": cfg.actor_lr},
-            {"params": self.agent.critic.parameters(), "lr": cfg.critic_lr}])
+        self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
+        self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
         self.buffer = SHACRolloutBuffer(l_rollout, n_envs, state_dim, device)
         self._critic_target = deepcopy(self.agent.critic)
         for p in self._critic_target.parameters():
@@ -140,36 +136,38 @@ class SHAC:
         self.rollout_gamma = torch.ones(self.n_envs, device=self.device)
         self.cumulated_loss = torch.zeros(self.n_envs, device=self.device)
         self.entropy_loss = torch.tensor(0., device=self.device)
-    
-    def train(self, target_values: Tensor) -> Dict[str, float]:
+        
+    def update_actor(self) -> Dict[str, float]:
         actor_loss = self.actor_loss / (self.n_envs * self.l_rollout)
         entropy_loss = self.entropy_loss / (self.n_envs * self.l_rollout)
-        T, N, D = self.buffer.states.shape
-        states = self.buffer.states.reshape(T*N, D)
-        values = self.agent.get_value(states)
-        critic_loss = F.mse_loss(values, target_values)
-        
-        total_loss = actor_loss + self.entropy_weight * entropy_loss + self.value_weight * critic_loss
-        self.optim.zero_grad()
+        total_loss = actor_loss + self.entropy_weight * entropy_loss
+        self.actor_optim.zero_grad()
         total_loss.backward()
-        actor_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
+        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
         if self.actor_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
-        critic_grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
-        if self.critic_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
-        self.optim.step()
-        
+        self.actor_optim.step()
+        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm}
+    
+    def update_critic(self, target_values: Tensor) -> Dict[str, float]:
+        T, N, D = self.buffer.states.shape
+        batch_indices = torch.randperm(T*N, device=self.device)
+        mb_size = T*N // self.n_minibatch
+        states = self.buffer.states.reshape(T*N, D)
+        for start in range(0, T*N, mb_size):
+            end = start + mb_size
+            mb_indices = batch_indices[start:end]
+            values = self.agent.get_value(states[mb_indices])
+            critic_loss = F.mse_loss(values, target_values[mb_indices])
+            self.critic_optim.zero_grad()
+            critic_loss.backward()
+            grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
+            if self.critic_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+            self.critic_optim.step()
         for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
             p_t.data.lerp_(p.data, 5e-3)
-        losses = {
-            "actor_loss": actor_loss.item(),
-            "entropy_loss": entropy_loss.item(),
-            "critic_loss": critic_loss.item()}
-        grad_norms = {
-            "actor_grad_norm": actor_grad_norm,
-            "critic_grad_norm": critic_grad_norm}
-        return losses, grad_norms
+        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
 
     def save(self, path):
         self.agent.save(path)
@@ -193,7 +191,10 @@ class SHAC:
                     policy_info=policy_info,
                     env_info=env_info)
         target_values = self.bootstrap_gae()
-        losses, grad_norms = self.train(target_values)
+        actor_losses, actor_grad_norms = self.update_actor()
+        critic_losses, critic_grad_norms = self.update_critic(target_values)
+        losses = {**actor_losses, **critic_losses}
+        grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return policy_info, env_info, losses, grad_norms
         
     @staticmethod

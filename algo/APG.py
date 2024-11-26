@@ -2,11 +2,9 @@ from typing import Callable, Sequence, Tuple, Dict, Union, Optional
 
 from omegaconf import DictConfig
 import torch
-import torch.nn as nn
 from torch import Tensor
 
-from quaddif.utils.nn import DeterministicActor, StochasticActor, mlp
-
+from quaddif.utils.nn import DeterministicActor, StochasticActor
 
 class APG:
     def __init__(
@@ -18,7 +16,6 @@ class APG:
         l_rollout: int,
         device: torch.device
     ):
-        # self.actor = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU()).to(device)
         self.actor = DeterministicActor(state_dim, hidden_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.discount: float = cfg.gamma

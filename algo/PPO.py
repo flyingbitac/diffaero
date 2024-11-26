@@ -6,11 +6,8 @@ from omegaconf import DictConfig
 import torch
 from torch import Tensor
 import torch.nn.functional as F
-from tqdm import tqdm
 
-from quaddif.env.base_env import BaseEnv
 from quaddif.utils.nn import StochasticActorCritic
-from quaddif.utils.logger import Logger
 
 class PPORPLAgent(StochasticActorCritic):
     def __init__(

@@ -14,7 +14,7 @@ headless: True
 
 seed: -1
 torch_deterministic: False
-checkpoint: 
+checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
 hydra:
   sweep:
     dir: ./outputs/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}
