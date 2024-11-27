@@ -12,8 +12,8 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import cv2
 
-from quaddif.env import PositionControl, ObstacleAvoidance
-from quaddif.algo import SHAC, APG_stochastic, APG, PPO
+from quaddif.env import ENV_ALIAS
+from quaddif.algo import AGENT_ALIAS
 from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
 
@@ -33,8 +33,8 @@ def on_step_cb(state, action, policy_info, env_info):
 @torch.no_grad()
 def test(
     cfg: DictConfig,
-    agent: Union[SHAC, APG, APG_stochastic, PPO],
-    env: Union[PositionControl, ObstacleAvoidance],
+    agent,
+    env,
     on_step_cb: Optional[Callable] = None
 ):
     state = env.reset()
@@ -81,19 +81,11 @@ def main(cfg: DictConfig):
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
-    ENV_CLASS = {
-        "position_control": PositionControl,
-        "obstacle_avoidance": ObstacleAvoidance
-    }[cfg.env.name]
-    env = RecordEpisodeStatistics(ENV_CLASS(cfg.env, cfg.dynamics, device=device))
+    env_class = ENV_ALIAS[cfg.env.name]
+    env = RecordEpisodeStatistics(env_class(cfg.env, cfg.dynamics, device=device))
     
-    AGENT_CLASS = {
-        "ppo": PPO,
-        "shac": SHAC,
-        "apg": APG,
-        "apg_sto": APG_stochastic
-    }[cfg.algo.name]
-    agent = AGENT_CLASS.build(cfg, env, device)
+    agent_class = AGENT_ALIAS[cfg.algo.name]
+    agent = agent_class.build(cfg, env, device)
     agent.load(os.path.join(cfg.checkpoint, "checkpoints"))
     
     # test(cfg, agent, env, on_step_cb=on_step_cb)
