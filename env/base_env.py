@@ -4,7 +4,8 @@ from omegaconf import DictConfig
 import torch
 from torch import Tensor
 
-from quaddif.model.quad import PointMassModel, QuadrotorModel, point_mass_quat
+from quaddif.dynamics.quadrotor import QuadrotorModel
+from quaddif.dynamics.pointmass import PointMassModel, point_mass_quat
 
 class BaseEnv:
     def __init__(self, env_cfg: DictConfig, model_cfg: DictConfig, device: torch.device):
@@ -40,7 +41,7 @@ class BaseEnv:
     def w(self): return self.model.w
     @property
     def q(self) -> Tensor:
-        if isinstance(self.model, PointMassModel): # Ugly implementation of quaternion for point mass
+        if self.dynamic_type == "pointmass": # Ugly implementation of quaternion for point mass
             if self.model.align_yaw_with_vel_direction:
                 return self.model.q
             else:
