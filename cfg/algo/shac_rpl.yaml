@@ -1,7 +1,7 @@
 name: shac_rpl
 
 anchor_ckpt: 
-anchor_state_dim: 
+anchor_state_dim: 13
 rpl_action: True
 
 hidden_dim: [256, 128]

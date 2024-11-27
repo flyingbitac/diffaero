@@ -1,20 +1,26 @@
-from typing import Callable, List, Tuple, Dict, Optional
+from typing import Union, List, Tuple, Dict
 from collections import defaultdict
 
 from omegaconf import DictConfig
 import torch
 from torch import Tensor
 import torch.nn.functional as F
+from tensordict import TensorDict
 
-from quaddif.algo.RPL import RPLActorCritic
-from quaddif.utils.nn import StochasticActorCritic
+from quaddif.model.mlp import StochasticActorCritic, RPLActorCritic
 
-class RolloutBuffer:
+class PPORolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
         factory_kwargs = {"dtype": torch.float32, "device": device}
         
-        self.l_rollout = l_rollout
-        self.states = torch.zeros((l_rollout, num_envs, state_dim), **factory_kwargs)
+        assert isinstance(state_dim, tuple) or isinstance(state_dim, int)
+        if isinstance(state_dim, tuple):
+            self.states = TensorDict({
+                "state": torch.zeros((l_rollout, num_envs, state_dim[0]), **factory_kwargs),
+                "perception": torch.zeros((l_rollout, num_envs, state_dim[1][0], state_dim[1][1]), **factory_kwargs)
+            }, batch_size=(l_rollout, num_envs))
+        else:
+            self.states = torch.zeros((l_rollout, num_envs, state_dim), **factory_kwargs)
         self.samples = torch.zeros((l_rollout, num_envs, action_dim), **factory_kwargs)
         self.logprobs = torch.zeros((l_rollout, num_envs), **factory_kwargs)
         self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
@@ -24,13 +30,17 @@ class RolloutBuffer:
     
     def clear(self):
         self.step = 0
-        
+    
+    @torch.no_grad()
     def add(self, state, sample, logprob, reward, next_done, value, next_value):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
-        for buf, input in zip(
-            [self.states, self.samples, self.logprobs, self.rewards, self.next_dones, self.values, self.next_values],
-            [state, sample, logprob, reward, next_done, value, next_value]):
-            buf[self.step] = input.detach().to(buf.dtype)
+        # type: (Union[Tensor, TensorDict], Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
+        self.states[self.step] = state
+        self.samples[self.step] = sample
+        self.logprobs[self.step] = logprob
+        self.rewards[self.step] = reward
+        self.next_dones[self.step] = next_done.float()
+        self.values[self.step] = value
+        self.next_values[self.step] = next_value
         self.step += 1
 
 
@@ -49,7 +59,7 @@ class PPO:
         self.action_dim = action_dim
         self.agent = StochasticActorCritic(state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
-        self.buffer = RolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
+        self.buffer = PPORolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
         
         self.discount = cfg.gamma
         self.lmbda = cfg.lmbda
@@ -86,11 +96,11 @@ class PPO:
     
     def train(self, advantages, target_values):
         # type: (Tensor, Tensor) -> Tuple[Dict[str, float], Dict[str, float]]
-        T, N, Ds, Da = self.l_rollout, self.n_envs, self.state_dim, self.action_dim
-        states = self.buffer.states.view(T*N, Ds)
-        samples = self.buffer.samples.view(T*N, Da)
-        logprobs = self.buffer.logprobs.view(T*N)
-        values = self.buffer.values.reshape(T*N)
+        T, N = self.l_rollout, self.n_envs
+        states = self.buffer.states.flatten(0, 1)
+        samples = self.buffer.samples.flatten(0, 1)
+        logprobs = self.buffer.logprobs.flatten(0, 1)
+        values = self.buffer.values.flatten(0, 1)
         if self.norm_adv:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         batch_indices = torch.randperm(T*N, device=self.device)

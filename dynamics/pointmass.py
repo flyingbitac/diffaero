@@ -39,7 +39,6 @@ class PointMassModel:
         
         self._G = wrap(cfg.g)
         self._G_vec = wrap([0.0, 0.0, self._G])
-        self._D = torch.diag(wrap(list(cfg.D)))
         self.lmbda = cfg.lmbda # soft control latency
     
     def detach(self):

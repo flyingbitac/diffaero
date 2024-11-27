@@ -1,29 +1,38 @@
-from typing import Callable, Sequence, Tuple, Dict, Optional
+from typing import Union, Sequence, Tuple, Dict, Optional
 from copy import deepcopy
 
 from omegaconf import DictConfig
 import torch
 from torch import Tensor
 import torch.nn.functional as F
+from tensordict import TensorDict
 
-from quaddif.algo.RPL import RPLActorCritic
-from quaddif.utils.nn import StochasticActorCritic
+from quaddif.model.mlp import StochasticActorCritic, RPLActorCritic
 
 class SHACRolloutBuffer:
-    def __init__(self, num_steps, num_envs, state_dim, device):
+    def __init__(self, l_rollout, num_envs, state_dim, device):
         factory_kwargs = {"dtype": torch.float32, "device": device}
-        self.states = torch.zeros((num_steps, num_envs, state_dim), **factory_kwargs)
-        self.rewards = torch.zeros((num_steps, num_envs), **factory_kwargs)
-        self.values = torch.zeros((num_steps, num_envs), **factory_kwargs)
-        self.next_dones = torch.zeros((num_steps, num_envs), **factory_kwargs)
-        self.next_terminated = torch.zeros((num_steps, num_envs), **factory_kwargs)
-        self.next_values = torch.zeros((num_steps, num_envs), **factory_kwargs)
+        
+        assert isinstance(state_dim, tuple) or isinstance(state_dim, int)
+        if isinstance(state_dim, tuple):
+            self.states = TensorDict({
+                "state": torch.zeros((l_rollout, num_envs, state_dim[0]), **factory_kwargs),
+                "perception": torch.zeros((l_rollout, num_envs, state_dim[1][0], state_dim[1][1]), **factory_kwargs)
+            }, batch_size=(l_rollout, num_envs))
+        else:
+            self.states = torch.zeros((l_rollout, num_envs, state_dim), **factory_kwargs)
+        self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
+        self.values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
+        self.next_dones = torch.zeros((l_rollout, num_envs), **factory_kwargs)
+        self.next_terminated = torch.zeros((l_rollout, num_envs), **factory_kwargs)
+        self.next_values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
     
     def clear(self):
         self.step = 0
     
     @torch.no_grad()
     def add(self, state, reward, value, next_done, next_terminated, next_value):
+        # type: (Union[Tensor, TensorDict], Tensor, Tensor, Tensor, Tensor, Tensor) -> None
         self.states[self.step] = state
         self.rewards[self.step] = reward
         self.values[self.step] = value
@@ -150,10 +159,10 @@ class SHAC:
         return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm}
     
     def update_critic(self, target_values: Tensor) -> Dict[str, float]:
-        T, N, D = self.buffer.states.shape
+        T, N = self.l_rollout, self.n_envs
         batch_indices = torch.randperm(T*N, device=self.device)
         mb_size = T*N // self.n_minibatch
-        states = self.buffer.states.reshape(T*N, D)
+        states = self.buffer.states.flatten(0, 1)
         for start in range(0, T*N, mb_size):
             end = start + mb_size
             mb_indices = batch_indices[start:end]

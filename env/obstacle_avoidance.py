@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
+from tensordict import TensorDict
 
 from quaddif.env.base_env import BaseEnv
 from quaddif.utils.render import ObstacleAvoidanceRenderer
@@ -146,13 +147,13 @@ class ObstacleAvoidance(BaseEnv):
         
         if self.camera_type is not None:
             H, W = env_cfg.camera.height, env_cfg.camera.width
-            self.state_dim = self.model.state_dim + 4 + H * W # flattened depth image as additional observation
+            self.state_dim = (13, (H, W)) # flattened depth image as additional observation
             self.camera_tensor = torch.zeros((env_cfg.n_envs, H, W), device=device)
             if self.camera_type == "raydist":
                 self.camera = Camera(env_cfg.camera, device=device)
         else:
             # relative position of obstacles as additional observation
-            self.state_dim = self.model.state_dim + self.n_obstacles * 3
+            self.state_dim = 13 + self.n_obstacles * 3
         
         if not env_cfg.render.headless or self.camera_type == "isaacgym":
             self.renderer = ObstacleAvoidanceRenderer(env_cfg.render, device.index, self.obstacle_manager)
@@ -163,17 +164,23 @@ class ObstacleAvoidance(BaseEnv):
         self.r_drone = env_cfg.r_drone
     
     def state(self, with_grad=False):
-        state = [self.target_vel, self._v, self._a, self.q]
+        if self.dynamic_type == "pointmass":
+            state = [self.target_vel, self.q, self._v, self._a]
+        else:
+            state = [self.target_vel, self._q, self._v, self._w]
+        
         if self.camera_type is not None:
-            state.append(self.camera_tensor.flatten(1))
-        elif self.camera_type is None:
+            state = torch.cat(state, dim=-1)
+            state if with_grad else state.detach()
+            state = TensorDict({
+                "state": state, "perception": self.camera_tensor.clone()}, batch_size=self.n_envs)
+        else:
             obst_relpos = self.obstacle_manager.p_obstacles - self._p.unsqueeze(1)
             sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
             state.append(obst_relpos.gather(dim=1, index=sorted_idx).flatten(1))
-        else:
-            raise Exception(f"Unknown camera type {self.camera_type}, expected 'isaacgym', 'raydist' or None")
-        state = torch.cat(state, dim=-1)
-        return state if with_grad else state.detach()
+            state = torch.cat(state, dim=-1)
+            state if with_grad else state.detach()
+        return state
     
     def render_camera(self):
         if self.renderer is not None and self.camera_type == "isaacgym":

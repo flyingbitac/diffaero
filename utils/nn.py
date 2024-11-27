@@ -1,8 +1,6 @@
 from typing import Tuple, Dict, Union, Optional, List
-import os
 
 import torch
-from torch import Tensor
 import torch.nn as nn
 
 def num_params(model: nn.Module):
@@ -69,96 +67,3 @@ def mlp(
     if output_act is not None:
         mlp.append(output_act)
     return nn.Sequential(*mlp)
-
-class DeterministicActor(nn.Module):
-    def __init__(
-        self,
-        state_dim: int,
-        hidden_dim: Union[int, List[int]],
-        action_dim: int
-    ):
-        super().__init__()
-        self.actor = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU(), output_act=nn.Tanh())
-        
-    def forward(self, obs: Tensor) -> Tensor:
-        return self.actor(obs)
-    
-    def save(self, path: str):
-        if not os.path.exists(path):
-            os.makedirs(path)
-        torch.save(self.actor.state_dict(), os.path.join(path, "actor.pth"))
-
-    def load(self, path: str):
-        self.actor.load_state_dict(torch.load(os.path.join(path, "actor.pth")))
-
-class StochasticActor(nn.Module):
-    def __init__(
-        self,
-        state_dim: int,
-        hidden_dim: Union[int, List[int]],
-        action_dim: int
-    ):
-        super().__init__()
-        self.actor_mean = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU())
-        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
-
-    def forward(self, obs, sample=None, test=False):
-        # type: (Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor]
-        action_mean: Tensor = self.actor_mean(obs)
-        LOG_STD_MAX = 2
-        LOG_STD_MIN = -5
-        action_logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
-            torch.tanh(self.actor_logstd) + 1)  # From SpinUp / Denis Yarats
-        action_std = torch.exp(action_logstd).expand_as(action_mean)
-        probs = torch.distributions.Normal(action_mean, action_std)
-        if sample is None and not test:
-            sample = torch.randn_like(action_mean) * action_std + action_mean
-        elif test:
-            sample = action_mean.detach()
-        action = torch.tanh(sample)
-        logprob = probs.log_prob(sample) - torch.log(1. - torch.tanh(sample).pow(2) + 1e-8)
-        # entropy = (-logprob * logprob.exp()).sum(-1)
-        entropy = probs.entropy().sum(-1)
-        return action, sample, logprob.sum(-1), entropy
-    
-    def save(self, path: str):
-        if not os.path.exists(path):
-            os.makedirs(path)
-        torch.save(
-            {"actor_mean": self.actor_mean.state_dict(),
-             "actor_logstd": self.actor_logstd}, os.path.join(path, "actor.pth"))
-
-    def load(self, path: str):
-        actor = torch.load(os.path.join(path, "actor.pth"), weights_only=True)
-        self.actor_mean.load_state_dict(actor["actor_mean"])
-        self.actor_logstd.data.copy_(actor["actor_logstd"].to(self.actor_logstd.device))
-
-class StochasticActorCritic(nn.Module):
-    def __init__(
-        self,
-        state_dim: int,
-        hidden_dim: Union[int, List[int]],
-        action_dim: int
-    ):
-        super().__init__()
-        self.critic = mlp(state_dim, hidden_dim, 1, hidden_act=nn.ELU())
-        self.actor = StochasticActor(state_dim, hidden_dim, action_dim)
-
-    def get_value(self, obs: Tensor) -> Tensor:
-        return self.critic(obs).squeeze(-1)
-
-    def get_action(self, obs, sample=None, test=False):
-        # type: (Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor]
-        return self.actor(obs, sample, test)
-
-    def get_action_and_value(self, obs, sample=None, test=False):
-        # type: (Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
-        return *self.get_action(obs, sample, test), self.get_value(obs)
-    
-    def save(self, path: str):
-        self.actor.save(path)
-        torch.save(self.critic.state_dict(), os.path.join(path, "critic.pth"))
-    
-    def load(self, path: str):
-        self.actor.load(path)
-        self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth"), weights_only=True))

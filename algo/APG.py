@@ -4,7 +4,7 @@ from omegaconf import DictConfig
 import torch
 from torch import Tensor
 
-from quaddif.utils.nn import DeterministicActor, StochasticActor
+from quaddif.model.mlp import DeterministicActor, StochasticActor
 
 class APG:
     def __init__(
