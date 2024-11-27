@@ -157,6 +157,7 @@ class PointMassModel:
         self.dt = dt
         self.n_substeps = n_substeps
         self.align_yaw_with_vel_direction = cfg.align_yaw_with_vel_direction
+        self.aligh_yaw_with_vel_ema = cfg.aligh_yaw_with_vel_ema
         self.min_action = torch.tensor([list(cfg.min_action)], device=device)
         self.max_action = torch.tensor([list(cfg.max_action)], device=device)
         
@@ -199,7 +200,9 @@ class PointMassModel:
     @property
     def a(self) -> Tensor: return self._state[:, 6:9].detach()
     @property
-    def q(self) -> Tensor: return point_mass_quat(self.a, orientation=self.v)
+    def q(self) -> Tensor:
+        orientation = self._vel_ema.detach() if self.aligh_yaw_with_vel_ema else self.v
+        return point_mass_quat(self.a, orientation=orientation)
     @property
     def w(self) -> Tensor:
         warnings.warn("Access of angular velocity in point mass model is not supported. Returning zero tensor instead.")
@@ -213,7 +216,8 @@ class PointMassModel:
     @property
     def _q(self) -> Tensor:
         warnings.warn("Direct access of quaternion with gradient in point mass model is strongly not recommanded. Please consider using the detached version instead.")
-        return point_mass_quat(self._a, orientation=self._v)
+        orientation = self._vel_ema if self.aligh_yaw_with_vel_ema else self._v
+        return point_mass_quat(self._a, orientation=orientation)
     @property
     def _w(self) -> Tensor:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")
