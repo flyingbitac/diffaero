@@ -14,7 +14,7 @@ from tqdm import tqdm
 import cv2
 
 from quaddif.env import PositionControl, ObstacleAvoidance
-from quaddif.algo import SHAC, APG_stochastic, APG, PPO
+from quaddif.algo import SHAC, SHAC_RPL, APG_stochastic, APG, PPO
 from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
 from quaddif.utils.logger import Logger
@@ -102,6 +102,7 @@ def main(cfg: DictConfig):
     AGENT_CLASS = {
         "ppo": PPO,
         "shac": SHAC,
+        "shac_rpl": SHAC_RPL,
         "apg": APG,
         "apg_sto": APG_stochastic
     }[cfg.algo.name]

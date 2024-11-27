@@ -56,7 +56,6 @@ class SHAC:
         self.discount: float = cfg.gamma
         self.lmbda: float = cfg.lmbda
         self.entropy_weight: float = cfg.entropy_weight
-        self.value_weight: float = cfg.value_weight
         self.actor_grad_norm: float = cfg.actor_grad_norm
         self.critic_grad_norm: float = cfg.critic_grad_norm
         self.n_minibatch: int = cfg.n_minibatch
@@ -201,6 +200,91 @@ class SHAC:
     @staticmethod
     def build(cfg, env, device):
         return SHAC(
+            cfg=cfg.algo,
+            state_dim=env.state_dim,
+            hidden_dim=list(cfg.algo.hidden_dim),
+            action_dim=env.action_dim,
+            n_envs=env.n_envs,
+            l_rollout=cfg.l_rollout,
+            device=device)
+
+class SHACRPLAgent(StochasticActorCritic):
+    def __init__(
+        self,
+        anchor_ckpt: str,
+        state_dim: int,
+        anchor_state_dim: int,
+        hidden_dim: int,
+        action_dim: int,
+        rpl_action: bool = True
+    ):
+        super().__init__(
+            state_dim=state_dim+action_dim,
+            hidden_dim=hidden_dim,
+            action_dim=action_dim)
+        
+        torch.nn.init.zeros_(self.actor.actor_mean[-1].weight)
+        torch.nn.init.zeros_(self.actor.actor_mean[-1].bias)
+        
+        self.anchor_agent = StochasticActorCritic(anchor_state_dim, hidden_dim, action_dim)
+        self.anchor_agent.load(anchor_ckpt)
+        self.anchor_agent.eval()
+        self.anchor_state_dim = anchor_state_dim
+        self.rpl_action = rpl_action
+    
+    def rpl_obs(self, obs: Tensor) -> Tensor:
+        with torch.no_grad():
+            anchor_action, _, _, _ = self.anchor_agent.get_action(
+                obs[..., :self.anchor_state_dim], test=True)
+        return torch.cat([obs, anchor_action], dim=-1)
+
+    def get_value(self, obs: Tensor) -> Tensor:
+        return super().get_value(self.rpl_obs(obs))
+
+    def get_action_and_value(self, obs, sample=None, test=False):
+        # type: (Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        with torch.no_grad():
+            anchor_action, _, _, _ = self.anchor_agent.get_action(
+                obs[..., :self.anchor_state_dim], test=True)
+        rpl_obs = torch.cat([obs, anchor_action], dim=-1)
+        action, sample, logprob, entropy = super().get_action(rpl_obs, sample, test)
+        if self.rpl_action:
+            raw_rpl_action = action + anchor_action
+            rpl_action = torch.where(raw_rpl_action >  1, action + (1-action).detach(), raw_rpl_action)
+            rpl_action = torch.where(raw_rpl_action < -1, action - (1+action).detach(), rpl_action)
+            # rpl_action = (action + anchor_action).clamp(min=-1, max=1) # numerically equalvalent, but gradient are stopped
+        else:
+            rpl_action = action
+        return rpl_action, sample, logprob, entropy, super().get_value(rpl_obs)
+
+class SHAC_RPL(SHAC):
+    def __init__(
+        self,
+        cfg: DictConfig,
+        state_dim: int,
+        hidden_dim: Sequence[int],
+        action_dim: int,
+        n_envs: int,
+        l_rollout: int,
+        device: torch.device
+    ):
+        super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
+        del self.agent, self.actor_optim, self.critic_optim, self._critic_target
+        self.agent = SHACRPLAgent(
+            cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
+        self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
+        self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
+        self._critic_target = deepcopy(self.agent.critic)
+        for p in self._critic_target.parameters():
+            p.requires_grad_(False)
+    
+    def value_target(self, state):
+        # type: (Tensor) -> Tensor
+        return self._critic_target(self.agent.rpl_obs(state)).squeeze(-1)
+        
+    @staticmethod
+    def build(cfg, env, device):
+        return SHAC_RPL(
             cfg=cfg.algo,
             state_dim=env.state_dim,
             hidden_dim=list(cfg.algo.hidden_dim),

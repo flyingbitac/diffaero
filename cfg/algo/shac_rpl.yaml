@@ -1,4 +1,8 @@
-name: shac
+name: shac_rpl
+
+anchor_ckpt: 
+anchor_state_dim: 
+rpl_action: True
 
 hidden_dim: [256, 128]
 l_rollout: 24
