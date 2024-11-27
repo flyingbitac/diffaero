@@ -1,51 +1,13 @@
 from typing import Callable, List, Tuple, Dict, Optional
 from collections import defaultdict
-import os
 
 from omegaconf import DictConfig
 import torch
 from torch import Tensor
 import torch.nn.functional as F
 
+from quaddif.algo.RPL import RPLActorCritic
 from quaddif.utils.nn import StochasticActorCritic
-
-class PPORPLAgent(StochasticActorCritic):
-    def __init__(
-        self,
-        anchor_ckpt: str,
-        state_dim: int,
-        anchor_state_dim: int,
-        hidden_dim: int,
-        action_dim: int,
-    ):
-        super().__init__(
-            state_dim=state_dim+action_dim,
-            hidden_dim=hidden_dim,
-            action_dim=action_dim)
-        
-        torch.nn.init.zeros_(self.actor.actor_mean[-1].weight)
-        torch.nn.init.zeros_(self.actor.actor_mean[-1].bias)
-        
-        self.anchor_agent = StochasticActorCritic(anchor_state_dim, hidden_dim, action_dim)
-        self.anchor_agent.load_state_dict(torch.load(os.path.join(anchor_ckpt, "agent.pt")))
-        self.anchor_agent.eval()
-        self.anchor_state_dim = anchor_state_dim
-
-    def get_value(self, obs):
-        with torch.no_grad():
-            anchor_action, _, _, _, _ = self.anchor_agent.get_action_and_value(
-                obs[..., :self.anchor_state_dim], test=True)
-        return super().get_value(torch.cat([obs, anchor_action], dim=-1))
-
-    def get_action_and_value(self, obs, sample=None, test=False):
-        with torch.no_grad():
-            anchor_action, _, _, _, _ = self.anchor_agent.get_action_and_value(
-                obs[..., :self.anchor_state_dim], test=True)
-        obs = torch.cat([obs, anchor_action], dim=-1)
-        action, sample, logprob, entropy, value = super().get_action_and_value(obs, sample, test)
-        action = (action + anchor_action).clamp(min=-1, max=1)
-        return action, sample, logprob, entropy, value
-
 
 class RolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
@@ -234,33 +196,30 @@ class PPO:
 class PPO_RPL(PPO):
     def __init__(
         self,
-        anchor_ckpt: str,
+        cfg: DictConfig,
         state_dim: int,
-        anchor_state_dim: int,
-        hidden_dim: int,
+        hidden_dim: List[int],
         action_dim: int,
-        discount: float,
-        gae_lambda: float,
-        lr: float,
-        eps: float,
-        max_grad_norm: float,
+        n_envs: int,
         l_rollout: int,
-        clip_coef: float,
-        clip_vloss: bool,
-        entropy_coef: float,
-        value_coef: float,
-        norm_adv: bool,
-        device: torch.device,
+        device: torch.device
     ):
-        super().__init__(
-            state_dim, hidden_dim, action_dim,
-            discount, gae_lambda, lr, eps, max_grad_norm, l_rollout,
-            clip_coef, clip_vloss, entropy_coef, value_coef, norm_adv, device)
-        self.agent = PPORPLAgent(
-            anchor_ckpt, state_dim, anchor_state_dim, hidden_dim,
-            action_dim).to(device)
+        super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
+        del self.agent, self.optim
+        self.agent = RPLActorCritic(
+            cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
         self.optim = torch.optim.Adam([
-            {"params": self.agent.actor_mean.parameters()},
-            {"params": self.agent.actor_logstd},
+            {"params": self.agent.actor.parameters()},
             {"params": self.agent.critic.parameters()},
-        ], lr=lr, eps=eps)
+        ], lr=cfg.lr, eps=cfg.eps)
+        
+    @staticmethod
+    def build(cfg, env, device):
+        return PPO_RPL(
+            cfg=cfg.algo,
+            state_dim=env.state_dim,
+            hidden_dim=list(cfg.algo.hidden_dim),
+            action_dim=env.action_dim,
+            n_envs=env.n_envs,
+            l_rollout=cfg.l_rollout,
+            device=device)
