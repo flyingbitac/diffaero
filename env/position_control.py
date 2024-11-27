@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
 
-from quaddif.model.quad import QuadrotorModel, PointMassModel
 from quaddif.env.base_env import BaseEnv
 from quaddif.utils.render import PositionControlRenderer
 from quaddif.utils.math import rand_range
@@ -68,7 +67,7 @@ class PositionControl(BaseEnv):
             vel_diff = (self.model._vel_ema - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
-            jerk_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
+            jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
             total_loss = vel_loss + 0.003 * jerk_loss
             loss_components = {
@@ -103,7 +102,7 @@ class PositionControl(BaseEnv):
         state_mask[env_idx] = 1
         p_new = rand_range(-self.L+0.5, self.L-0.5, size=(self.n_envs, 3), device=self.device)
         new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.model.state_dim-3, device=self.device)], dim=-1)
-        if isinstance(self.model, QuadrotorModel):
+        if self.dynamic_type == "quadrotor":
             new_state[:, 6] = 1 # real part of the quaternion
         self.model._state = torch.where(state_mask.bool(), new_state, self.model._state)
         self.target_pos.fill_(0.)

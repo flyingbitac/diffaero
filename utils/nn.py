@@ -2,6 +2,7 @@ from typing import Tuple, Dict, Union, Optional, List
 import os
 
 import torch
+from torch import Tensor
 import torch.nn as nn
 
 def num_params(model: nn.Module):
@@ -79,15 +80,15 @@ class DeterministicActor(nn.Module):
         super().__init__()
         self.actor = mlp(state_dim, hidden_dim, action_dim, hidden_act=nn.ELU(), output_act=nn.Tanh())
         
-    def forward(self, obs):
+    def forward(self, obs: Tensor) -> Tensor:
         return self.actor(obs)
     
-    def save(self, path):
+    def save(self, path: str):
         if not os.path.exists(path):
             os.makedirs(path)
         torch.save(self.actor.state_dict(), os.path.join(path, "actor.pth"))
 
-    def load(self, path):
+    def load(self, path: str):
         self.actor.load_state_dict(torch.load(os.path.join(path, "actor.pth")))
 
 class StochasticActor(nn.Module):
@@ -102,7 +103,8 @@ class StochasticActor(nn.Module):
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
 
     def forward(self, obs, sample=None, test=False):
-        action_mean = self.actor_mean(obs)
+        # type: (Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        action_mean: Tensor = self.actor_mean(obs)
         LOG_STD_MAX = 2
         LOG_STD_MIN = -5
         action_logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
@@ -119,14 +121,14 @@ class StochasticActor(nn.Module):
         entropy = probs.entropy().sum(-1)
         return action, sample, logprob.sum(-1), entropy
     
-    def save(self, path):
+    def save(self, path: str):
         if not os.path.exists(path):
             os.makedirs(path)
         torch.save(
             {"actor_mean": self.actor_mean.state_dict(),
              "actor_logstd": self.actor_logstd}, os.path.join(path, "actor.pth"))
 
-    def load(self, path):
+    def load(self, path: str):
         actor = torch.load(os.path.join(path, "actor.pth"), weights_only=True)
         self.actor_mean.load_state_dict(actor["actor_mean"])
         self.actor_logstd.data.copy_(actor["actor_logstd"].to(self.actor_logstd.device))
@@ -142,19 +144,21 @@ class StochasticActorCritic(nn.Module):
         self.critic = mlp(state_dim, hidden_dim, 1, hidden_act=nn.ELU())
         self.actor = StochasticActor(state_dim, hidden_dim, action_dim)
 
-    def get_value(self, obs):
+    def get_value(self, obs: Tensor) -> Tensor:
         return self.critic(obs).squeeze(-1)
 
     def get_action(self, obs, sample=None, test=False):
+        # type: (Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor]
         return self.actor(obs, sample, test)
 
     def get_action_and_value(self, obs, sample=None, test=False):
+        # type: (Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
         return *self.get_action(obs, sample, test), self.get_value(obs)
     
-    def save(self, path):
+    def save(self, path: str):
         self.actor.save(path)
         torch.save(self.critic.state_dict(), os.path.join(path, "critic.pth"))
     
-    def load(self, path):
+    def load(self, path: str):
         self.actor.load(path)
         self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth"), weights_only=True))

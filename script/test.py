@@ -38,14 +38,18 @@ def test(
     on_step_cb: Optional[Callable] = None
 ):
     state = env.reset()
-    pbar = tqdm(range(50000))
+    pbar = tqdm(range(10000))
+    total_resets = 1
+    n_success = 0
     for i in pbar:
         t1 = pbar._time()
         env.detach()
         action, policy_info = agent.act(state, test=True)
         state, loss, terminated, env_info = env.step(action)
         l_episode = env_info["stats"]["l"].float().mean().item()
-        success_rate = env_info['stats']['success_rate']
+        total_resets += env_info["reset"].sum().item()
+        n_success += env_info["success"].sum().item()
+        success_rate = n_success / total_resets
         pbar.set_postfix({
             "loss": f"{env_info['loss_components']['total_loss']:.3f}",
             "l_episode": f"{l_episode:.1f}",

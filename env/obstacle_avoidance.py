@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
 
-from quaddif.model.quad import QuadrotorModel, PointMassModel
 from quaddif.env.base_env import BaseEnv
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.math import rand_range
@@ -252,7 +251,7 @@ class ObstacleAvoidance(BaseEnv):
             vel_diff = (self.model._vel_ema - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
-            jerk_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
+            jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
             total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss
             loss_components = {
@@ -268,9 +267,9 @@ class ObstacleAvoidance(BaseEnv):
             vel_diff = (self._v - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
-            jerk_loss = F.mse_loss(self._a, action, reduction="none").sum(dim=-1)
+            jerk_loss = self._w.norm(dim=-1)
             
-            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss
+            total_loss = vel_loss + 3 * oa_loss + jerk_loss + 5 * pos_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),

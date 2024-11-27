@@ -23,8 +23,8 @@ class PPORPLAgent(StochasticActorCritic):
             hidden_dim=hidden_dim,
             action_dim=action_dim)
         
-        torch.nn.init.zeros_(self.actor_mean[-1].weight)
-        torch.nn.init.zeros_(self.actor_mean[-1].bias)
+        torch.nn.init.zeros_(self.actor.actor_mean[-1].weight)
+        torch.nn.init.zeros_(self.actor.actor_mean[-1].bias)
         
         self.anchor_agent = StochasticActorCritic(anchor_state_dim, hidden_dim, action_dim)
         self.anchor_agent.load_state_dict(torch.load(os.path.join(anchor_ckpt, "agent.pt")))
