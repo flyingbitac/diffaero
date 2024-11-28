@@ -1,4 +1,5 @@
 name: shac
+model: ${model}
 
 hidden_dim: [256, 128]
 l_rollout: 24

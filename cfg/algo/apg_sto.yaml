@@ -1,4 +1,5 @@
 name: apg_sto
+model: ${model}
 
 hidden_dim: [256, 128]
 l_rollout: 32

@@ -2,6 +2,7 @@ defaults:
   - algo: apg
   - env: pc
   - dynamics: pointmass # [pointmass, quadrotor]
+  - model: mlp # [mlp, cnn]
   - _self_
   # - override hydra/launcher: joblib
 

@@ -1,4 +1,5 @@
 name: ppo_rpl
+model: ${model}
 
 anchor_ckpt: 
 anchor_state_dim: 13
