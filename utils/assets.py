@@ -20,8 +20,8 @@ class ObstacleManager:
         self.sphere_rmin, self.sphere_rmax, self.sphere_rstep = list(self.obst_cfg.sphere_radius_range)
         # lwh for Length(along x axis), Width(along y axis) and Height(along z axis)
         self.cube_lwhmin, self.cube_lwhmax, self.cube_lwhstep = list(self.obst_cfg.cube_lwh_range)
-        self.randpos_minstd = self.obst_cfg.randpos_std_min
-        self.randpos_maxstd = self.obst_cfg.randpos_std_max
+        self.randpos_minstd: float = self.obst_cfg.randpos_std_min
+        self.randpos_maxstd: float = self.obst_cfg.randpos_std_max
         self.device = device
         
         self.r_obstacles = torch.empty(self.n_envs, self.n_obstacles, device=self.device)
@@ -60,6 +60,8 @@ class ObstacleManager:
         if self.n_obstacles == 0:
             return self.p_obstacles[env_idx]
         
+        safety_range: torch.Tensor = self.r_obstacles + safety_range
+        
         rel_pos = target_pos - drone_init_pos
         # target_axis: unit vector in the direction of the target's relative position
         target_axis = F.normalize(rel_pos, dim=-1)
@@ -76,12 +78,6 @@ class ObstacleManager:
             len(env_idx), self.n_obstacles, 1, device=self.device) * 1.4 - 0.2
         target_axis_pos = target_axis_ratio * rel_pos.unsqueeze(1)
         
-        # whether the sampled point is too close to the drone's initial position
-        # or to the target position
-        violations = (
-            (target_axis_pos.norm(dim=-1) < safety_range) |
-            ((target_axis_pos - rel_pos.unsqueeze(1)).norm(dim=-1) < safety_range))
-        
         # sample from gaussian distribution
         std = (torch.abs(target_axis_ratio - 0.5) / 0.7) * (self.randpos_maxstd - self.randpos_minstd) + self.randpos_minstd
         horizontal_axis_ratio = torch.randn(
@@ -89,19 +85,29 @@ class ObstacleManager:
         third_axis_ratio = torch.randn(
             len(env_idx), self.n_obstacles, 1, device=self.device) * std
         
-        # move obstacles around the drone's initial position and target a little bit further
-        env_index, asset_index = violations.nonzero(as_tuple=True)
-        horizontal_axis_ratio[env_index, asset_index] += torch.sign(horizontal_axis_ratio[env_index, asset_index]) * safety_range
-        third_axis_ratio[env_index, asset_index] += torch.sign(third_axis_ratio[env_index, asset_index]) * safety_range
-        
         horizontal_axis_pos = horizontal_axis_ratio * horizontal_axis.unsqueeze(1)
         third_axis_pos = third_axis_ratio * third_axis.unsqueeze(1)
         
-        self.p_obstacles[env_idx] = (
-            drone_init_pos.unsqueeze(1) +
-            target_axis_pos +
-            horizontal_axis_pos +
-            third_axis_pos).clamp(-self.env_spacing, self.env_spacing)
+        relpos2target_axis = horizontal_axis_pos + third_axis_pos # [n_resets, n_obstacles, 3]
+        relpos2drone = target_axis_pos + relpos2target_axis # [n_resets, n_obstacles, 3]
+        relpos2target = relpos2drone - rel_pos.unsqueeze(1) # [n_resets, n_obstacles, 3]
+        
+        # whether the sampled point is too close to the drone's initial position
+        # or to the target position
+        dist2drone, dist2target = relpos2drone.norm(dim=-1), relpos2target.norm(dim=-1) # [n_resets, n_obstacles]
+        tooclose2drone = torch.lt(dist2drone, safety_range[env_idx]) # [n_resets, n_obstacles, 3]
+        tooclose2target = torch.lt(dist2target, safety_range[env_idx]) # [n_resets, n_obstacles, 3]
+        tooclose = torch.logical_or(tooclose2drone, tooclose2target) # [n_resets, n_obstacles, 3]
+        
+        # push obstacles away from the line from drone's initial position to the target position
+        if torch.any(tooclose):
+            idx = tooclose.nonzero(as_tuple=True)
+            relpos2drone[idx] += F.normalize(relpos2target_axis[idx], dim=-1) * safety_range[env_idx][idx].unsqueeze(-1)
+        
+        self.p_obstacles[env_idx] = drone_init_pos.unsqueeze(1) + relpos2drone
+        
+        assert torch.all(torch.norm(self.p_obstacles[env_idx] - target_pos.unsqueeze(1), dim=-1) > safety_range[env_idx])
+        assert torch.all(torch.norm(self.p_obstacles[env_idx] - drone_init_pos.unsqueeze(1), dim=-1) > safety_range[env_idx])
         
         self.box_min[env_idx] = self.p_cubes[env_idx] - self.lwh_cubes[env_idx] / 2.
         self.box_max[env_idx] = self.p_cubes[env_idx] + self.lwh_cubes[env_idx] / 2.
