@@ -1,6 +1,7 @@
 from typing import Tuple, Dict, Union, Optional, List
 import os
 
+from omegaconf import OmegaConf
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -156,8 +157,10 @@ class RPLActorCritic(StochasticActorCritic):
         torch.nn.init.zeros_(self.actor.actor_mean[-1].weight)
         torch.nn.init.zeros_(self.actor.actor_mean[-1].bias)
         
-        self.anchor_agent = StochasticActorCritic(anchor_state_dim, hidden_dim, action_dim)
-        self.anchor_agent.load(anchor_ckpt)
+        cfg_path = os.path.join(anchor_ckpt, ".hydra", "config.yaml")
+        ckpt_cfg = OmegaConf.load(cfg_path)
+        self.anchor_agent = StochasticActorCritic(anchor_state_dim, list(ckpt_cfg.algo.hidden_dim), action_dim)
+        self.anchor_agent.load(os.path.join(anchor_ckpt, "checkpoints"))
         self.anchor_agent.eval()
         self.anchor_state_dim = anchor_state_dim
         self.rpl_action = rpl_action
