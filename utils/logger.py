@@ -37,7 +37,6 @@ class Logger:
                 name=run_name
             )
             self.writer = wandb
-        print(f"Working directory : {os.getcwd()}")
         print(f"Output directory  : {self.logdir}")
     
     def log_scalar(self, tag, value, step):

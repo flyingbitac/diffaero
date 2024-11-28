@@ -39,7 +39,8 @@ def test(
 ):
     state = env.reset()
     pbar = tqdm(range(10000))
-    total_resets = 1
+    n_resets = 1
+    n_survive = 0
     n_success = 0
     for i in pbar:
         t1 = pbar._time()
@@ -47,13 +48,13 @@ def test(
         action, policy_info = agent.act(state, test=True)
         state, loss, terminated, env_info = env.step(action)
         l_episode = env_info["stats"]["l"].float().mean().item()
-        total_resets += env_info["reset"].sum().item()
+        n_resets += env_info["reset"].sum().item()
+        n_survive += env_info["truncated"].sum().item()
         n_success += env_info["success"].sum().item()
-        success_rate = n_success / total_resets
         pbar.set_postfix({
-            "loss": f"{env_info['loss_components']['total_loss']:.3f}",
             "l_episode": f"{l_episode:.1f}",
-            "success_rate": f"{success_rate:.2f}",
+            "survive_rate": f"{n_survive / n_resets:.2f}",
+            "success_rate": f"{n_success / n_resets:.2f}",
             "fps": f"{cfg.env.n_envs/(pbar._time()-t1):,.0f}"})
         if on_step_cb is not None:
             on_step_cb(
@@ -65,12 +66,11 @@ def test(
 @hydra.main(config_path="../cfg", config_name="config")
 def main(cfg: DictConfig):
     device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
-    print("Using device", device_idx)
-    device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() else "cpu")
+    print(f"Using device {device_idx}.")
+    device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != -1 else "cpu")
     
     assert cfg.checkpoint is not None
     cfg_path = os.path.join(cfg.checkpoint, ".hydra", "config.yaml")
-    print(cfg.checkpoint, cfg_path)
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo
     cfg.dynamics = ckpt_cfg.dynamics
