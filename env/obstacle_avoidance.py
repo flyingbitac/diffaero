@@ -198,7 +198,7 @@ class ObstacleAvoidance(BaseEnv):
             env_idx=env_idx,
             drone_init_pos=self.p[env_idx],
             target_pos=self.target_pos[env_idx],
-            safety_range=self.r_drone+0.5
+            safety_range=self.r_drone+0.3
         )
             
         self.progress[env_idx] = 0
