@@ -3,7 +3,7 @@ from typing import Tuple, Dict, Union, Optional, List
 import torch
 import torch.nn as nn
 
-def num_params(model: nn.Module):
+def num_params(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 def layer_init(layer, std=2.**0.5, bias_const=0.0):

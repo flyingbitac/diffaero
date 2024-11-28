@@ -17,7 +17,7 @@ class Logger:
         if run_name != "":
             run_name = "__" + run_name
         env_name = {"position_control": "PC", "obstacle_avoidance": "OA"}[cfg.env.name]
-        run_name = f"{env_name}__{cfg.algo.name}{run_name}__{cfg.seed}"
+        run_name = f"{cfg.dynamics.name}__{env_name}__{cfg.algo.name}__{cfg.model.name}{run_name}__{cfg.seed}"
         if type.lower() == 'tensorboard':
             print("Using Tensorboard Logger.")
             self.writer = SummaryWriter(
