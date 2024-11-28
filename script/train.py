@@ -40,10 +40,10 @@ def learn(
     agent,
     env,
     logger: Logger,
-    on_step_cb: Optional[Callable] = None,
-    on_update_cb: Optional[Callable] = None
+    on_step_cb: Optional[Callable] = None
 ):
     state = env.reset()
+    max_success_rate = 0
     pbar = tqdm(range(cfg.n_updates))
     for i in pbar:
         t1 = pbar._time()
@@ -66,10 +66,10 @@ def learn(
         if "value" in policy_info.keys():
             log_info["value"] = policy_info["value"].mean().item()
         logger.log_scalars(log_info, i+1)
-
-        if on_update_cb is not None:
-            on_update_cb(log_info=log_info)
-
+        
+        if success_rate > max_success_rate:
+            max_success_rate = success_rate
+            agent.save(os.path.join(logger.logdir, "best"))
 
 @hydra.main(config_path="../cfg", config_name="config")
 def main(cfg: DictConfig):
@@ -85,6 +85,7 @@ def main(cfg: DictConfig):
     
     env_class = ENV_ALIAS[cfg.env.name]
     profiler.add_function(env_class.step)
+    profiler.add_function(env_class.state)
     profiler.add_function(env_class.loss_fn)
     env = RecordEpisodeStatistics(env_class(cfg.env, cfg.dynamics, device=device))
     

@@ -86,7 +86,7 @@ def main(cfg: DictConfig):
     
     agent_class = AGENT_ALIAS[cfg.algo.name]
     agent = agent_class.build(cfg, env, device)
-    agent.load(os.path.join(cfg.checkpoint, "checkpoints"))
+    agent.load(cfg.checkpoint)
     
     # test(cfg, agent, env, on_step_cb=on_step_cb)
     test(cfg, agent, env)
