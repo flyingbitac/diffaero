@@ -49,7 +49,7 @@ class PointMassModel:
         # Unpacking state and input variables
         p, v, a = X[:, :3], X[:, 3:6], X[:, 6:9]
         
-        a_dot = self.lmbda * (U - a) / self.dt
+        a_dot = self.lmbda * (U - a)
         
         # State derivatives
         X_dot = torch.concat([v, a - self._G_vec, a_dot], dim=-1)
