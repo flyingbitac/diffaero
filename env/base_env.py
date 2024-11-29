@@ -45,8 +45,7 @@ class BaseEnv:
             if self.model.align_yaw_with_vel_direction:
                 return self.model.q
             else:
-                target_relpos = self.target_pos - self.p
-                return point_mass_quat(self.a, orientation=target_relpos)
+                return point_mass_quat(self.a, orientation=self.target_vel)
         else:
             return self.model.q
     @property

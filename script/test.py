@@ -70,10 +70,11 @@ def main(cfg: DictConfig):
     device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != -1 else "cpu")
     
     assert cfg.checkpoint is not None
-    cfg_path = os.path.join(os.path.dirname(cfg.checkpoint), ".hydra", "config.yaml")
+    cfg_path = os.path.join(os.path.dirname(os.path.abspath(cfg.checkpoint)), ".hydra", "config.yaml")
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo
     cfg.dynamics = ckpt_cfg.dynamics
+    cfg.model = ckpt_cfg.model
     
     if cfg.seed != -1:
         random.seed(cfg.seed)

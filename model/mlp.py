@@ -159,7 +159,7 @@ class RPLActorCriticMLP(StochasticActorCriticMLP):
         torch.nn.init.zeros_(self.actor.actor_mean[-1].weight)
         torch.nn.init.zeros_(self.actor.actor_mean[-1].bias)
         
-        cfg_path = os.path.join(os.path.dirname(anchor_ckpt), ".hydra", "config.yaml")
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(anchor_ckpt)), ".hydra", "config.yaml")
         ckpt_cfg = OmegaConf.load(cfg_path)
         self.anchor_agent = StochasticActorCriticMLP(anchor_state_dim, list(ckpt_cfg.algo.hidden_dim), action_dim)
         self.anchor_agent.load(anchor_ckpt)
