@@ -1,7 +1,7 @@
 name: shac
 model: ${model}
 
-hidden_dim: [256, 128]
+hidden_dim: [64]
 l_rollout: 24
 
 actor_lr: 0.001
