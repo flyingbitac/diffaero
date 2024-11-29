@@ -126,6 +126,8 @@ class ObstacleAvoidance(BaseEnv):
         approaching_vel = torch.sum(obstacle_reldirection * self._v.unsqueeze(1), dim=-1)
         oa_loss = (approaching_vel.clamp(min=0) / dist2surface.exp()).max(dim=-1).values
         
+        collision_loss = self.collision().float() * 100
+        
         if self.dynamic_type == "pointmass":
             pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
             
@@ -134,12 +136,13 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss
+            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
                 "oa_loss": oa_loss.mean().item(),
+                "collision_loss": collision_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
         else:
@@ -209,7 +212,7 @@ class ObstacleAvoidance(BaseEnv):
             self.renderer.step(*self.state_for_render())
         return self.state()
     
-    def terminated(self) -> Tensor:
+    def collision(self) -> Tensor:
         # check if the distance between the drone's mass center and the sphere's center is less than the sum of their radius
         dist2sphere = torch.norm(self.p.unsqueeze(1) - self.obstacle_manager.p_spheres, dim=-1) # [n_envs, n_spheres]
         collision_sphere = torch.any(dist2sphere < (self.obstacle_manager.r_spheres + self.r_drone), dim=-1) # [n_envs]
@@ -220,6 +223,9 @@ class ObstacleAvoidance(BaseEnv):
         
         collision = collision_sphere | collision_cube
         return collision
+    
+    def terminated(self) -> Tensor:
+        return self.collision()
     
     def truncated(self) -> torch.Tensor:
         out_of_bound = torch.any(self.p < -1.5*self.L, dim=-1) | \
