@@ -1,10 +1,11 @@
-torch
+torch>=2.4.0
+tensordict
 tqdm
 hydra-core
-hydra-joblib-launcher
 welford_torch
 line_profiler
-memory_profiler
 tensorboard
 gpustat
 opencv-python
+pytorch3d
+numpy
