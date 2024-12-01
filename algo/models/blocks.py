@@ -355,9 +355,16 @@ class SymLogTwoHotLossMulti(SymLogTwoHotLoss):
         output = symexp(F.softmax(output,dim=-1) @ self.bins)
         return output.sum(dim=-1)/100.
         
+def proj(input_dim, output_dim, hidden_dim=None):
+    hidden_dim = hidden_dim or output_dim
+    return nn.Sequential(
+        nn.Linear(input_dim, hidden_dim),
+        nn.LayerNorm(hidden_dim),
+        nn.SiLU(),
+        nn.Linear(hidden_dim, output_dim)
+    )        
         
-        
-        
+
 
 
 

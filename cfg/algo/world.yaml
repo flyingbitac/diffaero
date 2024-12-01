@@ -97,23 +97,9 @@ state_predictor:
     use_simnorm: False
     use_multirew: False
 
-  training:
-    max_grad_norm: 100.0
-    total_steps: 500000
-    batch_size: 64
-    batch_length: 64
-    use_multirew: False
-    worldmodel_update_freq: 1
-
-  optimizer:
-    lr: 1e-4
-    weight_decay: 1e-2
-    eps: 1e-8
-
-perception_predictor:
-  state_model:
-    _target_: models.state_predictor.StateModelCfg
-    state_dim: 144 #state_dim+wall_distances_dim + obstacles_num*3
+  perception_model:
+    _target_: models.state_predictor.PercModelCfg
+    state_dim: 144 
     hidden_dim: 256
     action_dim: 3 
     latent_dim: 256
@@ -139,9 +125,9 @@ perception_predictor:
 actor_critic:
   model:
     __target__: models.agent.ActorCriticConfig
-    feat_dim: 128 # hidden + latent
+    feat_dim: 512 # hidden + latent
     num_layers: 2
-    hidden_dim: 64
+    hidden_dim: 256
     action_dim: 3
     gamma: 0.985
     lambd: 0.95

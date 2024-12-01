@@ -96,7 +96,7 @@ def main(cfg: DictConfig):
         "obstacle_avoidance": ObstacleAvoidance
     }[cfg.env.name]
     STATE_DIM = {
-        "position_control": 9,
+        "position_control": 13,
         "obstacle_avoidance": 157
     }[cfg.env.name]
     env = RecordEpisodeStatistics(ENV_CLASS(cfg.env, cfg.dynamics, device=device))
