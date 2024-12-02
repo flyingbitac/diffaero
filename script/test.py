@@ -66,8 +66,9 @@ def test(
 @hydra.main(config_path="../cfg", config_name="config")
 def main(cfg: DictConfig):
     device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
-    print(f"Using device {device_idx}.")
-    device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != -1 else "cpu")
+    device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
+    print(f"Using device {device}.")
+    device = torch.device(device)
     
     assert cfg.checkpoint is not None
     cfg_path = os.path.join(os.path.dirname(os.path.abspath(cfg.checkpoint)), ".hydra", "config.yaml")
