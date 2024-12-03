@@ -1,5 +1,6 @@
 name: position_control
 
+dynamics: ${dynamics}
 dt: 0.0333
 length: 10
 n_envs: ${n_envs}

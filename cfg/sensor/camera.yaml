@@ -1,0 +1,17 @@
+name: camera
+
+type: "raydist" # "isaacgym" or "raydist"
+
+width: 12
+height: 12
+horizontal_fov: 90.0
+max_dist: 20.0
+onboard_position: [0.2, 0., 0.05]
+
+# for isaacgym camera
+enable_tensors: True
+supersampling_horizontal: 1
+supersampling_vertical: 1
+far_plane: ${env.sensor.max_dist}
+use_collision_geometry: False
+onboard_attitude: [0., 0., 0., 1.] # xyzw quaternion

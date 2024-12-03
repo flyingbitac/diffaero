@@ -3,6 +3,7 @@ defaults:
   - env: pc
   - dynamics: pointmass # [pointmass, quadrotor]
   - model: mlp # [mlp, cnn]
+  - sensor: camera # [camera, lidar, relpos]
   - _self_
   # - override hydra/launcher: joblib
 
@@ -10,8 +11,9 @@ n_envs: 4096
 l_rollout: ${algo.l_rollout}
 n_updates: 1000
 device: 0
-
 headless: True
+
+runname: ""
 
 seed: -1
 torch_deterministic: False

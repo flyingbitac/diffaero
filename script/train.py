@@ -21,14 +21,14 @@ from quaddif.utils.logger import Logger
 
 def on_step_cb(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
-    if "camera" in env_info.keys():
+    if "sensor" in env_info.keys():
         N, C = 64, 1
-        H, W = env_info["camera"].shape[-2:]
+        H, W = env_info["sensor"].shape[-2:]
         NH = NW = int(N**0.5)
         scale = 4
-        disp_image = env_info["camera"][:N].reshape(NH, NW, C, H, W).permute(2, 0, 3, 1, 4).reshape(C, NH*H, NW*W).cpu().numpy().transpose(1, 2, 0)
+        disp_image = env_info["sensor"][:N].reshape(NH, NW, C, H, W).permute(2, 0, 3, 1, 4).reshape(C, NH*H, NW*W).cpu().numpy().transpose(1, 2, 0)
         disp_image = cv2.normalize(disp_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        disp_image = cv2.resize(cv2.cvtColor(disp_image, cv2.COLOR_GRAY2BGR), (int(NH*H*scale), int(NW*W*scale)), interpolation=cv2.INTER_NEAREST)
+        disp_image = cv2.resize(cv2.cvtColor(disp_image, cv2.COLOR_GRAY2BGR), (int(NW*W*scale), int(NH*H*scale)), interpolation=cv2.INTER_NEAREST)
         cv2.imshow('image', disp_image)
         cv2.waitKey(1)
 
@@ -88,13 +88,15 @@ def main(cfg: DictConfig):
     profiler.add_function(env_class.step)
     profiler.add_function(env_class.state)
     profiler.add_function(env_class.loss_fn)
-    env = RecordEpisodeStatistics(env_class(cfg.env, cfg.dynamics, device=device))
+    if hasattr(env_class, "update_sensor_data"):
+        profiler.add_function(env_class.update_sensor_data)
+    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
     
     agent_class = AGENT_ALIAS[cfg.algo.name]
     profiler.add_function(agent_class.step)
     agent = agent_class.build(cfg, env, device)
     
-    logger = Logger(cfg)
+    logger = Logger(cfg, run_name=cfg.runname)
     try:
         # learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
         learn(cfg, agent, env, logger)

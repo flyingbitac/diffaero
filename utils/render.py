@@ -233,8 +233,10 @@ class PositionControlRenderer(BaseRenderer):
 
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
-    def __init__(self, cfg: DictConfig, device: int, obstacle_manager: ObstacleManager):
+    def __init__(self, cfg: DictConfig, device: int, obstacle_manager: ObstacleManager, enable_camera: bool = False):
         self.env_spacing = cfg.env_spacing
+        self.enable_camera = enable_camera
+        self.camera_cfg = cfg.camera
         self.camera_handles = []
         self.camera_tensor_list = []
         self.env_asset_handles = defaultdict(list)
@@ -242,7 +244,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.obstacle_manager = obstacle_manager
         super().__init__(cfg, device)
         self.target_pos = torch.zeros_like(self.drone_positions)
-        self.camera = self.cfg.camera.type == "isaacgym"
         self.asset_positions = torch.empty(self.n_envs, self.n_obstacles, 3, device=self.device)
         self.asset_quats = torch.empty(self.n_envs, self.n_obstacles, 4, device=self.device)
         
@@ -284,7 +285,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self.env_spacing,
             self.env_spacing)
         
-        camera_props, local_transform = get_camera_properties(self.cfg.camera)
+        if self.enable_camera:
+            camera_props, local_transform = get_camera_properties(self.camera_cfg)
         
         pbar = tqdm(range(self.n_envs), unit="env")
         for i in pbar:
@@ -307,7 +309,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             )
             self.actor_handles.append(actor_handle)
             
-            if self.cfg.camera.type == "isaacgym":
+            if self.enable_camera:
                 # create camera
                 cam_handle = self.gym.create_camera_sensor(env_handle, camera_props)
                 self.gym.attach_camera_to_body(cam_handle, env_handle, actor_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
@@ -353,11 +355,11 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.simulation_step()
     
     def render_camera(self) -> torch.Tensor:
-        if not self.camera:
-            raise Exception("Camera is not initialized")
+        if not self.enable_camera:
+            raise ValueError("Camera is not initialized")
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
-        new_camera = 1 - (-torch.concat(self.camera_tensor_list, dim=0) / self.cfg.camera.far_plane).clamp(0, 1)
+        new_camera = 1 - (-torch.concat(self.camera_tensor_list, dim=0) / self.camera_cfg.far_plane).clamp(0, 1)
         # new_camera = torch.stack(self.camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255 # for rgb camera
         self.gym.end_access_image_tensors(self.sim)
         return new_camera

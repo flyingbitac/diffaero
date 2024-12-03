@@ -38,7 +38,7 @@ def get_asset_options(asset_cfg):
 def get_camera_properties(camera_cfg):
     # Set Camera Properties
     camera_props = gymapi.CameraProperties()
-    exclude_keys = ['enable', 'transform', 'type']
+    exclude_keys = ['max_dist', 'type', 'name', 'onboard_position', 'onboard_attitude']
     for k, v in dict(camera_cfg).items():
         if hasattr(camera_props, k) and v is not None:
             setattr(camera_props, k, v)
@@ -47,7 +47,7 @@ def get_camera_properties(camera_cfg):
     # local camera transform
     local_transform = gymapi.Transform()
     # position of the camera relative to the body
-    local_transform.p = gymapi.Vec3(*camera_cfg.transform.p)
+    local_transform.p = gymapi.Vec3(*camera_cfg.onboard_position)
     # orientation of the camera relative to the body
-    local_transform.r = gymapi.Quat(*camera_cfg.transform.r)
+    local_transform.r = gymapi.Quat(*camera_cfg.onboard_attitude)
     return camera_props, local_transform

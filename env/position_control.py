@@ -11,14 +11,14 @@ from quaddif.utils.render import PositionControlRenderer
 from quaddif.utils.math import rand_range
 
 class PositionControl(BaseEnv):
-    def __init__(self, env_cfg: DictConfig, model_cfg: DictConfig, device: torch.device):
-        super(PositionControl, self).__init__(env_cfg, model_cfg, device)
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        super(PositionControl, self).__init__(cfg, device)
         self.state_dim = 13
         self.action_dim = self.model.action_dim
-        if env_cfg.render.headless:
+        if cfg.render.headless:
             self.renderer = None
         else:
-            self.renderer = PositionControlRenderer(env_cfg.render, device.index)
+            self.renderer = PositionControlRenderer(cfg.render, device.index)
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":

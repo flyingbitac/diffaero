@@ -7,35 +7,43 @@ from torch import Tensor
 from tensordict import TensorDict
 
 from quaddif.env.base_env import BaseEnv
-from quaddif.utils.sensor import Camera
+from quaddif.utils.sensor import Camera, LiDAR
 from quaddif.utils.render import ObstacleAvoidanceRenderer
-from quaddif.utils.math import rand_range
 from quaddif.utils.assets import ObstacleManager
 
 class ObstacleAvoidance(BaseEnv):
-    def __init__(self, env_cfg: DictConfig, model_cfg: DictConfig, device: torch.device):
-        super(ObstacleAvoidance, self).__init__(env_cfg, model_cfg, device)
-        self.camera_type = env_cfg.camera.type
-        self.obstacle_manager = ObstacleManager(env_cfg, device)
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        super(ObstacleAvoidance, self).__init__(cfg, device)
+        self.obstacle_manager = ObstacleManager(cfg, device)
         self.n_obstacles = self.obstacle_manager.n_obstacles
         
-        if self.camera_type is not None:
-            H, W = env_cfg.camera.height, env_cfg.camera.width
-            self.state_dim = (13, (H, W)) # flattened depth image as additional observation
-            self.camera_tensor = torch.zeros((env_cfg.n_envs, H, W), device=device)
-            if self.camera_type == "raydist":
-                self.camera = Camera(env_cfg.camera, device=device)
-        else:
-            # relative position of obstacles as additional observation
-            self.state_dim = 13 + self.n_obstacles * 3
+        self.sensor_type = cfg.sensor.name
+        assert self.sensor_type in ["camera", "lidar", "relpos"]
         
-        if not env_cfg.render.headless or self.camera_type == "isaacgym":
-            self.renderer = ObstacleAvoidanceRenderer(env_cfg.render, device.index, self.obstacle_manager)
+        if self.sensor_type == "camera":
+            if self.sensor_type == "camera" and cfg.sensor.type == "raydist":
+                self.camera = Camera(cfg.sensor, device=device)
+            H, W = cfg.sensor.height, cfg.sensor.width
+        elif self.sensor_type == "lidar":
+            self.lidar = LiDAR(cfg.sensor, device=device)
+            H, W = self.lidar.H, self.lidar.W
+        elif self.sensor_type == "relpos":
+            # relative position of obstacles as additional observation
+            H, W = self.n_obstacles, 3
+        
+        self.state_dim = (13, (H, W)) # flattened depth image as additional observation
+        self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
+        
+        use_isaacgym_camera = self.sensor_type == "camera" and cfg.sensor.type == "isaacgym"
+        need_renderer = (not cfg.render.headless) or use_isaacgym_camera
+        if need_renderer:
+            self.renderer = ObstacleAvoidanceRenderer(
+                cfg.render, device.index, self.obstacle_manager, enable_camera=use_isaacgym_camera)
         else:
-            self.renderer = None # headless and camera_type == "raydist", then we don't need a renderer
+            self.renderer = None
         
         self.action_dim = self.model.action_dim
-        self.r_drone = env_cfg.r_drone
+        self.r_drone = cfg.r_drone
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":
@@ -43,31 +51,38 @@ class ObstacleAvoidance(BaseEnv):
         else:
             state = [self.target_vel, self._q, self._v, self._w]
         
-        if self.camera_type is not None:
-            state = torch.cat(state, dim=-1)
-            state if with_grad else state.detach()
-            state = TensorDict({
-                "state": state, "perception": self.camera_tensor.clone()}, batch_size=self.n_envs)
-        else:
-            obst_relpos = self.obstacle_manager.p_obstacles - self._p.unsqueeze(1)
-            sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
-            state.append(obst_relpos.gather(dim=1, index=sorted_idx).flatten(1))
-            state = torch.cat(state, dim=-1)
-            state if with_grad else state.detach()
+        state = torch.cat(state, dim=-1)
+        state if with_grad else state.detach()
+        state = TensorDict({
+            "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
         return state
     
-    def render_camera(self):
-        if self.renderer is not None and self.camera_type == "isaacgym":
-            self.camera_tensor.copy_(self.renderer.render_camera())
-        elif self.camera_type == "raydist":
-            H, W = self.camera_tensor.shape[1:]
-            self.camera_tensor.copy_(self.camera.get_raydist(
-                sphere_pos=self.obstacle_manager.p_spheres,
-                sphere_r=self.obstacle_manager.r_spheres,
-                box_min=self.obstacle_manager.box_min,
-                box_max=self.obstacle_manager.box_max,
-                start=self.p.unsqueeze(1).expand(-1, H*W, -1),
-                quat_xyzw=self.q))
+    def update_sensor_data(self):
+        if self.sensor_type == "camera":
+            if self.cfg.sensor.type == "isaacgym":
+                self.sensor_tensor.copy_(self.renderer.render_camera())
+            elif self.cfg.sensor.type == "raydist":
+                H, W = self.sensor_tensor.shape[1:]
+                self.sensor_tensor.copy_(self.camera(
+                    sphere_pos=self.obstacle_manager.p_spheres,
+                    sphere_r=self.obstacle_manager.r_spheres,
+                    box_min=self.obstacle_manager.box_min,
+                    box_max=self.obstacle_manager.box_max,
+                    start=self.p.unsqueeze(1).expand(-1, H*W, -1),
+                    quat_xyzw=self.q))
+        elif self.sensor_type == "lidar":
+                H, W = self.sensor_tensor.shape[1:]
+                self.sensor_tensor.copy_(self.lidar(
+                    sphere_pos=self.obstacle_manager.p_spheres,
+                    sphere_r=self.obstacle_manager.r_spheres,
+                    box_min=self.obstacle_manager.box_min,
+                    box_max=self.obstacle_manager.box_max,
+                    start=self.p.unsqueeze(1).expand(-1, H*W, -1),
+                    quat_xyzw=self.q))
+        else: # self.sensor_type == "relpos"
+            obst_relpos = self.obstacle_manager.p_obstacles - self.p.unsqueeze(1)
+            sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
+            self.sensor_tensor.copy_(obst_relpos.gather(dim=1, index=sorted_idx))
     
     def step(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
@@ -91,12 +106,11 @@ class ObstacleAvoidance(BaseEnv):
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         if self.renderer is not None:
-            if self.renderer.enable_viewer_sync or self.camera_type == "isaacgym":
+            if self.renderer.enable_viewer_sync or self.renderer.enable_camera:
                 self.renderer.step(*self.state_for_render())
             self.renderer.render()
-        if self.camera_type is not None:
-            self.render_camera()
-            extra["camera"] = self.camera_tensor.clone()
+        self.update_sensor_data()
+        extra["sensor"] = self.sensor_tensor.clone()
         return self.state(), loss, terminated, extra
     
     def state_for_render(self):
@@ -205,7 +219,7 @@ class ObstacleAvoidance(BaseEnv):
     
     def reset(self):
         super().reset()
-        if self.renderer is not None and self.camera_type == "isaacgym":
+        if self.renderer is not None:
             self.renderer.step(*self.state_for_render())
         return self.state()
     
