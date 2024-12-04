@@ -185,7 +185,7 @@ class RPLActorCriticCNN(StochasticActorCriticCNN):
         self.anchor_state_dim = anchor_state_dim
         self.rpl_action = rpl_action
     
-    def rpl_obs(self, obs: TensorDict) -> Tensor:
+    def rpl_obs(self, obs: TensorDict) -> Tuple[Tensor, Tensor]:
         with torch.no_grad():
             anchor_action, _, _, _ = self.anchor_agent.get_action(
                 obs["state"], test=True)

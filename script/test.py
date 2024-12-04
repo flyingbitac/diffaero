@@ -14,7 +14,7 @@ import cv2
 
 from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
-from quaddif.utils.env import RecordEpisodeStatistics
+from quaddif.utils.logger import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
 
 def on_step_cb(state, action, policy_info, env_info):

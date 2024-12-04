@@ -117,8 +117,6 @@ class ObstacleAvoidance(BaseEnv):
         w = torch.zeros_like(self.v) if self.dynamic_type == "pointmass" else self.w
         drone_state = torch.concat([self.p, self.q, self.v, w], dim=-1)
         assets_state = torch.cat([
-            # self.asset_poses,
-            # torch.zeros(self.n_envs, self.asset_poses.size(1), 6, device=self.device)
             self.obstacle_manager.p_obstacles,
             torch.zeros(self.n_envs, self.n_obstacles, 10, device=self.device)
         ], dim=-1)
