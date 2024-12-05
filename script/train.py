@@ -47,7 +47,7 @@ def learn(
     for i in pbar:
         t1 = pbar._time()
         env.detach()
-        policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
+        state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
         l_episode = env_info["stats"]["l"].float().mean().item()
         success_rate = env_info['stats']['success_rate']
         pbar.set_postfix({
@@ -64,7 +64,7 @@ def learn(
         }
         if "value" in policy_info.keys():
             log_info["value"] = policy_info["value"].mean().item()
-        if i+1 % 10 == 0:
+        if (i+1) % 10 == 0:
             logger.log_scalars(log_info, i+1)
         
         if success_rate > max_success_rate:
@@ -98,8 +98,8 @@ def main(cfg: DictConfig):
     
     logger = Logger(cfg, run_name=cfg.runname)
     try:
-        learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
-        # learn(cfg, agent, env, logger)
+        # learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
+        learn(cfg, agent, env, logger)
     except KeyboardInterrupt:
         pass
     finally:

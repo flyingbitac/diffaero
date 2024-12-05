@@ -58,7 +58,7 @@ class APG:
                     env_info=env_info)
             
         losses, grad_norms = self.update_actor()
-        return policy_info, env_info, losses, grad_norms
+        return state, policy_info, env_info, losses, grad_norms
     
     def save(self, path):
         self.actor.save(path)

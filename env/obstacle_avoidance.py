@@ -50,11 +50,10 @@ class ObstacleAvoidance(BaseEnv):
             state = [self.target_vel, self.q, self._v, self._a]
         else:
             state = [self.target_vel, self._q, self._v, self._w]
-        
         state = torch.cat(state, dim=-1)
-        state if with_grad else state.detach()
         state = TensorDict({
             "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
+        state = state if with_grad else state.detach()
         return state
     
     def update_sensor_data(self):

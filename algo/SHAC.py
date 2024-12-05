@@ -205,7 +205,7 @@ class SHAC:
         critic_losses, critic_grad_norms = self.update_critic(target_values)
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
-        return policy_info, env_info, losses, grad_norms
+        return state, policy_info, env_info, losses, grad_norms
         
     @staticmethod
     def build(cfg, env, device):

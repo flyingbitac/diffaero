@@ -189,7 +189,7 @@ class PPO:
         advantages, target_values = self.bootstrap()
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = self.train(advantages, target_values)
-        return policy_info, env_info, losses, grad_norms
+        return state, policy_info, env_info, losses, grad_norms
 
     @staticmethod
     def build(cfg, env, device):
