@@ -104,8 +104,8 @@ def main(cfg: DictConfig):
     
     statemodelcfg = getattr(world_agent_cfg,"state_predictor").state_model
     statemodelcfg.state_dim = 157
-    statemodelcfg.hidden_dim = 256
-    statemodelcfg.latent_dim = 256
+    statemodelcfg.hidden_dim = 512
+    statemodelcfg.latent_dim = 1024
     actorcriticcfg = getattr(world_agent_cfg,"actor_critic").model
     buffercfg = getattr(world_agent_cfg,"replaybuffer")
     buffercfg.state_dim = 157
@@ -127,6 +127,10 @@ def main(cfg: DictConfig):
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_determinstic
     
+    if world_agent_cfg.common.use_checkpoint:
+        state_model.load_state_dict(torch.load(f"{world_agent_cfg.common.state_model_checkpoint_path}"))
+        agent.load_state_dict(torch.load(f"{world_agent_cfg.common.actor_critic_checkpoint_path}"))
+    
     obs = env.reset()
     
     hidden = torch.zeros(cfg.n_envs, statemodelcfg.hidden_dim,device=device)
@@ -146,11 +150,13 @@ def main(cfg: DictConfig):
                 next_obs, rewards, terminated, info = env.step(action)
                 prior_sample,_,hidden = state_model.sample_with_prior(latent,action,hidden)
                 rewards = 1 - rewards * 0.1
+                rewards = 10.*rewards
                 replaybuffer.append(state,action,rewards,terminated)
             else:
                 action = torch.randn(cfg.n_envs,3,device=device)
                 next_obs, rewards, terminated, info = env.step(action)
                 rewards = 1 - rewards * 0.1
+                rewards = 10.*rewards
                 replaybuffer.append(state,action,rewards,terminated)
                 
             global_step += cfg.n_envs

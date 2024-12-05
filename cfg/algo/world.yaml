@@ -2,10 +2,12 @@ name: world
 
 common:
   device: cuda:1
-  run_name: v3oaa2csmallmodel
+  run_name: v3oaa2cbigcontinu
   use_checkpoint: False
   use_symlog: True
   total_timesteps: 200_000_000
+  state_model_checkpoint_path: "/home/zxh/ws/wrqws/quaddif/outputs/2024-12-01/15-23-24/ckpt/v3oaa2cbigger/statemodel/statemodel_80000.pth"
+  actor_critic_checkpoint_path: "/home/zxh/ws/wrqws/quaddif/outputs/2024-12-01/15-23-24/ckpt/v3oaa2cbigger/actorcritic/actorcritic_80000.pth"
 
 denoiser:
   denoiser:
@@ -125,9 +127,9 @@ state_predictor:
 actor_critic:
   model:
     __target__: models.agent.ActorCriticConfig
-    feat_dim: 512 # hidden + latent
+    feat_dim: 1536 # hidden + latent
     num_layers: 2
-    hidden_dim: 256
+    hidden_dim: 512
     action_dim: 3
     gamma: 0.985
     lambd: 0.95
