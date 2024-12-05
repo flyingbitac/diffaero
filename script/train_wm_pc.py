@@ -22,9 +22,8 @@ import cv2
 
 from quaddif.env import PositionControl, ObstacleAvoidance
 from quaddif.algo import SHAC, APG_stochastic, APG, PPO
-from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
-from quaddif.utils.logger import Logger
+from quaddif.utils.logger import Logger,RecordEpisodeStatistics
 
 @torch.no_grad()
 def collect_imagine_trj(env:StateEnv,agent:ActorCriticAgent,cfg:DictConfig):

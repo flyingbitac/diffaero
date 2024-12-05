@@ -22,9 +22,8 @@ import cv2
 
 from quaddif.env import PositionControl, ObstacleAvoidance
 from quaddif.algo import SHAC, APG_stochastic, APG, PPO
-from quaddif.utils.env import RecordEpisodeStatistics
 from quaddif.utils.device import idle_device
-from quaddif.utils.logger import Logger
+from quaddif.utils.logger import Logger,RecordEpisodeStatistics
 
 @torch.no_grad()
 def collect_imagine_trj(env:StateEnv,agent:ActorCriticAgent,cfg:DictConfig):
@@ -93,7 +92,7 @@ def main(cfg: DictConfig):
     device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
     print("Using device", device_idx)
     device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() else "cpu")
-    env = RecordEpisodeStatistics(ObstacleAvoidance(cfg.env, cfg.dynamics, device=device))
+    env = RecordEpisodeStatistics(ObstacleAvoidance(cfg.env, device=device))
 
     world_agent_cfg = getattr(cfg,"algo")
     world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
