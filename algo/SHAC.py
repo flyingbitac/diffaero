@@ -7,7 +7,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.model import StochasticActorCritic, RPLActorCritic
+from quaddif.network import StochasticActorCritic, RPLActorCritic
 
 class SHACRolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, device):
@@ -205,7 +205,7 @@ class SHAC:
         critic_losses, critic_grad_norms = self.update_critic(target_values)
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
-        return policy_info, env_info, losses, grad_norms
+        return state, policy_info, env_info, losses, grad_norms
         
     @staticmethod
     def build(cfg, env, device):

@@ -1,0 +1,55 @@
+name: position_control_renderer
+
+headless: ${headless}
+n_envs: ${env.n_envs}
+env_spacing: 1
+physics_engine: "physx"
+
+sim:
+  dt: ${env.dt}
+  substeps: 1
+  # gravity: [0., 0., -9.81]
+  gravity: [0., 0., 0.]
+  up_axis: 1 # 0 is y, 1 is z
+  use_gpu_pipeline: True
+  physx:
+    # use_gpu: True
+    num_threads: 10
+    solver_type: 1 # 0: pgs, 1: tgs
+    num_position_iterations: 4
+    num_velocity_iterations: 0
+    contact_offset: 0.01 # [m]
+    rest_offset: 0.0 # [m]
+    bounce_threshold_velocity: 0.5
+    max_depenetration_velocity: 1.0
+    max_gpu_contact_pairs: 8388608 # 2**23
+    default_buffer_size_multiplier: 4
+    # num_subscenes: 4 # Splits the simulation into N physics scenes and runs each one in a separate thread
+    # contact_collection: 0 # 0: never, 1: last sub-step, 2: all sub-steps (default=2)
+
+viewer:
+  ref_env: 0
+  pos: [-5, -5, 4]
+  lookat: [0, 0, 0]
+
+robot_asset:
+  file: "resources/robots/simple_quad.urdf"
+  name: "simple_quad"
+  base_link_name: "base_link"
+  foot_name: "None"
+  penalize_contacts_on: []
+  terminate_after_contacts_on: []
+  
+  disable_gravity: True
+  collapse_fixed_joints: True
+  fix_base_link: False
+  collision_mask: 0
+  replace_cylinder_with_capsule: False
+  flip_visual_attachments: True
+  density: 100.
+  angular_damping: 0.
+  linear_damping: 0.
+  max_angular_velocity: 100.
+  max_linear_velocity: 100.
+  armature: 0. # added to the diagonal element of the inertia matrix of each actor
+  override_inertia: True

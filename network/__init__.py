@@ -2,8 +2,8 @@ from typing import Union
 
 from omegaconf import DictConfig
 
-from quaddif.model.mlp import *
-from quaddif.model.cnn import *
+from quaddif.network.mlp import *
+from quaddif.network.cnn import *
 
 NETWORKS = {
     "mlp": {
@@ -24,20 +24,20 @@ NETWORKS = {
 
 def DeterministicActor(algo_cfg):
     # type: (DictConfig) -> Union[DeterministicActorMLP, DeterministicActorCNN]
-    return NETWORKS[algo_cfg.model.name]["deterministic_actor"]
+    return NETWORKS[algo_cfg.network.name]["deterministic_actor"]
 
 def StochasticActor(algo_cfg):
     # type: (DictConfig) -> Union[StochasticActorMLP, StochasticActorCNN]
-    return NETWORKS[algo_cfg.model.name]["stochastic_actor"]
+    return NETWORKS[algo_cfg.network.name]["stochastic_actor"]
 
 def Critic(algo_cfg):
     # type: (DictConfig) -> Union[CriticMLP, CriticCNN]
-    return NETWORKS[algo_cfg.model.name]["critic"]
+    return NETWORKS[algo_cfg.network.name]["critic"]
 
 def StochasticActorCritic(algo_cfg):
     # type: (DictConfig) -> Union[StochasticActorCriticMLP, StochasticActorCriticCNN]
-    return NETWORKS[algo_cfg.model.name]["stochastic_actor_critic"]
+    return NETWORKS[algo_cfg.network.name]["stochastic_actor_critic"]
 
 def RPLActorCritic(algo_cfg):
     # type: (DictConfig) -> Union[RPLActorCriticMLP, RPLActorCriticCNN]
-    return NETWORKS[algo_cfg.model.name]["rpl_actor_critic"]
+    return NETWORKS[algo_cfg.network.name]["rpl_actor_critic"]

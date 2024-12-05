@@ -1,5 +1,5 @@
 name: apg_sto
-model: ${model}
+network: ${network}
 
 hidden_dim: [64]
 l_rollout: 32

@@ -1,5 +1,5 @@
 name: shac
-model: ${model}
+network: ${network}
 
 hidden_dim: [64]
 l_rollout: 24

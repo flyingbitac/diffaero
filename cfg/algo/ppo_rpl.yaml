@@ -1,5 +1,5 @@
 name: ppo_rpl
-model: ${model}
+network: ${network}
 
 anchor_ckpt: 
 anchor_state_dim: 13

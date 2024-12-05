@@ -14,7 +14,7 @@ from quaddif.utils.assets import ObstacleManager
 class ObstacleAvoidance(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super(ObstacleAvoidance, self).__init__(cfg, device)
-        self.obstacle_manager = ObstacleManager(cfg, device)
+        self.obstacle_manager = ObstacleManager(cfg.obstacles, self.n_envs, self.L, device)
         self.n_obstacles = self.obstacle_manager.n_obstacles
         
         self.sensor_type = cfg.sensor.name
@@ -50,11 +50,10 @@ class ObstacleAvoidance(BaseEnv):
             state = [self.target_vel, self.q, self._v, self._a]
         else:
             state = [self.target_vel, self._q, self._v, self._w]
-        
         state = torch.cat(state, dim=-1)
-        state if with_grad else state.detach()
         state = TensorDict({
             "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
+        state = state if with_grad else state.detach()
         return state
     
     def update_sensor_data(self):
@@ -71,21 +70,21 @@ class ObstacleAvoidance(BaseEnv):
                     start=self.p.unsqueeze(1).expand(-1, H*W, -1),
                     quat_xyzw=self.q))
         elif self.sensor_type == "lidar":
-                H, W = self.sensor_tensor.shape[1:]
-                self.sensor_tensor.copy_(self.lidar(
-                    sphere_pos=self.obstacle_manager.p_spheres,
-                    sphere_r=self.obstacle_manager.r_spheres,
-                    box_min=self.obstacle_manager.box_min,
-                    box_max=self.obstacle_manager.box_max,
-                    start=self.p.unsqueeze(1).expand(-1, H*W, -1),
-                    quat_xyzw=self.q))
+            H, W = self.sensor_tensor.shape[1:]
+            self.sensor_tensor.copy_(self.lidar(
+                sphere_pos=self.obstacle_manager.p_spheres,
+                sphere_r=self.obstacle_manager.r_spheres,
+                box_min=self.obstacle_manager.box_min,
+                box_max=self.obstacle_manager.box_max,
+                start=self.p.unsqueeze(1).expand(-1, H*W, -1),
+                quat_xyzw=self.q))
         else: # self.sensor_type == "relpos"
             obst_relpos = self.obstacle_manager.p_obstacles - self.p.unsqueeze(1)
             sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
             self.sensor_tensor.copy_(obst_relpos.gather(dim=1, index=sorted_idx))
     
     def step(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+        # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         action = self.rescale_action(action)
         self.model.step(action)
         self.progress += 1

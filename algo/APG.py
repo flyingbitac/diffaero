@@ -4,7 +4,7 @@ from omegaconf import DictConfig
 import torch
 from torch import Tensor
 
-from quaddif.model import DeterministicActor, StochasticActor
+from quaddif.network import DeterministicActor, StochasticActor
 
 class APG:
     def __init__(
@@ -58,7 +58,7 @@ class APG:
                     env_info=env_info)
             
         losses, grad_norms = self.update_actor()
-        return policy_info, env_info, losses, grad_norms
+        return state, policy_info, env_info, losses, grad_norms
     
     def save(self, path):
         self.actor.save(path)

@@ -7,7 +7,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.model import RPLActorCritic, StochasticActorCritic
+from quaddif.network import RPLActorCritic, StochasticActorCritic
 
 class PPORolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
@@ -189,7 +189,7 @@ class PPO:
         advantages, target_values = self.bootstrap()
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = self.train(advantages, target_values)
-        return policy_info, env_info, losses, grad_norms
+        return state, policy_info, env_info, losses, grad_norms
 
     @staticmethod
     def build(cfg, env, device):

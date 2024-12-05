@@ -2,7 +2,7 @@ defaults:
   - algo: apg
   - env: pc
   - dynamics: pointmass # [pointmass, quadrotor]
-  - model: mlp # [mlp, cnn]
+  - network: mlp # [mlp, cnn]
   - sensor: camera # [camera, lidar, relpos]
   - _self_
   # - override hydra/launcher: joblib
@@ -14,10 +14,11 @@ device: 0
 headless: True
 
 runname: ""
+checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
 
 seed: -1
 torch_deterministic: False
-checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
+
 hydra:
   sweep:
     dir: ./outputs/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}

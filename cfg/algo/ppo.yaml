@@ -1,5 +1,5 @@
 name: ppo
-model: ${model}
+network: ${network}
 
 hidden_dim: [256, 128]
 l_rollout: 16

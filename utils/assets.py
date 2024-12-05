@@ -9,11 +9,11 @@ from torch.nn import functional as F
 from quaddif import QUADDIF_ROOT_DIR
 
 class ObstacleManager:
-    def __init__(self, cfg: DictConfig, device: torch.device):
+    def __init__(self, cfg: DictConfig, n_envs: int, env_spacing: float, device: torch.device):
         self.cfg = cfg
-        self.n_envs: int = cfg.n_envs
-        self.env_spacing: float = cfg.length
-        self.obst_cfg: DictConfig = cfg.obstacles
+        self.n_envs = n_envs
+        self.env_spacing = env_spacing
+        self.obst_cfg = cfg
         self.n_obstacles: int = self.obst_cfg.n_obstacles
         self.n_spheres: int = int(self.n_obstacles * self.obst_cfg.sphere_percentage)
         self.n_cubes: int = self.n_obstacles - self.n_spheres
