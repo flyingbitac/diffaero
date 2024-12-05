@@ -8,7 +8,7 @@ import torch.nn as nn
 from tensordict import TensorDict
 
 from quaddif.utils.nn import mlp
-from quaddif.model.mlp import StochasticActorCriticMLP
+from quaddif.network.mlp import StochasticActorCriticMLP
 
 class CNN(nn.Module):
     def __init__(self, H, W):

@@ -7,7 +7,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.model import RPLActorCritic, StochasticActorCritic
+from quaddif.network import RPLActorCritic, StochasticActorCritic
 
 class PPORolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):

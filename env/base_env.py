@@ -9,7 +9,7 @@ from quaddif.dynamics.pointmass import PointMassModel, point_mass_quat
 
 class BaseEnv:
     def __init__(self, cfg: DictConfig, device: torch.device):
-        self.dynamic_type = cfg.dynamics.name
+        self.dynamic_type: str = cfg.dynamics.name
         assert self.dynamic_type in ["pointmass", "quadrotor"]
         self.model: Union[PointMassModel, QuadrotorModel] = {
             "pointmass": PointMassModel,

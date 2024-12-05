@@ -18,7 +18,7 @@ class Logger:
         if run_name != "":
             run_name = "__" + run_name
         env_name = {"position_control": "PC", "obstacle_avoidance": "OA"}[cfg.env.name]
-        run_name = f"{cfg.dynamics.name}__{env_name}__{cfg.algo.name}__{cfg.model.name}{run_name}__{cfg.seed}"
+        run_name = f"{cfg.dynamics.name}__{env_name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         if type.lower() == 'tensorboard':
             print("Using Tensorboard Logger.")
             self.writer = SummaryWriter(
@@ -81,6 +81,8 @@ class Logger:
     def log_hparams(self):
         if isinstance(self.writer, SummaryWriter):
             to_yaml = lambda x: OmegaConf.to_yaml(x, resolve=True).replace("  ", "- ").replace("\n", "  \n")
+            if hasattr(self.cfg.env, "render"):
+                delattr(self.cfg.env, "render")
             self.writer.add_text("Env HParams", to_yaml(self.cfg.env), 0)
             self.writer.add_text("Train HParams", to_yaml(self.cfg.algo), 0)
             overrides_path = os.path.join(self.logdir, ".hydra", "overrides.yaml")

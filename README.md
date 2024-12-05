@@ -1,8 +1,19 @@
 # QuadDif: A Fully Pytorch-based Differentiable Quadrotor Simulator for Efficient Policy Learning
 
+- [QuadDif: A Fully Pytorch-based Differentiable Quadrotor Simulator for Efficient Policy Learning](#quaddif-a-fully-pytorch-based-differentiable-quadrotor-simulator-for-efficient-policy-learning)
+  - [Introduction](#introduction)
+    - [Environments](#environments)
+    - [Learning Algorithms](#learning-algorithms)
+    - [Dynamic Models](#dynamic-models)
+  - [Installation](#installation)
+    - [Requirements](#requirements)
+    - [Install the Nvidia Isaac Gym](#install-the-nvidia-isaac-gym)
+    - [Install the Quaddif](#install-the-quaddif)
+  - [Usage](#usage)
+
 ## Introduction
 
-QuadDif is a fully Pytorch-based differentiable quadrotor simulator that utilizes the parallel computing power of GPUs for efficient policy learning. It supports multiple types of dynamic models, all of which are customizable and implemented in [Pytorch](www.pytorch.org) so that they run efficiently on modern GPUs and are fully differentiable.
+QuadDif is a fully Pytorch-based differentiable quadrotor simulator that utilizes the parallel computing power of GPUs for efficient policy learning. It supports multiple types of dynamic models, all of which are customizable and implemented in [Pytorch](https://www.pytorch.org) so that they run efficiently on modern GPUs and are fully differentiable.
 
 QuadDif utilizes a modular design where different components (e.g., environment, dynamics, network architecture, and learning algorithms) are decoupled from each other and can be configured independently. As a result, users can combine different components almost arbitrarily to initiate a custom-configured training process with minimal effort.
 

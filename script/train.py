@@ -64,7 +64,8 @@ def learn(
         }
         if "value" in policy_info.keys():
             log_info["value"] = policy_info["value"].mean().item()
-        logger.log_scalars(log_info, i+1)
+        if i+1 % 10 == 0:
+            logger.log_scalars(log_info, i+1)
         
         if success_rate > max_success_rate:
             max_success_rate = success_rate
@@ -97,8 +98,8 @@ def main(cfg: DictConfig):
     
     logger = Logger(cfg, run_name=cfg.runname)
     try:
-        # learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
-        learn(cfg, agent, env, logger)
+        learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
+        # learn(cfg, agent, env, logger)
     except KeyboardInterrupt:
         pass
     finally:

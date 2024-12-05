@@ -7,7 +7,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.model import StochasticActorCritic, RPLActorCritic
+from quaddif.network import StochasticActorCritic, RPLActorCritic
 
 class SHACRolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, device):
