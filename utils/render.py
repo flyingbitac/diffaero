@@ -4,12 +4,11 @@ import os
 from collections import defaultdict
 
 import torch
-from isaacgym import gymapi, gymutil, gymtorch
+from isaacgym import gymapi, gymtorch
 from omegaconf import DictConfig
 from tqdm import tqdm
 
 from quaddif import QUADDIF_ROOT_DIR
-from quaddif.utils.cfg import get_sim_params, get_asset_options, get_camera_properties
 from quaddif.utils.assets import ObstacleManager, create_ball, create_cube
 
 class BaseRenderer:
@@ -233,8 +232,10 @@ class PositionControlRenderer(BaseRenderer):
 
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
-    def __init__(self, cfg: DictConfig, device: int, obstacle_manager: ObstacleManager):
+    def __init__(self, cfg: DictConfig, device: int, obstacle_manager: ObstacleManager, enable_camera: bool = False):
         self.env_spacing = cfg.env_spacing
+        self.enable_camera = enable_camera
+        self.camera_cfg = cfg.camera
         self.camera_handles = []
         self.camera_tensor_list = []
         self.env_asset_handles = defaultdict(list)
@@ -242,7 +243,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.obstacle_manager = obstacle_manager
         super().__init__(cfg, device)
         self.target_pos = torch.zeros_like(self.drone_positions)
-        self.camera = self.cfg.camera.type == "isaacgym"
         self.asset_positions = torch.empty(self.n_envs, self.n_obstacles, 3, device=self.device)
         self.asset_quats = torch.empty(self.n_envs, self.n_obstacles, 4, device=self.device)
         
@@ -284,7 +284,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self.env_spacing,
             self.env_spacing)
         
-        camera_props, local_transform = get_camera_properties(self.cfg.camera)
+        if self.enable_camera:
+            camera_props, local_transform = get_camera_properties(self.camera_cfg)
         
         pbar = tqdm(range(self.n_envs), unit="env")
         for i in pbar:
@@ -307,7 +308,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             )
             self.actor_handles.append(actor_handle)
             
-            if self.cfg.camera.type == "isaacgym":
+            if self.enable_camera:
                 # create camera
                 cam_handle = self.gym.create_camera_sensor(env_handle, camera_props)
                 self.gym.attach_camera_to_body(cam_handle, env_handle, actor_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
@@ -353,11 +354,11 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.simulation_step()
     
     def render_camera(self) -> torch.Tensor:
-        if not self.camera:
-            raise Exception("Camera is not initialized")
+        if not self.enable_camera:
+            raise ValueError("Camera is not initialized")
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
-        new_camera = 1 - (-torch.concat(self.camera_tensor_list, dim=0) / self.cfg.camera.far_plane).clamp(0, 1)
+        new_camera = 1 - (-torch.concat(self.camera_tensor_list, dim=0) / self.camera_cfg.far_plane).clamp(0, 1)
         # new_camera = torch.stack(self.camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255 # for rgb camera
         self.gym.end_access_image_tensors(self.sim)
         return new_camera
@@ -386,3 +387,56 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         super().render(sync_frame_time=sync_frame_time)
         if add_lines:
             self.gym.clear_lines(self.viewer)
+
+
+def get_sim_params(sim_cfg):
+    sim_params = gymapi.SimParams()
+    sim_params.substeps = sim_cfg.substeps
+    up_axises = {0: gymapi.UP_AXIS_Y, 1: gymapi.UP_AXIS_Z}
+    sim_params.up_axis = up_axises[sim_cfg.up_axis]
+    sim_params.gravity = gymapi.Vec3(
+        sim_cfg.gravity[0],
+        sim_cfg.gravity[1],
+        sim_cfg.gravity[2]
+    )
+    sim_params.use_gpu_pipeline = sim_cfg.use_gpu_pipeline
+    
+    exclude_keys = []
+    
+    physx_param = sim_cfg.physx
+    for k, v in dict(physx_param).items():
+        if hasattr(sim_params.physx, k) and v is not None:
+            setattr(sim_params.physx, k, v)
+        elif k not in exclude_keys:
+            print(f'\033[31mWarning: {k} is not a valid physx param.\033[0m')
+    return sim_params
+
+def get_asset_options(asset_cfg):
+    asset_options = gymapi.AssetOptions()
+    exclude_keys = [
+        'file', 'name', 'base_link_name', 'foot_name', 'penalize_contacts_on',
+        'terminate_after_contacts_on', 'collision_mask', 'assets_per_env', 'segmentation_id',
+        'walls', 'ground_plane', 'n_assets']
+    for k, v in dict(asset_cfg).items():
+        if hasattr(asset_options, k) and v is not None:
+            setattr(asset_options, k, v)
+        elif k not in exclude_keys:
+            print(f'\033[31mWarning: {k} is not a valid asset param.\033[0m')
+    return asset_options
+
+def get_camera_properties(camera_cfg):
+    # Set Camera Properties
+    camera_props = gymapi.CameraProperties()
+    exclude_keys = ['max_dist', 'type', 'name', 'onboard_position', 'onboard_attitude']
+    for k, v in dict(camera_cfg).items():
+        if hasattr(camera_props, k) and v is not None:
+            setattr(camera_props, k, v)
+        elif k not in exclude_keys:
+            print(f'\033[31mWarning: {k} is not a valid asset param.\033[0m')
+    # local camera transform
+    local_transform = gymapi.Transform()
+    # position of the camera relative to the body
+    local_transform.p = gymapi.Vec3(*camera_cfg.onboard_position)
+    # orientation of the camera relative to the body
+    local_transform.r = gymapi.Quat(*camera_cfg.onboard_attitude)
+    return camera_props, local_transform

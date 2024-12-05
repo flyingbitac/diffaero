@@ -1,5 +1,6 @@
 name: obstacle_avoidance
 
+dynamics: ${dynamics}
 dt: 0.0333
 length: 7.5
 n_envs: ${n_envs}
@@ -8,17 +9,9 @@ max_vel: 3.
 r_drone: 0.2
 n_obstacles: 15
 
-vision: True
+sensor: ${sensor}
 
 n_substeps: 1
-
-camera:
-  type: "raydist" # "isaacgym" or "raydist"
-  width: 12
-  height: 12
-  horizontal_fov: 90.0
-  max_dist: 20.0
-  onboard_pos: [0.2, 0., 0.05]
 
 obstacles:
   n_obstacles: ${env.n_obstacles}
@@ -63,20 +56,7 @@ render:
     pos: [-5, -5, 4]
     lookat: [0, 0, 0]
   
-  camera:
-    type: ${env.camera.type}
-    enable_tensors: True
-    width: ${env.camera.width}
-    height: ${env.camera.height}
-    horizontal_fov: ${env.camera.horizontal_fov}
-    supersampling_horizontal: 1
-    supersampling_vertical: 1
-    far_plane: ${env.camera.max_dist}
-    use_collision_geometry: False
-    
-    transform:
-      p: ${env.camera.onboard_pos}
-      r: [0., 0., 0., 1.]
+  camera: ${env.sensor}
   
   robot_asset:
     file: "resources/robots/simple_quad.urdf"

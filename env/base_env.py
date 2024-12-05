@@ -8,20 +8,21 @@ from quaddif.dynamics.quadrotor import QuadrotorModel
 from quaddif.dynamics.pointmass import PointMassModel, point_mass_quat
 
 class BaseEnv:
-    def __init__(self, env_cfg: DictConfig, model_cfg: DictConfig, device: torch.device):
-        self.dynamic_type = model_cfg.name
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        self.dynamic_type = cfg.dynamics.name
         assert self.dynamic_type in ["pointmass", "quadrotor"]
         self.model: Union[PointMassModel, QuadrotorModel] = {
             "pointmass": PointMassModel,
             "quadrotor": QuadrotorModel
-        }[self.dynamic_type](model_cfg, env_cfg.n_envs, env_cfg.dt, env_cfg.n_substeps, device)
-        self.dt: float = env_cfg.dt
-        self.L: float = env_cfg.length
-        self.n_envs: int = env_cfg.n_envs
+        }[self.dynamic_type](cfg.dynamics, cfg.n_envs, cfg.dt, cfg.n_substeps, device)
+        self.dt: float = cfg.dt
+        self.L: float = cfg.length
+        self.n_envs: int = cfg.n_envs
         self.target_pos = torch.zeros(self.n_envs, 3, device=device)
         self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.int)
-        self.max_steps: float = env_cfg.max_time / env_cfg.dt
-        self.max_vel: float = env_cfg.max_vel
+        self.max_steps: float = cfg.max_time / cfg.dt
+        self.max_vel: float = cfg.max_vel
+        self.cfg = cfg
         self.reset_indices = None
         self.device = device
     

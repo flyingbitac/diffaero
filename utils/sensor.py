@@ -1,6 +1,9 @@
+import math
+
 import torch
 from torch import Tensor
 from pytorch3d import transforms as T
+from omegaconf import DictConfig
 
 @torch.jit.script
 def raydist3d_sphere(
@@ -70,17 +73,18 @@ def raydist3d_cube(
     return raydist.min(dim=-1).values # [n_envs, n_rays]
 
 class Camera:
-    def __init__(self, cfg, device):
-        self.H = cfg.height
-        self.W = cfg.width
-        self.hfov = cfg.horizontal_fov
-        self.vfov = self.hfov * self.H / self.W
-        self.max_dist = cfg.max_dist
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        assert cfg.name == "camera"
+        self.H: int = cfg.height
+        self.W: int = cfg.width
+        self.hfov: float = cfg.horizontal_fov
+        self.vfov: float = self.hfov * self.H / self.W
+        self.max_dist: float = cfg.max_dist
         self.device = device
-        self.ray_directions = self._get_ray_directions_plane()
-        # self.ray_directions = self._get_ray_directions_sphere()
+        self.ray_directions = self._get_ray_directions_plane() # [H, W, 3]
+        # self.ray_directions = self._get_ray_directions_sphere() # [H, W, 3]
     
-    def get_raydist(
+    def __call__(
         self,
         sphere_pos: Tensor, # [n_envs, n_spheres, 3]
         sphere_r: Tensor, # [n_envs, n_spheres]
@@ -96,24 +100,25 @@ class Camera:
         depth = 1. - raydist.reshape(-1, self.H, self.W) / self.max_dist # [n_envs, H, W]
         return depth
     
+    # TODO: add domain randomization
     def world2body(self, quat_xyzw: Tensor) -> Tensor:
         quat_wxyz = quat_xyzw.roll(1, dims=-1) # [n_envs, 4]
         quat_wxyz = quat_wxyz.unsqueeze(1).expand(-1, self.H*self.W, -1) # [n_envs, n_rays, 4]
         return T.quaternion_apply(quat_wxyz, self.ray_directions.view(1, -1, 3)) # [n_envs, n_rays, 3]
         
     def _get_ray_directions_sphere(self):
+        forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
+        
         pitch = torch.linspace(0.5*self.vfov, -0.5*self.vfov, self.H, device=self.device) * torch.pi / 180
         yaw = torch.linspace(-0.5*self.hfov, 0.5*self.hfov, self.W, device=self.device) * torch.pi / 180
-        pitch, yaw = torch.meshgrid(pitch, yaw)
+        pitch, yaw = torch.meshgrid(pitch, yaw, indexing="ij")
         roll = torch.zeros_like(pitch)
-        ypr = torch.stack([yaw, pitch, roll], dim=-1)
-        rotmat = T.euler_angles_to_matrix(ypr, convention="ZYX") # [H, W, 3, 3]
-        forward = Tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1).unsqueeze(-1) # [H, W, 3, 1]
-        directions = rotmat.transpose(-1, -2) @ forward # [H, W, 3, 1]
+        rpy = torch.stack([roll, pitch, yaw], dim=-1)
+        rotmat = T.euler_angles_to_matrix(rpy, convention='XYZ') # [H, W, 3, 3]
+        directions = rotmat.transpose(-1, -2) @ forward.unsqueeze(-1) # [H, W, 3, 1]
         return directions.squeeze(-1) # [H, W, 3]
 
     def _get_ray_directions_plane(self):
-        import math
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
         
         vangle = 0.5 * self.vfov * torch.pi / 180
@@ -127,3 +132,49 @@ class Camera:
         horizontal_offset = torch.concat([zero, horizontal_offset, zero], dim=-1) # [1, W, 3]
         
         return forward + vertical_offset + horizontal_offset # [H, W, 3]
+
+
+class LiDAR:
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        self.H: int = cfg.n_rays_vertical
+        self.W: int = cfg.n_rays_horizontal
+        self.dep_angle_rad: float = cfg.depression_angle * torch.pi / 180
+        self.ele_angle_rad: float = cfg.elevation_angle * torch.pi / 180
+        self.max_dist: float = cfg.max_dist
+        self.device = device
+        self.ray_directions = self._get_ray_directions() # [H, W, 3]
+    
+    def __call__(
+        self,
+        sphere_pos: Tensor, # [n_envs, n_spheres, 3]
+        sphere_r: Tensor, # [n_envs, n_spheres]
+        box_min: Tensor, # [n_envs, n_cubes, 3]
+        box_max: Tensor, # [n_envs, n_cubes, 3]
+        start: Tensor, # [n_envs, n_rays, 3]
+        quat_xyzw: Tensor, # [n_envs, 4]
+    ) -> Tensor: # [n_envs, n_rays]
+        ray_directions = self.world2body(quat_xyzw) # [n_envs, n_rays, 3]
+        raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, self.max_dist) # [n_envs, n_rays]
+        raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions, self.max_dist) # [n_envs, n_rays]
+        raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
+        depth = 1. - raydist.reshape(-1, self.H, self.W) / self.max_dist # [n_envs, H, W]
+        return depth
+    
+    # TODO: add domain randomization
+    def world2body(self, quat_xyzw: Tensor) -> Tensor:
+        quat_wxyz = quat_xyzw.roll(1, dims=-1) # [n_envs, 4]
+        quat_wxyz = quat_wxyz.unsqueeze(1).expand(-1, self.H*self.W, -1) # [n_envs, n_rays, 4]
+        return T.quaternion_apply(quat_wxyz, self.ray_directions.view(1, -1, 3)) # [n_envs, n_rays, 3]
+    
+    def _get_ray_directions(self):
+        forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
+        
+        yaw = torch.arange(0, self.W, device=self.device) / self.W * 2 * torch.pi
+        pitch = torch.linspace(self.ele_angle_rad, self.dep_angle_rad, self.H, device=self.device)
+        pitch, yaw = torch.meshgrid(pitch, yaw, indexing="ij")
+        roll = torch.zeros_like(pitch)
+        rpy = torch.stack([roll, pitch, yaw], dim=-1)
+        rotmat = T.euler_angles_to_matrix(rpy, convention='XYZ') # [H, W, 3, 3]
+        # rotmat = T.euler_angles_to_matrix(ypr, convention='ZYX') # [H, W, 3, 3]
+        directions = rotmat.transpose(-1, -2) @ forward.unsqueeze(-1) # [H, W, 3, 1]
+        return directions.squeeze(-1) # [H, W, 3]

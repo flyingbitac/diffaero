@@ -1,0 +1,9 @@
+name: lidar
+
+depression_angle: -20.
+elevation_angle: 20.
+
+n_rays_vertical: 5
+n_rays_horizontal: 36
+
+max_dist: 20
