@@ -49,8 +49,6 @@ class DeterministicActorCNN(nn.Module):
         return self.actor(torch.cat([obs["state"], self.cnn(obs["perception"])], dim=-1))
     
     def save(self, path: str):
-        if not os.path.exists(path):
-            os.makedirs(path)
         torch.save({
             "cnn": self.cnn.state_dict(),
             "mlp": self.actor.state_dict()}, os.path.join(path, "actor.pth"))
@@ -93,8 +91,6 @@ class StochasticActorCNN(nn.Module):
         return action, sample, logprob.sum(-1), entropy
     
     def save(self, path: str):
-        if not os.path.exists(path):
-            os.makedirs(path)
         torch.save({
             "cnn": self.cnn.state_dict(),
             "actor_mean": self.actor_mean.state_dict(),

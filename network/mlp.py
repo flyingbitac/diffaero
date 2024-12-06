@@ -39,8 +39,6 @@ class DeterministicActorMLP(nn.Module):
         return self.actor(obs)
     
     def save(self, path: str):
-        if not os.path.exists(path):
-            os.makedirs(path)
         torch.save(self.actor.state_dict(), os.path.join(path, "actor.pth"))
 
     def load(self, path: str):
@@ -78,8 +76,6 @@ class StochasticActorMLP(nn.Module):
         return action, sample, logprob.sum(-1), entropy
     
     def save(self, path: str):
-        if not os.path.exists(path):
-            os.makedirs(path)
         torch.save(
             {"actor_mean": self.actor_mean.state_dict(),
              "actor_logstd": self.actor_logstd}, os.path.join(path, "actor.pth"))
