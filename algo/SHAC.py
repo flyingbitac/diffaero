@@ -1,5 +1,6 @@
 from typing import Union, Sequence, Tuple, Dict, Optional
 from copy import deepcopy
+import os
 
 from omegaconf import DictConfig
 import torch
@@ -179,6 +180,8 @@ class SHAC:
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
 
     def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
         self.agent.save(path)
     
     def load(self, path):

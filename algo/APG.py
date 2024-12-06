@@ -1,4 +1,5 @@
 from typing import Callable, Sequence, Tuple, Dict, Union, Optional
+import os
 
 from omegaconf import DictConfig
 import torch
@@ -61,6 +62,8 @@ class APG:
         return state, policy_info, env_info, losses, grad_norms
     
     def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
         self.actor.save(path)
     
     def load(self, path):

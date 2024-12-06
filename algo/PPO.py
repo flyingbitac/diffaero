@@ -1,5 +1,6 @@
 from typing import Union, List, Tuple, Dict
 from collections import defaultdict
+import os
 
 from omegaconf import DictConfig
 import torch
@@ -158,6 +159,8 @@ class PPO:
         self.buffer.add(state, sample, logprob, reward, done, value, next_value)
     
     def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
         self.agent.save(path)
     
     def load(self, path):
