@@ -43,19 +43,20 @@ def learn(
 ):
     state = env.reset()
     max_success_rate = 0
-    pbar = tqdm(range(cfg.n_updates))
+    pbar = tqdm(range(cfg.n_updates),ncols=150)
     for i in pbar:
         t1 = pbar._time()
         env.detach()
         state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
         l_episode = env_info["stats"]["l"].float().mean().item()
         success_rate = env_info['stats']['success_rate']
-        pbar.set_postfix({
-            "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-            "loss": f"{env_info['loss_components']['total_loss']:.3f}",
-            "l_episode": f"{l_episode:.1f}",
-            "success_rate": f"{success_rate:.2f}",
-            "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
+        if cfg.algo.name != 'world':
+            pbar.set_postfix({
+                "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
+                "loss": f"{env_info['loss_components']['total_loss']:.3f}",
+                "l_episode": f"{l_episode:.1f}",
+                "success_rate": f"{success_rate:.2f}",
+                "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
         log_info = {
             "env_loss": env_info["loss_components"],
             "agent_loss": losses,
@@ -64,6 +65,8 @@ def learn(
         }
         if "value" in policy_info.keys():
             log_info["value"] = policy_info["value"].mean().item()
+        if "WorldModel/state_total_loss" in policy_info.keys():
+            log_info.update(policy_info)
         if (i+1) % 10 == 0:
             logger.log_scalars(log_info, i+1)
         

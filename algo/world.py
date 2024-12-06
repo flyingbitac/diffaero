@@ -61,28 +61,20 @@ def train_worldmodel(world_model:StateModel,replaybuffer:ReplayBuffer,opt,traini
     opt.step()
     opt.zero_grad()
     
-    # logger.log("WorldModel/state_total_loss",total_loss.item())
-    # logger.log("WorldModel/state_rep_loss",rep_loss.item())
-    # logger.log("WorldModel/state_dyn_loss",dyn_loss.item())
-    # logger.log("WorldModel/state_rec_loss",rec_loss.item())
-    # logger.log("WorldModel/grad_norm",grad_norm.item())
-    # logger.log("WorldModel/state_rew_loss",rew_loss.item())
-    # logger.log("WorldModel/state_end_loss",end_loss.item())
-    
     world_info = {
-        'WorldModel/state_total_loss',total_loss.item(),
-        'WorldModel/state_rep_loss',rep_loss.item(),
-        'WorldModel/state_dyn_loss',dyn_loss.item(),
-        'WorldModel/state_rec_loss',rec_loss.item(),
-        'WorldModel/grad_norm',grad_norm.item(),
-        'WorldModel/state_rew_loss',rew_loss.item(),
-        'WorldModel/state_end_loss',end_loss.item()
+        'WorldModel/state_total_loss':total_loss.item(),
+        'WorldModel/state_rep_loss':rep_loss.item(),
+        'WorldModel/state_dyn_loss':dyn_loss.item(),
+        'WorldModel/state_rec_loss':rec_loss.item(),
+        'WorldModel/grad_norm':grad_norm.item(),
+        'WorldModel/state_rew_loss':rew_loss.item(),
+        'WorldModel/state_end_loss':end_loss.item()
     }
     
     return world_info
 
 class World_Agent:
-    def __init__(self,cfg,env):
+    def __init__(self,cfg,env,device):
         device_idx = f"{cfg.device}"
         device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() else "cpu")
         world_agent_cfg = getattr(cfg,"algo")
@@ -124,10 +116,10 @@ class World_Agent:
             if self.replaybuffer.ready() or self.world_agent_cfg.common.use_checkpoint:
                 latent = self.state_model.sample_with_post(state,self.hidden)[0].flatten(1)
                 action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1))[0]
+                self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
             else:
                 action = torch.randn(self.cfg.n_envs,3,device=state.device)
             next_obs,rewards,terminated,env_info = env.step(action)
-            self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
             rewards = 10.*(1-rewards*0.1)
             self.replaybuffer.append(state,action,rewards,terminated)
             
@@ -137,10 +129,17 @@ class World_Agent:
                         self.hidden[i] = 0
             
         if self.replaybuffer.ready():
-            world_info = train_worldmodel(self.state_model,self.replaybuffer,self.opt,self.training_hyper,self.logger)
-            agent_info = train_agents(self.agent,self.world_model_env,self.cfg)
-        return policy_info, env_info, 0.0, 0.0
+            world_info = train_worldmodel(self.state_model,self.replaybuffer,self.opt,self.training_hyper)
+            agent_info = train_agents(self.agent,self.world_model_env,self.world_agent_cfg)
+            policy_info.update(world_info)
+            policy_info.update(agent_info)
+            
+        return next_obs,policy_info, env_info, 0.0, 0.0
 
-        
-    def save(self,global_steps):
-        torch.save(self.state_model.state_dict(), f"./ckpt/statemodel/statemodel_{global_steps}")
+    def save(self,path):
+        torch.save(self.state_model.state_dict(), f"{path}/statemodel")
+        torch.save(self.agent.state_dict(), f"{path}/agent")
+    
+    @staticmethod
+    def build(cfg,env,device):
+        return World_Agent(cfg,env,device)

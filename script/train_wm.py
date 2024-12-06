@@ -179,5 +179,5 @@ def main(cfg: DictConfig):
         if env.renderer is not None:
             env.renderer.close()
     
-    
-main()
+if __name__ == '__main__':  
+    main()

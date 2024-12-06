@@ -258,12 +258,12 @@ class ActorCriticAgent(nn.Module):
             logger.log('ActorCritic/total_loss', loss.item())
 
         agent_info = {
-            'ActorCritic/policy_loss', policy_loss.item(),
-            'ActorCritic/value_loss', value_loss.item(),
-            'ActorCritic/entropy_loss', entropy_loss.item(),
-            'ActorCritic/S', S.item(),
-            'ActorCritic/gradnorm', gradnorm.item(),
-            'ActorCritic/total_loss', loss.item()
+            'ActorCritic/policy_loss': policy_loss.item(),
+            'ActorCritic/value_loss': value_loss.item(),
+            'ActorCritic/entropy_loss': entropy_loss.item(),
+            'ActorCritic/S': S.item(),
+            'ActorCritic/gradnorm': gradnorm.item(),
+            'ActorCritic/total_loss': loss.item()
         }
 
         return agent_info

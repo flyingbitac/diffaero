@@ -60,7 +60,7 @@ def train_agents(agent:ActorCriticAgent,state_env:StateEnv,cfg:DictConfig,logger
     trainingcfg = getattr(cfg,"actor_critic").training
     feats,actions,rewards,ends,states,org_samples = collect_imagine_trj(state_env,agent,trainingcfg)
     # rewards = rewards/100.
-    agent.update(feats,org_samples,rewards,ends,logger)
+    _ = agent.update(feats,org_samples,rewards,ends,logger)
     reward_sum = rewards.sum(dim=-1).mean()
     logger.log('ActorCritic/avg_return', reward_sum.item())
     
