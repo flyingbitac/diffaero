@@ -106,6 +106,17 @@ class World_Agent:
         self.opt = configure_opt(self.state_model,**getattr(world_agent_cfg,'state_predictor').optimizer)
 
         self.hidden = torch.zeros(cfg.n_envs, statemodelcfg.hidden_dim, device=device)
+    
+    @torch.no_grad()
+    def act(self,obs,test=False):
+        state,perception = obs['state'],obs['perception'].flatten(1)
+        state = torch.cat([state,perception],dim=-1)
+        if self.world_agent_cfg.common.use_symlog:
+            state = symlog(state)   
+        latent = self.state_model.sample_with_post(state,self.hidden)[0].flatten(1)
+        action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1))[0]
+        self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
+        return action,None
 
     def step(self,cfg,env,obs,on_step_cb=None):
         policy_info = {}
@@ -144,6 +155,10 @@ class World_Agent:
             os.makedirs(path)
         torch.save(self.state_model.state_dict(), f"{path}/statemodel.pth")
         torch.save(self.agent.state_dict(), f"{path}/agent.pth")
+        
+    def load(self,path):
+        self.state_model.load_state_dict(torch.load(os.path.join(path, "statemodel.pth")))
+        self.agent.load_state_dict(torch.load(os.path.join(path, "agent.pth")))
     
     @staticmethod
     def build(cfg,env,device):
