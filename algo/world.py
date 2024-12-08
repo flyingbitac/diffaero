@@ -4,6 +4,7 @@ from quaddif.algo.models.blocks import symlog
 from quaddif.algo.wmenv.world_state_env import StateEnv
 from quaddif.algo.wmenv.replaybuffer import ReplayBuffer
 from quaddif.algo.wmenv.utils import configure_opt
+import os
 
 import torch
 
@@ -133,12 +134,16 @@ class World_Agent:
             agent_info = train_agents(self.agent,self.world_model_env,self.world_agent_cfg)
             policy_info.update(world_info)
             policy_info.update(agent_info)
+        
+        obs = next_obs
             
-        return next_obs,policy_info, env_info, 0.0, 0.0
+        return obs,policy_info, env_info, 0.0, 0.0
 
     def save(self,path):
-        torch.save(self.state_model.state_dict(), f"{path}/statemodel")
-        torch.save(self.agent.state_dict(), f"{path}/agent")
+        if not os.path.exists(path):
+            os.makedirs(path)
+        torch.save(self.state_model.state_dict(), f"{path}/statemodel.pth")
+        torch.save(self.agent.state_dict(), f"{path}/agent.pth")
     
     @staticmethod
     def build(cfg,env,device):
