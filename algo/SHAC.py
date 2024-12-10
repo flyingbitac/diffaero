@@ -8,7 +8,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.network import StochasticActorCritic, RPLActorCritic
+from quaddif.network import StochasticActorCritic_V, RPLActorCritic, StochasticActorCritic_Q
 
 class SHACRolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, device):
@@ -56,7 +56,7 @@ class SHAC:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCritic(cfg)(state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCritic_V(cfg, state_dim, hidden_dim, action_dim).to(device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
         self.buffer = SHACRolloutBuffer(l_rollout, n_envs, state_dim, device)
@@ -73,9 +73,14 @@ class SHAC:
         self.n_envs: int = n_envs
         self.l_rollout: int = l_rollout
         self.device = device
+        
+        self.actor_loss = torch.tensor(0., device=self.device)
+        self.rollout_gamma = torch.ones(self.n_envs, device=self.device)
+        self.cumulated_loss = torch.zeros(self.n_envs, device=self.device)
+        self.entropy_loss = torch.tensor(0., device=self.device)
     
     def act(self, state, test=False):
-        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
         action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
@@ -122,30 +127,30 @@ class SHAC:
         target_values = advantages + self.buffer.values
         return target_values.view(-1)
     
-    def record_loss(self, loss, info, extra, last_step=False):
+    def record_loss(self, loss, policy_info, env_info, last_step=False):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor], Optional[bool]) -> Tensor
-        reset = torch.ones_like(extra["reset"]) if last_step else extra["reset"]
-        truncated = torch.ones_like(extra["reset"]) if last_step else extra["truncated"]
+        reset = torch.ones_like(env_info["reset"]) if last_step else env_info["reset"]
+        truncated = torch.ones_like(env_info["reset"]) if last_step else env_info["truncated"]
         # add cumulated loss if rollout ends or trajectory ends (terminated or truncated)
         self.cumulated_loss = self.cumulated_loss + self.rollout_gamma * loss
         cumulated_loss = self.cumulated_loss[reset].sum()
         # add terminal value if rollout ends or truncated
-        next_value = self.value_target(extra["next_state_before_reset"])
+        next_value = self.value_target(env_info["next_state_before_reset"])
         terminal_value = (self.rollout_gamma * self.discount * next_value)[truncated].sum()
         assert terminal_value.requires_grad == True
         # add up the discounted cumulated loss, the terminal value and the entropy loss
         self.actor_loss = self.actor_loss + cumulated_loss + terminal_value
-        self.entropy_loss = self.entropy_loss - info["entropy"].sum()
+        self.entropy_loss = self.entropy_loss - policy_info["entropy"].sum()
         # reset the discount factor, clear the cumulated loss if trajectory ends
         self.rollout_gamma = torch.where(reset, 1, self.rollout_gamma * self.discount)
         self.cumulated_loss = torch.where(reset, 0, self.cumulated_loss)
         return next_value.detach()
 
     def clear_loss(self):
-        self.actor_loss = torch.tensor(0., device=self.device)
-        self.rollout_gamma = torch.ones(self.n_envs, device=self.device)
-        self.cumulated_loss = torch.zeros(self.n_envs, device=self.device)
-        self.entropy_loss = torch.tensor(0., device=self.device)
+        self.rollout_gamma.fill_(1.)
+        self.actor_loss.detach_().fill_(0.)
+        self.cumulated_loss.detach_().fill_(0.)
+        self.entropy_loss.detach_().fill_(0.)
         
     def update_actor(self) -> Dict[str, float]:
         actor_loss = self.actor_loss / (self.n_envs * self.l_rollout)
@@ -250,6 +255,175 @@ class SHAC_RPL(SHAC):
     @staticmethod
     def build(cfg, env, device):
         return SHAC_RPL(
+            cfg=cfg.algo,
+            state_dim=env.state_dim,
+            hidden_dim=list(cfg.algo.hidden_dim),
+            action_dim=env.action_dim,
+            n_envs=env.n_envs,
+            l_rollout=cfg.l_rollout,
+            device=device)
+
+class SHACQRolloutBuffer:
+    def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
+        factory_kwargs = {"dtype": torch.float32, "device": device}
+        
+        assert isinstance(state_dim, tuple) or isinstance(state_dim, int)
+        if isinstance(state_dim, tuple):
+            self.states = TensorDict({
+                "state": torch.zeros((l_rollout, num_envs, state_dim[0]), **factory_kwargs),
+                "perception": torch.zeros((l_rollout, num_envs, state_dim[1][0], state_dim[1][1]), **factory_kwargs)
+            }, batch_size=(l_rollout, num_envs))
+        else:
+            self.states = torch.zeros((l_rollout, num_envs, state_dim), **factory_kwargs)
+        self.next_states = self.states.clone()
+        self.actions = torch.zeros((l_rollout, num_envs, action_dim), **factory_kwargs)
+        self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
+        self.next_terminated = torch.zeros((l_rollout, num_envs), **factory_kwargs)
+    
+    def clear(self):
+        self.step = 0
+    
+    @torch.no_grad()
+    def add(self, state, action, reward, next_state, next_terminated):
+        # type: (Union[Tensor, TensorDict], Tensor, Tensor, Union[Tensor, TensorDict], Tensor) -> None
+        self.states[self.step] = state
+        self.actions[self.step] = action
+        self.rewards[self.step] = reward
+        self.next_states[self.step] = next_state
+        self.next_terminated[self.step] = next_terminated.float()
+        self.step += 1
+
+class SHAC_Q:
+    def __init__(
+        self,
+        cfg: DictConfig,
+        state_dim: int,
+        hidden_dim: Sequence[int],
+        action_dim: int,
+        n_envs: int,
+        l_rollout: int,
+        device: torch.device
+    ):
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.agent = StochasticActorCritic_Q(cfg, state_dim, hidden_dim, action_dim).to(device)
+        self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
+        self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
+        self.buffer = SHACQRolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
+        self.agent_target = deepcopy(self.agent)
+        for p in self.agent_target.parameters():
+            p.requires_grad_(False)
+        
+        self.discount: float = cfg.gamma
+        self.entropy_weight: float = cfg.entropy_weight
+        self.actor_grad_norm: float = cfg.actor_grad_norm
+        self.critic_grad_norm: float = cfg.critic_grad_norm
+        self.n_minibatch: int = cfg.n_minibatch
+        self.n_envs: int = n_envs
+        self.l_rollout: int = l_rollout
+        self.device = device
+        
+        self.one_step_loss = torch.zeros(self.n_envs, device=self.device)
+        self.next_values = torch.zeros(self.n_envs, device=self.device)
+        self.entropy_loss = torch.zeros(self.n_envs, device=self.device)
+    
+    def act(self, state, test=False):
+        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
+        return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
+    
+    def value_target(self, state, action):
+        # type: (Union[Tensor, TensorDict], Tensor) -> Tensor
+        return self.agent_target.get_value(state, action)
+
+    def record_loss(self, loss, policy_info, env_info, terminated):
+        # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor], Tensor) -> Tensor
+        self.one_step_loss = self.one_step_loss + loss
+        next_state = env_info["next_state_before_reset"].detach()
+        next_values = self.agent.get_action_and_value(next_state)[-1] * (1. - terminated.float())
+        self.next_values = self.next_values + next_values
+        self.entropy_loss = self.entropy_loss - policy_info["entropy"]
+
+    def clear_loss(self):
+        self.one_step_loss.detach_().fill_(0.)
+        self.next_values.detach_().fill_(0.)
+        self.entropy_loss.detach_().fill_(0.)
+        
+    def update_actor(self) -> Dict[str, float]:
+        actor_loss = (self.one_step_loss + self.discount * self.next_values).sum() / (self.n_envs * self.l_rollout)
+        entropy_loss = self.entropy_loss.sum() / (self.n_envs * self.l_rollout)
+        total_loss = actor_loss + self.entropy_weight * entropy_loss
+        self.actor_optim.zero_grad()
+        total_loss.backward()
+        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
+        if self.actor_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+        self.actor_optim.step()
+        for p, p_t in zip(self.agent.actor.parameters(), self.agent_target.actor.parameters()):
+            p_t.data.lerp_(p.data, 5e-3)
+        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm}
+    
+    def update_critic(self) -> Dict[str, float]:
+        T, N = self.l_rollout, self.n_envs
+        batch_indices = torch.randperm(T*N, device=self.device)
+        mb_size = T*N // self.n_minibatch
+        states = self.buffer.states.flatten(0, 1)
+        actions = self.buffer.actions.flatten(0, 1)
+        rewards = self.buffer.rewards.flatten(0, 1)
+        next_states = self.buffer.next_states.flatten(0, 1)
+        terminated = self.buffer.next_terminated.flatten(0, 1)
+        with torch.no_grad():
+            next_values = self.agent_target.get_action_and_value(next_states)[-1]
+            target_values = rewards + (1 - terminated) * self.discount * next_values
+        
+        for start in range(0, T*N, mb_size):
+            end = start + mb_size
+            mb_indices = batch_indices[start:end]
+            values = self.agent.get_value(states[mb_indices], actions[mb_indices])
+            critic_loss = F.mse_loss(values, target_values[mb_indices])
+            self.critic_optim.zero_grad()
+            critic_loss.backward()
+            grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
+            if self.critic_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+            self.critic_optim.step()
+        for p, p_t in zip(self.agent.critic.parameters(), self.agent_target.critic.parameters()):
+            p_t.data.lerp_(p.data, 5e-3)
+        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
+
+    def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.agent.save(path)
+    
+    def load(self, path):
+        self.agent.load(path)
+    
+    def step(self, cfg, env, state, on_step_cb=None):
+        self.buffer.clear()
+        self.clear_loss()
+        for t in range(cfg.l_rollout):
+            action, policy_info = self.act(state)
+            next_state, loss, terminated, env_info = env.step(action)
+            self.record_loss(loss, policy_info, env_info, terminated)
+            # divide by 10 to avoid disstability
+            self.buffer.add(state, action, loss/10, env_info["next_state_before_reset"], terminated)
+            state = next_state
+            if on_step_cb is not None:
+                on_step_cb(
+                    state=state,
+                    action=action,
+                    policy_info=policy_info,
+                    env_info=env_info)
+        actor_losses, actor_grad_norms = self.update_actor()
+        critic_losses, critic_grad_norms = self.update_critic()
+        losses = {**actor_losses, **critic_losses}
+        grad_norms = {**actor_grad_norms, **critic_grad_norms}
+        return state, policy_info, env_info, losses, grad_norms
+        
+    @staticmethod
+    def build(cfg, env, device):
+        return SHAC_Q(
             cfg=cfg.algo,
             state_dim=env.state_dim,
             hidden_dim=list(cfg.algo.hidden_dim),

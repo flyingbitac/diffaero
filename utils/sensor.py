@@ -1,7 +1,9 @@
+from typing import Optional
 import math
 
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
@@ -34,9 +36,7 @@ def raydist3d_sphere(
     dist_center2ray = rel_dist * sintheta # [n_envs, n_rays, n_spheres]
     obst_r = obst_r.unsqueeze(1) # [n_envs, 1, n_spheres]
     raydist = rel_dist * costheta - torch.sqrt(torch.pow(obst_r, 2) - torch.pow(dist_center2ray, 2)) # [n_envs, n_rays, n_spheres]
-    valid = torch.logical_and(dist_center2ray < obst_r, costheta > 0)
-    valid = torch.logical_and(valid, raydist < max_dist)
-    # valid = (dist_center2ray < obst_r) & (costheta > 0) & (raydist < max_dist) # [n_envs, n_rays, n_spheres]
+    valid = torch.logical_and(dist_center2ray < obst_r, costheta > 0) # [n_envs, n_rays, n_spheres]
     raydist_valid = torch.where(valid, raydist, max_dist) # [n_envs, n_rays, n_spheres]
     return raydist_valid.min(dim=-1).values # [n_envs, n_rays]
 
@@ -72,6 +72,29 @@ def raydist3d_cube(
     raydist = torch.where(valid, tentry, max_dist) # [n_envs, n_rays, n_cubes]
     return raydist.min(dim=-1).values # [n_envs, n_rays]
 
+@torch.jit.script
+def raydist3d_ground_plane(
+    z_ground_plane: float,
+    start: Tensor, # [n_envs, n_rays, 3]
+    direction: Tensor, # [n_envs, n_rays, 3]
+    max_dist: float
+) -> Tensor:
+    """Compute the ray distance based on the start of the ray,
+    the direction of the ray, and the position of the ground plane.
+
+    Args:
+        z_ground_plane (float): The absolute height of the ground plane in world frame.
+        start (torch.Tensor): The start point of the ray.
+        direction (torch.Tensor): The direction of the ray.
+        max_dist (float): The maximum traveling distance of the ray.
+
+    Returns:
+        torch.Tensor: The distance of the ray to the ground plane.
+    """
+    valid = (start[..., 2] - z_ground_plane) * direction[..., 2] < 0 # [n_envs, n_rays]
+    raydist = torch.where(valid, (z_ground_plane - start[..., 2]) / direction[..., 2], max_dist) # [n_envs, n_rays]
+    return raydist
+
 class Camera:
     def __init__(self, cfg: DictConfig, device: torch.device):
         assert cfg.name == "camera"
@@ -81,8 +104,8 @@ class Camera:
         self.vfov: float = self.hfov * self.H / self.W
         self.max_dist: float = cfg.max_dist
         self.device = device
-        self.ray_directions = self._get_ray_directions_plane() # [H, W, 3]
-        # self.ray_directions = self._get_ray_directions_sphere() # [H, W, 3]
+        self.ray_directions = F.normalize(self._get_ray_directions_plane(), dim=-1) # [H, W, 3]
+        # self.ray_directions = F.normalize(self._get_ray_directions_sphere(), dim=-1) # [H, W, 3]
     
     def __call__(
         self,
@@ -92,11 +115,16 @@ class Camera:
         box_max: Tensor, # [n_envs, n_cubes, 3]
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
+        z_ground_plane: Optional[float] = None
     ) -> Tensor: # [n_envs, n_rays]
         ray_directions = self.world2body(quat_xyzw) # [n_envs, n_rays, 3]
         raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, self.max_dist) # [n_envs, n_rays]
         raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions, self.max_dist) # [n_envs, n_rays]
         raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
+        if z_ground_plane is not None:
+            raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions, self.max_dist) # [n_envs, n_rays]
+            raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
+        raydist.clamp_(max=self.max_dist)
         depth = 1. - raydist.reshape(-1, self.H, self.W) / self.max_dist # [n_envs, H, W]
         return depth
     
@@ -142,7 +170,7 @@ class LiDAR:
         self.ele_angle_rad: float = cfg.elevation_angle * torch.pi / 180
         self.max_dist: float = cfg.max_dist
         self.device = device
-        self.ray_directions = self._get_ray_directions() # [H, W, 3]
+        self.ray_directions = F.normalize(self._get_ray_directions(), dim=-1) # [H, W, 3]
     
     def __call__(
         self,
@@ -152,11 +180,16 @@ class LiDAR:
         box_max: Tensor, # [n_envs, n_cubes, 3]
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
+        z_ground_plane: Optional[float] = None,
     ) -> Tensor: # [n_envs, n_rays]
         ray_directions = self.world2body(quat_xyzw) # [n_envs, n_rays, 3]
         raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, self.max_dist) # [n_envs, n_rays]
         raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions, self.max_dist) # [n_envs, n_rays]
         raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
+        if z_ground_plane is not None:
+            raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions, self.max_dist) # [n_envs, n_rays]
+            raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
+        raydist.clamp_(max=self.max_dist)
         depth = 1. - raydist.reshape(-1, self.H, self.W) / self.max_dist # [n_envs, H, W]
         return depth
     

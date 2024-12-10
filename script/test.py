@@ -77,6 +77,7 @@ def main(cfg: DictConfig):
     cfg.dynamics = ckpt_cfg.dynamics
     if cfg.algo.name != 'world':
         cfg.model = ckpt_cfg.model
+    cfg.network = ckpt_cfg.network
     
     if cfg.seed != -1:
         random.seed(cfg.seed)

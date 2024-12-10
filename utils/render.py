@@ -232,7 +232,13 @@ class PositionControlRenderer(BaseRenderer):
 
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
-    def __init__(self, cfg: DictConfig, device: int, obstacle_manager: ObstacleManager, enable_camera: bool = False):
+    def __init__(
+        self,
+        cfg: DictConfig,
+        device: int,
+        obstacle_manager: ObstacleManager,
+        z_ground_plane: Optional[float] = None,
+        enable_camera: bool = False):
         self.env_spacing = cfg.env_spacing
         self.enable_camera = enable_camera
         self.camera_cfg = cfg.camera
@@ -240,6 +246,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.camera_tensor_list = []
         self.env_asset_handles = defaultdict(list)
         self.n_obstacles = cfg.env_asset.n_assets
+        self.z_ground_plane = z_ground_plane
         self.obstacle_manager = obstacle_manager
         super().__init__(cfg, device)
         self.target_pos = torch.zeros_like(self.drone_positions)
@@ -256,8 +263,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
     
     def create_envs(self):
         print("Creating environment...")
-        if self.cfg.ground_plane:
-            self.create_ground_plane(self.cfg.env_spacing + 0.1)
+        if self.z_ground_plane is not None:
+            self.create_ground_plane(-self.z_ground_plane)
             
         drone_asset_path = os.path.join(QUADDIF_ROOT_DIR, self.cfg.robot_asset.file)
         print("Loading asset:", drone_asset_path)

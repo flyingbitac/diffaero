@@ -16,13 +16,15 @@ def mlp_state_dim(state_dim: Union[int, Tuple[int, Tuple[int, int]]]) -> int:
     if isinstance(state_dim, int):
         return state_dim
     elif isinstance(state_dim, tuple):
-        return state_dim[0] + state_dim[1][0] * state_dim[1][1]
+        D, (H, W) = state_dim
+        return D + H * W
 
 def preprocess_state(state: Union[Tensor, TensorDict]) -> Tensor:
     if isinstance(state, TensorDict):
         return torch.cat([state["state"], state["perception"].flatten(1)], dim=-1)
     else:
         return state
+
 
 class DeterministicActorMLP(nn.Module):
     def __init__(
@@ -43,6 +45,7 @@ class DeterministicActorMLP(nn.Module):
 
     def load(self, path: str):
         self.actor.load_state_dict(torch.load(os.path.join(path, "actor.pth")))
+
 
 class StochasticActorMLP(nn.Module):
     def __init__(
@@ -85,7 +88,8 @@ class StochasticActorMLP(nn.Module):
         self.actor_mean.load_state_dict(actor["actor_mean"])
         self.actor_logstd.data.copy_(actor["actor_logstd"].to(self.actor_logstd.device))
 
-class CriticMLP(nn.Module):
+
+class CriticVMLP(nn.Module):
     def __init__(
         self,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
@@ -104,9 +108,9 @@ class CriticMLP(nn.Module):
     
     def load(self, path: str):
         self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth"), weights_only=True))
-        
 
-class StochasticActorCriticMLP(nn.Module):
+
+class CriticQMLP(nn.Module):
     def __init__(
         self,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
@@ -114,7 +118,29 @@ class StochasticActorCriticMLP(nn.Module):
         action_dim: int
     ):
         super().__init__()
-        self.critic = CriticMLP(state_dim, hidden_dim)
+        state_dim = mlp_state_dim(state_dim)
+        self.critic = mlp(state_dim + action_dim, hidden_dim, 1, hidden_act=nn.ELU())
+    
+    def forward(self, obs: Union[Tensor, TensorDict], action: Tensor) -> Tensor:
+        obs = preprocess_state(obs)
+        return self.critic(torch.cat([obs, action], dim=-1)).squeeze(-1)
+    
+    def save(self, path: str):
+        torch.save(self.critic.state_dict(), os.path.join(path, "critic.pth"))
+    
+    def load(self, path: str):
+        self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth"), weights_only=True))
+        
+
+class StochasticActorCriticVMLP(nn.Module):
+    def __init__(
+        self,
+        state_dim: Union[int, Tuple[int, Tuple[int, int]]],
+        hidden_dim: Union[int, List[int]],
+        action_dim: int
+    ):
+        super().__init__()
+        self.critic = CriticVMLP(state_dim, hidden_dim)
         self.actor = StochasticActorMLP(state_dim, hidden_dim, action_dim)
 
     def get_value(self, obs: Union[Tensor, TensorDict]) -> Tensor:
@@ -137,7 +163,40 @@ class StochasticActorCriticMLP(nn.Module):
         self.critic.load(path)
 
 
-class RPLActorCriticMLP(StochasticActorCriticMLP):
+class StochasticActorCriticQMLP(nn.Module):
+    def __init__(
+        self,
+        state_dim: Union[int, Tuple[int, Tuple[int, int]]],
+        hidden_dim: Union[int, List[int]],
+        action_dim: int
+    ):
+        super().__init__()
+        self.critic = CriticQMLP(state_dim, hidden_dim, action_dim)
+        self.actor = StochasticActorMLP(state_dim, hidden_dim, action_dim)
+
+    def get_value(self, obs: Union[Tensor, TensorDict], action: Tensor) -> Tensor:
+        return self.critic(obs, action)
+
+    def get_action(self, obs, sample=None, test=False):
+        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        return self.actor(obs, sample, test)
+
+    def get_action_and_value(self, obs, sample=None, test=False):
+        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        action, sample, logprob, entropy = self.get_action(obs, sample, test)
+        value = self.get_value(obs, action)
+        return action, sample, logprob, entropy, value
+    
+    def save(self, path: str):
+        self.actor.save(path)
+        self.critic.save(path)
+    
+    def load(self, path: str):
+        self.actor.load(path)
+        self.critic.load(path)
+
+
+class RPLActorCriticMLP(StochasticActorCriticVMLP):
     def __init__(
         self,
         anchor_ckpt: str,
@@ -157,7 +216,7 @@ class RPLActorCriticMLP(StochasticActorCriticMLP):
         
         cfg_path = os.path.join(os.path.dirname(os.path.abspath(anchor_ckpt)), ".hydra", "config.yaml")
         ckpt_cfg = OmegaConf.load(cfg_path)
-        self.anchor_agent = StochasticActorCriticMLP(anchor_state_dim, list(ckpt_cfg.algo.hidden_dim), action_dim)
+        self.anchor_agent = StochasticActorCriticVMLP(anchor_state_dim, list(ckpt_cfg.algo.hidden_dim), action_dim)
         self.anchor_agent.load(anchor_ckpt)
         self.anchor_agent.eval()
         self.anchor_state_dim = anchor_state_dim

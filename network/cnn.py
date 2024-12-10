@@ -8,7 +8,7 @@ import torch.nn as nn
 from tensordict import TensorDict
 
 from quaddif.utils.nn import mlp
-from quaddif.network.mlp import StochasticActorCriticMLP
+from quaddif.network.mlp import StochasticActorCriticVMLP
 
 class CNN(nn.Module):
     def __init__(self, H, W):
@@ -102,7 +102,8 @@ class StochasticActorCNN(nn.Module):
         self.actor_mean.load_state_dict(state_dicts["actor_mean"])
         self.actor_logstd.data.copy_(state_dicts["actor_logstd"].to(self.actor_logstd.device))
 
-class CriticCNN(nn.Module):
+
+class CriticVCNN(nn.Module):
     def __init__(
         self,
         state_dim: Tuple[int, Tuple[int, int]],
@@ -114,16 +115,22 @@ class CriticCNN(nn.Module):
         self.critic = mlp(D + self.cnn.out_dim, hidden_dim, 1, hidden_act=nn.ELU())
     
     def forward(self, obs: TensorDict) -> Tensor:
-        return self.critic(torch.cat([obs["state"], self.cnn(obs["perception"])], dim=-1)).squeeze(-1)
+        obs = torch.cat([obs["state"], self.cnn(obs["perception"])], dim=-1)
+        return self.critic(obs).squeeze(-1)
     
     def save(self, path: str):
+        torch.save({
+            "cnn": self.cnn.state_dict(),
+            "critic": self.critic.state_dict()}, os.path.join(path, "critic.pth"))
         torch.save(self.critic.state_dict(), os.path.join(path, "critic.pth"))
     
     def load(self, path: str):
-        self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth"), weights_only=True))
-        
+        state_dicts = torch.load(os.path.join(path, "critic.pth"), weights_only=True)
+        self.cnn.load_state_dict(state_dicts["cnn"])
+        self.critic.load_state_dict(state_dicts["actor_mean"])
 
-class StochasticActorCriticCNN(nn.Module):
+
+class CriticQCNN(nn.Module):
     def __init__(
         self,
         state_dim: Tuple[int, Tuple[int, int]],
@@ -131,7 +138,35 @@ class StochasticActorCriticCNN(nn.Module):
         action_dim: int
     ):
         super().__init__()
-        self.critic = CriticCNN(state_dim, hidden_dim)
+        D, H, W = state_dim[0], state_dim[1][0], state_dim[1][1]
+        self.cnn = CNN(H, W)
+        self.critic = mlp(D + self.cnn.out_dim + action_dim, hidden_dim, 1, hidden_act=nn.ELU())
+    
+    def forward(self, obs: TensorDict, action: Tensor) -> Tensor:
+        obs = torch.cat([obs["state"], self.cnn(obs["perception"])], dim=-1)
+        return self.critic(torch.cat([obs, action], dim=-1)).squeeze(-1)
+    
+    def save(self, path: str):
+        torch.save({
+            "cnn": self.cnn.state_dict(),
+            "critic": self.critic.state_dict()}, os.path.join(path, "critic.pth"))
+        torch.save(self.critic.state_dict(), os.path.join(path, "critic.pth"))
+    
+    def load(self, path: str):
+        state_dicts = torch.load(os.path.join(path, "critic.pth"), weights_only=True)
+        self.cnn.load_state_dict(state_dicts["cnn"])
+        self.critic.load_state_dict(state_dicts["actor_mean"])
+
+
+class StochasticActorCriticVCNN(nn.Module):
+    def __init__(
+        self,
+        state_dim: Tuple[int, Tuple[int, int]],
+        hidden_dim: Union[int, List[int]],
+        action_dim: int
+    ):
+        super().__init__()
+        self.critic = CriticVCNN(state_dim, hidden_dim)
         self.actor = StochasticActorCNN(state_dim, hidden_dim, action_dim)
 
     def get_value(self, obs: TensorDict) -> Tensor:
@@ -147,14 +182,47 @@ class StochasticActorCriticCNN(nn.Module):
     
     def save(self, path: str):
         self.actor.save(path)
-        torch.save(self.critic.state_dict(), os.path.join(path, "critic.pth"))
+        self.critic.save(path)
     
     def load(self, path: str):
         self.actor.load(path)
-        self.critic.load_state_dict(torch.load(os.path.join(path, "critic.pth"), weights_only=True))
+        self.critic.load(path)
 
 
-class RPLActorCriticCNN(StochasticActorCriticCNN):
+class StochasticActorCriticQCNN(nn.Module):
+    def __init__(
+        self,
+        state_dim: Union[int, Tuple[int, Tuple[int, int]]],
+        hidden_dim: Union[int, List[int]],
+        action_dim: int
+    ):
+        super().__init__()
+        self.critic = CriticQCNN(state_dim, hidden_dim, action_dim)
+        self.actor = StochasticActorCNN(state_dim, hidden_dim, action_dim)
+
+    def get_value(self, obs: TensorDict, action: Tensor) -> Tensor:
+        return self.critic(obs, action)
+
+    def get_action(self, obs, sample=None, test=False):
+        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        return self.actor(obs, sample, test)
+
+    def get_action_and_value(self, obs, sample=None, test=False):
+        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        action, sample, logprob, entropy = self.get_action(obs, sample, test)
+        value = self.get_value(obs, action)
+        return action, sample, logprob, entropy, value
+    
+    def save(self, path: str):
+        self.actor.save(path)
+        self.critic.save(path)
+    
+    def load(self, path: str):
+        self.actor.load(path)
+        self.critic.load(path)
+
+
+class RPLActorCriticCNN(StochasticActorCriticVCNN):
     def __init__(
         self,
         anchor_ckpt: str,
@@ -175,7 +243,7 @@ class RPLActorCriticCNN(StochasticActorCriticCNN):
         
         cfg_path = os.path.join(os.path.dirname(os.path.abspath(anchor_ckpt)), ".hydra", "config.yaml")
         ckpt_cfg = OmegaConf.load(cfg_path)
-        self.anchor_agent = StochasticActorCriticMLP(anchor_state_dim, list(ckpt_cfg.algo.hidden_dim), action_dim)
+        self.anchor_agent = StochasticActorCriticVMLP(anchor_state_dim, list(ckpt_cfg.algo.hidden_dim), action_dim)
         self.anchor_agent.load(anchor_ckpt)
         self.anchor_agent.eval()
         self.anchor_state_dim = anchor_state_dim
