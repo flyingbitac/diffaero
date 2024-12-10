@@ -4,8 +4,7 @@ headless: ${headless}
 n_envs: ${env.n_envs}
 env_spacing: ${env.length}
 physics_engine: "physx"
-walls: False
-ground_plane: False
+ground_plane: ${env.ground_plane}
 
 sim:
   dt: ${env.dt}

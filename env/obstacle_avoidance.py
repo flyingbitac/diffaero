@@ -16,6 +16,7 @@ class ObstacleAvoidance(BaseEnv):
         super(ObstacleAvoidance, self).__init__(cfg, device)
         self.obstacle_manager = ObstacleManager(cfg.obstacles, self.n_envs, self.L, device)
         self.n_obstacles = self.obstacle_manager.n_obstacles
+        self.z_ground_plane = -0.5*self.L if cfg.ground_plane else None
         
         self.sensor_type = cfg.sensor.name
         assert self.sensor_type in ["camera", "lidar", "relpos"]
@@ -38,7 +39,11 @@ class ObstacleAvoidance(BaseEnv):
         need_renderer = (not cfg.render.headless) or use_isaacgym_camera
         if need_renderer:
             self.renderer = ObstacleAvoidanceRenderer(
-                cfg.render, device.index, self.obstacle_manager, enable_camera=use_isaacgym_camera)
+                cfg=cfg.render,
+                device=device.index,
+                obstacle_manager=self.obstacle_manager,
+                z_ground_plane=self.z_ground_plane,
+                enable_camera=use_isaacgym_camera)
         else:
             self.renderer = None
         
@@ -68,7 +73,8 @@ class ObstacleAvoidance(BaseEnv):
                     box_min=self.obstacle_manager.box_min,
                     box_max=self.obstacle_manager.box_max,
                     start=self.p.unsqueeze(1).expand(-1, H*W, -1),
-                    quat_xyzw=self.q))
+                    quat_xyzw=self.q,
+                    z_ground_plane=self.z_ground_plane))
         elif self.sensor_type == "lidar":
             H, W = self.sensor_tensor.shape[1:]
             self.sensor_tensor.copy_(self.lidar(
@@ -77,7 +83,8 @@ class ObstacleAvoidance(BaseEnv):
                 box_min=self.obstacle_manager.box_min,
                 box_max=self.obstacle_manager.box_max,
                 start=self.p.unsqueeze(1).expand(-1, H*W, -1),
-                quat_xyzw=self.q))
+                quat_xyzw=self.q,
+                z_ground_plane=self.z_ground_plane))
         else: # self.sensor_type == "relpos"
             obst_relpos = self.obstacle_manager.p_obstacles - self.p.unsqueeze(1)
             sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
@@ -234,6 +241,10 @@ class ObstacleAvoidance(BaseEnv):
         collision_cube = torch.any(dist2cube < self.r_drone, dim=-1) # [n_envs]
         
         collision = collision_sphere | collision_cube
+        
+        if self.z_ground_plane is not None:
+            collision = collision | (self.p[..., 2] - self.r_drone < self.z_ground_plane)
+        
         return collision
     
     def terminated(self) -> Tensor:
