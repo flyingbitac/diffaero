@@ -4,8 +4,8 @@ from functools import partial
 from pathlib import Path
 import random
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-from tensorboardX import SummaryWriter
 
+from tensorboardX import SummaryWriter
 from omegaconf import OmegaConf
 import numpy as np
 import torch

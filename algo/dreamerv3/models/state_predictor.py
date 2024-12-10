@@ -6,6 +6,7 @@ from torch import Tensor
 from torch.distributions import OneHotCategorical
 from typing import Optional
 from einops import rearrange,reduce
+
 from .blocks import SymLogTwoHotLoss,SymLogTwoHotLossMulti,proj
 
 @dataclass

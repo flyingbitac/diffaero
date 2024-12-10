@@ -1,12 +1,14 @@
+import os
+
+import torch
+
 from quaddif.algo.dreamerv3.models.state_predictor import StateModel
 from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
 from quaddif.algo.dreamerv3.models.blocks import symlog
 from quaddif.algo.dreamerv3.wmenv.world_state_env import StateEnv
 from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
 from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
-import os
 
-import torch
 
 @torch.no_grad()
 def collect_imagine_trj(env:StateEnv,agent:ActorCriticAgent,cfg):
@@ -89,9 +91,11 @@ class World_Agent:
         
         statemodelcfg = getattr(world_agent_cfg,"state_predictor").state_model
         statemodelcfg.state_dim = 157
-        statemodelcfg.hidden_dim = 512
-        statemodelcfg.latent_dim = 1024
+        # statemodelcfg.hidden_dim = 512
+        # statemodelcfg.latent_dim = 1024
         actorcriticcfg = getattr(world_agent_cfg,"actor_critic").model
+        actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
+        actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
         buffercfg = getattr(world_agent_cfg,"replaybuffer")
         buffercfg.state_dim = 157
         worldcfg = getattr(world_agent_cfg,"world_state_env")

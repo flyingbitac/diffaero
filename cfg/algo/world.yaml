@@ -90,10 +90,10 @@ state_predictor:
   state_model:
     _target_: algo.dreamerv3.models.state_predictor.StateModelCfg
     state_dim: 43 #state_dim+wall_distances_dim + obstacles_num*3
-    hidden_dim: 64
+    hidden_dim: 256
     action_dim: 3
-    latent_dim: 64
-    categoricals: 8
+    latent_dim: 256
+    categoricals: 32
     obstacle_relpos_dim: 60 #num_obstacles*3
     num_classes: 255
     use_simnorm: False
