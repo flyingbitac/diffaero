@@ -8,7 +8,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.network import RPLActorCritic, StochasticActorCritic
+from quaddif.network import RPLActorCritic, StochasticActorCritic_V
 
 class PPORolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
@@ -58,7 +58,7 @@ class PPO:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCritic(cfg)(state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCritic_V(cfg, state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
         self.buffer = PPORolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
         
@@ -219,8 +219,8 @@ class PPO_RPL(PPO):
     ):
         super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
         del self.agent, self.optim
-        self.agent = RPLActorCritic(cfg)(
-            cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
+        self.agent = RPLActorCritic(
+            cfg, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
         self.optim = torch.optim.Adam([
             {"params": self.agent.actor.parameters()},
             {"params": self.agent.critic.parameters()},

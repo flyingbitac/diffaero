@@ -17,7 +17,7 @@ class APG:
         l_rollout: int,
         device: torch.device
     ):
-        self.actor = DeterministicActor(cfg)(state_dim, hidden_dim, action_dim).to(device)
+        self.actor = DeterministicActor(cfg, state_dim, hidden_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.discount: float = cfg.gamma
         self.max_grad_norm: float = cfg.max_grad_norm
@@ -92,7 +92,7 @@ class APG_stochastic(APG):
     ):
         super().__init__(cfg, state_dim, hidden_dim, action_dim, l_rollout, device)
         del self.optimizer; del self.actor
-        self.actor = StochasticActor(cfg)(state_dim, hidden_dim, action_dim).to(device)
+        self.actor = StochasticActor(cfg, state_dim, hidden_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.entropy_loss = torch.zeros(1, device=device)
         self.entropy_weight: float = cfg.entropy_weight
