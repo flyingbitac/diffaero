@@ -37,8 +37,7 @@ class PositionControl(BaseEnv):
         reset = terminated | truncated
         reset_indices = reset.nonzero().squeeze(-1)
         success = truncated & torch.lt((self.p - self.target_pos).norm(dim=-1), 0.5)
-        target_vel = self.target_vel
-        loss, loss_components = self.loss_fn(target_vel, action)
+        loss, loss_components = self.loss_fn(action)
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
@@ -61,10 +60,10 @@ class PositionControl(BaseEnv):
         state = torch.concat([self.p, self.q, self.v, w], dim=-1)
         return state
     
-    def loss_fn(self, target_vel, action):
-        # type: (Tensor, Tensor) -> Tuple[Tensor, Dict[str, float]]
+    def loss_fn(self, action):
+        # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
         if self.dynamic_type == "pointmass":
-            vel_diff = (self.model._vel_ema - target_vel).norm(dim=-1)
+            vel_diff = (self.model._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
@@ -80,7 +79,7 @@ class PositionControl(BaseEnv):
             yaw, pitch, roll = T.matrix_to_euler_angles(rotation_matrix_b2i, "ZYX").unbind(dim=-1)
             attitute_loss = roll**2 + pitch**2
             
-            vel_diff = (self._v - target_vel).norm(dim=-1)
+            vel_diff = (self._v - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = self._w.norm(dim=-1)

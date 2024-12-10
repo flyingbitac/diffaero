@@ -92,7 +92,7 @@ class ObstacleAvoidance(BaseEnv):
         reset = terminated | truncated
         reset_indices = reset.nonzero().squeeze(-1)
         success = truncated & ((self.p - self.target_pos).norm(dim=-1) < 0.5)
-        loss, loss_components = self.loss_fn(self.target_vel, action)
+        loss, loss_components = self.loss_fn(action)
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
@@ -121,15 +121,15 @@ class ObstacleAvoidance(BaseEnv):
         ], dim=-1)
         return torch.concat([drone_state.unsqueeze(1), assets_state], dim=1), self.target_pos
     
-    def loss_fn(self, target_vel, action):
-        # type: (Tensor, Tensor) -> Tuple[Tensor, Dict[str, float]]
+    def loss_fn(self, action):
+        # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
         # calculating the closest point on each sphere to the quadrotor
         sphere_relpos = self.obstacle_manager.p_spheres - self.p.unsqueeze(1) # [n_envs, n_spheres, 3]
-        dist2surface_sphere = (sphere_relpos.norm(dim=-1) - self.obstacle_manager.r_spheres).clamp(min=0.1) # [n_envs, n_spheres]
+        dist2surface_sphere = (sphere_relpos.norm(dim=-1) - self.obstacle_manager.r_spheres).clamp(min=0) # [n_envs, n_spheres]
         # calculating the closest point on each cube to the quadrotor
         nearest_point = self.p.unsqueeze(1).clamp(min=self.obstacle_manager.box_min, max=self.obstacle_manager.box_max) # [n_envs, n_cubes, 3]
         cube_relpos = nearest_point - self.p.unsqueeze(1) # [n_envs, n_cubes, 3]
-        dist2surface_cube = cube_relpos.norm(dim=-1).clamp(min=0.1) # [n_envs, n_cubes]
+        dist2surface_cube = cube_relpos.norm(dim=-1).clamp(min=0) # [n_envs, n_cubes]
         # concatenate the relative direction and distance to the surface of both type of obstacles
         obstacle_reldirection = F.normalize(torch.cat([sphere_relpos, cube_relpos], dim=1), dim=-1)
         dist2surface = torch.cat([dist2surface_sphere, dist2surface_cube], dim=1) # [n_envs, n_obstacles, 3]
@@ -137,26 +137,29 @@ class ObstacleAvoidance(BaseEnv):
         approaching_vel = torch.sum(obstacle_reldirection * self._v.unsqueeze(1), dim=-1)
         oa_loss = (approaching_vel.clamp(min=0) / dist2surface.exp()).max(dim=-1).values
         
+        collision_loss = self.collision().float() * 10
+        
         if self.dynamic_type == "pointmass":
-            pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
+            pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            vel_diff = (self.model._vel_ema - target_vel).norm(dim=-1)
+            vel_diff = (self.model._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss
+            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
+                "collision_loss": collision_loss.mean().item(),
                 "oa_loss": oa_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
         else:
             pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            vel_diff = (self._v - target_vel).norm(dim=-1)
+            vel_diff = (self._v - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = self._w.norm(dim=-1)
@@ -166,6 +169,7 @@ class ObstacleAvoidance(BaseEnv):
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
+                "collision_loss": collision_loss.mean().item(),
                 "oa_loss": oa_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
@@ -220,7 +224,7 @@ class ObstacleAvoidance(BaseEnv):
             self.renderer.step(*self.state_for_render())
         return self.state()
     
-    def terminated(self) -> Tensor:
+    def collision(self) -> Tensor:
         # check if the distance between the drone's mass center and the sphere's center is less than the sum of their radius
         dist2sphere = torch.norm(self.p.unsqueeze(1) - self.obstacle_manager.p_spheres, dim=-1) # [n_envs, n_spheres]
         collision_sphere = torch.any(dist2sphere < (self.obstacle_manager.r_spheres + self.r_drone), dim=-1) # [n_envs]
@@ -231,6 +235,9 @@ class ObstacleAvoidance(BaseEnv):
         
         collision = collision_sphere | collision_cube
         return collision
+    
+    def terminated(self) -> Tensor:
+        return self.collision()
     
     def truncated(self) -> torch.Tensor:
         out_of_bound = torch.any(self.p < -1.5*self.L, dim=-1) | \
