@@ -4,8 +4,8 @@ from typing import Any, Dict, Generator, List, Tuple,Optional
 import torch
 from torch import Tensor
 
-from quaddif.algo.models.state_predictor import StateModel,StateModelCfg,PercStateModel
-from quaddif.algo.models.blocks import symexp,symlog
+from quaddif.algo.dreamerv3.models.state_predictor import StateModel,StateModelCfg,PercStateModel
+from quaddif.algo.dreamerv3.models.blocks import symexp,symlog
 from .replaybuffer import ReplayBuffer
 
 from quaddif.utils.logger import Logger

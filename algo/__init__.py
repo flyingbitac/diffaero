@@ -1,7 +1,7 @@
 from quaddif.algo.PPO import *
 from quaddif.algo.APG import *
 from quaddif.algo.SHAC import *
-from quaddif.algo.world import *
+from quaddif.algo.dreamerv3 import *
 
 AGENT_ALIAS = {
     "ppo": PPO,

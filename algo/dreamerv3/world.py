@@ -1,9 +1,9 @@
-from quaddif.algo.models.state_predictor import StateModel
-from quaddif.algo.models.agent import ActorCriticAgent
-from quaddif.algo.models.blocks import symlog
-from quaddif.algo.wmenv.world_state_env import StateEnv
-from quaddif.algo.wmenv.replaybuffer import ReplayBuffer
-from quaddif.algo.wmenv.utils import configure_opt
+from quaddif.algo.dreamerv3.models.state_predictor import StateModel
+from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
+from quaddif.algo.dreamerv3.models.blocks import symlog
+from quaddif.algo.dreamerv3.wmenv.world_state_env import StateEnv
+from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
+from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
 import os
 
 import torch

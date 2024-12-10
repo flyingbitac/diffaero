@@ -11,11 +11,11 @@ common:
 
 denoiser:
   denoiser:
-    _target_: models.diffusion.DenoiserConfig
+    _target_: algo.dreamerv3.models.diffusion.DenoiserConfig
     sigma_data: 0.5
     sigma_offset_noise: 0.3
     inner_model:
-      _target_: models.diffusion.InnerModelConfig
+      _target_: algo.dreamerv3.models.diffusion.InnerModelConfig
       img_channels: 1
       num_steps_conditioning: 4
       cond_channels: 256
@@ -43,19 +43,19 @@ denoiser:
     eps: 1e-8
   
   sigma_distribution:
-    _target_: models.diffusion.SigmaDistributionConfig
+    _target_: algo.dreamerv3.models.diffusion.SigmaDistributionConfig
     loc: -0.4
     scale: 1.2
     sigma_min: 2e-3
     sigma_max: 20
 
 world_model_env:
-  _target_: wmenv.WorldModelEnvConfig
+  _target_: algo.wmenv.WorldModelEnvConfig
   horizon: 15
   batch_size: 16
   batch_length: 4
   diffusion_sampler:
-    _target_: models.diffusion.DiffusionSamplerConfig
+    _target_: algo.dreamerv3.models.diffusion.DiffusionSamplerConfig
     num_steps_denoising: 3
     sigma_min: 2e-3
     sigma_max: 5.0
@@ -68,14 +68,14 @@ world_model_env:
     s_noise: 1.0
   
 world_state_env:
-  _target_: wmenv.StateEnvConfig
+  _target_: algo.dreamerv3.wmenv.StateEnvConfig
   horizon: 16
   batch_size: 1024
   batch_length: 4
   use_perception: False
 
 replaybuffer:
-  _target_: wmenv.buffercfg
+  _target_: algo.dreamerv3.wmenv.buffercfg
   perception_dim: 144
   state_dim: 13
   action_dim: 3
@@ -88,7 +88,7 @@ replaybuffer:
 
 state_predictor:
   state_model:
-    _target_: models.state_predictor.StateModelCfg
+    _target_: algo.dreamerv3.models.state_predictor.StateModelCfg
     state_dim: 43 #state_dim+wall_distances_dim + obstacles_num*3
     hidden_dim: 64
     action_dim: 3
@@ -100,7 +100,7 @@ state_predictor:
     use_multirew: False
 
   perception_model:
-    _target_: models.state_predictor.PercModelCfg
+    _target_: algo.dreamerv3.models.state_predictor.PercModelCfg
     state_dim: 144 
     hidden_dim: 256
     action_dim: 3 
@@ -126,7 +126,7 @@ state_predictor:
 
 actor_critic:
   model:
-    __target__: models.agent.ActorCriticConfig
+    __target__: algo.dreamerv3.models.agent.ActorCriticConfig
     feat_dim: 1536 # hidden + latent
     num_layers: 2
     hidden_dim: 512
