@@ -36,7 +36,7 @@ class ObstacleAvoidance(BaseEnv):
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
         use_isaacgym_camera = self.sensor_type == "camera" and cfg.sensor.type == "isaacgym"
-        need_renderer = (not cfg.render.headless) or use_isaacgym_camera
+        need_renderer = (not cfg.render.headless) or cfg.render.record_video or use_isaacgym_camera
         if need_renderer:
             self.renderer = ObstacleAvoidanceRenderer(
                 cfg=cfg.render,
