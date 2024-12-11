@@ -1,4 +1,5 @@
 import os
+import copy
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
@@ -13,7 +14,7 @@ class Logger:
         run_name: str = ""
     ):
         assert type.lower() in ['tensorboard', 'wandb']
-        self.cfg = cfg
+        self.cfg = copy.deepcopy(cfg)
         self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
         if run_name != "":
             run_name = "__" + run_name
@@ -96,8 +97,9 @@ class RecordEpisodeStatistics:
         self.env = env
         self.n_envs = getattr(env, "n_envs", 1)
         self.device = env.device
-        self.success = torch.zeros(self.n_envs, dtype=torch.float32, device=self.device)
-        self.episode_length = torch.zeros(self.n_envs, dtype=torch.int, device=self.device)
+        self.success = torch.zeros(self.n_envs, dtype=torch.float, device=self.device)
+        self.arrive_time = torch.full((self.n_envs,), env.max_steps*env.dt, dtype=torch.float, device=self.device)
+        self.episode_length = torch.zeros(self.n_envs, dtype=torch.long, device=self.device)
         
     def __getattr__(self, name: str):
         """Returns an attribute with ``name``, unless ``name`` starts with an underscore."""
@@ -109,12 +111,17 @@ class RecordEpisodeStatistics:
         state, loss, terminated, extra = self.env.step(action)
         n_resets = extra["reset_indicies"].size(0)
         if n_resets > 0:
+            n_success = int(extra["success"].sum().item())
+            if n_success > 0:
+                self.arrive_time = torch.roll(self.arrive_time, -n_success, 0)
+                self.arrive_time[-n_success:] = extra["arrive_time"][extra["success"]]
             self.success = torch.roll(self.success, -n_resets, 0)
             self.success[-n_resets:] = extra["success"][extra["reset"]]
             self.episode_length = torch.roll(self.episode_length, -n_resets, 0)
             self.episode_length[-n_resets:] = extra["l"][extra["reset"]]
         extra["stats"] = {
             "success_rate": self.success.mean().item(),
-            "l": self.episode_length,
+            "l": self.episode_length.float().mean().item(),
+            "arrive_time": self.arrive_time.mean().item()
         }
         return state, loss, terminated, extra

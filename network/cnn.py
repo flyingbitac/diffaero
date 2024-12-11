@@ -14,17 +14,13 @@ class CNN(nn.Module):
     def __init__(self, H, W):
         super().__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(1, 4, kernel_size=5, stride=1, padding=2),
-            # nn.LayerNorm(4),
+            nn.Conv2d(1, 8, kernel_size=5, stride=1, padding=2),
             nn.ELU(),
-            nn.Conv2d(4, 8, kernel_size=3, stride=2, padding=1),
-            # nn.LayerNorm(8),
+            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
             nn.ELU(),
-            nn.Conv2d(8, 4, kernel_size=1, stride=1, padding=0),
-            # nn.LayerNorm(8),
+            nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
-            nn.Conv2d(4, 8, kernel_size=3, stride=2, padding=1),
-            # nn.LayerNorm(8),
+            nn.Conv2d(8, 8, kernel_size=3, stride=2, padding=1),
             nn.Flatten()
         )
         self.out_dim = 8 * (H // 4) * (W // 4)

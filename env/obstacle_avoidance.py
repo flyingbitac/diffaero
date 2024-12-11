@@ -56,6 +56,7 @@ class ObstacleAvoidance(BaseEnv):
         else:
             state = [self.target_vel, self._q, self._v, self._w]
         state = torch.cat(state, dim=-1)
+        self.update_sensor_data()
         state = TensorDict({
             "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
         state = state if with_grad else state.detach()
@@ -94,11 +95,17 @@ class ObstacleAvoidance(BaseEnv):
         # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         action = self.rescale_action(action)
         self.model.step(action)
-        self.progress += 1
         terminated, truncated = self.terminated(), self.truncated()
+        self.progress += 1
+        if self.renderer is not None:
+            self.renderer.step(*self.state_for_render())
+            reset_all = self.renderer.render()
+            truncated = torch.full_like(truncated, reset_all) | truncated
         reset = terminated | truncated
         reset_indices = reset.nonzero().squeeze(-1)
-        success = truncated & ((self.p - self.target_pos).norm(dim=-1) < 0.5)
+        arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
+        self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
+        success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
         extra = {
             "truncated": truncated,
@@ -106,17 +113,13 @@ class ObstacleAvoidance(BaseEnv):
             "reset": reset,
             "reset_indicies": reset_indices,
             "success": success,
+            "arrive_time": self.arrive_time.clone(),
             "next_state_before_reset": self.state(with_grad=True),
             "loss_components": loss_components,
+            "sensor": self.sensor_tensor.clone(),
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        if self.renderer is not None:
-            if self.renderer.enable_viewer_sync or self.renderer.enable_camera:
-                self.renderer.step(*self.state_for_render())
-            self.renderer.render()
-        self.update_sensor_data()
-        extra["sensor"] = self.sensor_tensor.clone()
         return self.state(), loss, terminated, extra
     
     def state_for_render(self):
@@ -224,6 +227,7 @@ class ObstacleAvoidance(BaseEnv):
         )
             
         self.progress[env_idx] = 0
+        self.arrive_time[env_idx] = 0
     
     def reset(self):
         super().reset()
@@ -233,11 +237,11 @@ class ObstacleAvoidance(BaseEnv):
     
     def collision(self) -> Tensor:
         # check if the distance between the drone's mass center and the sphere's center is less than the sum of their radius
-        dist2sphere = torch.norm(self.p.unsqueeze(1) - self.obstacle_manager.p_spheres, dim=-1) # [n_envs, n_spheres]
-        collision_sphere = torch.any(dist2sphere < (self.obstacle_manager.r_spheres + self.r_drone), dim=-1) # [n_envs]
+        dist2sphere = torch.norm(self.p.unsqueeze(1) - self.obstacle_manager.p_spheres, dim=-1) - self.obstacle_manager.r_spheres # [n_envs, n_spheres]
+        collision_sphere = torch.any(dist2sphere < self.r_drone, dim=-1) # [n_envs]
         # check if the distance between the drone's mass center and the closest point on the cube is less than the drone's radius
-        nearest_point = self.p.unsqueeze(1).clamp(min=self.obstacle_manager.box_min, max=self.obstacle_manager.box_max) # [n_envs, n_cubes, 3]
-        dist2cube = torch.norm(nearest_point - self.p.unsqueeze(1), dim=-1) # [n_envs, n_cubes]
+        nearest_point2cube = self.p.unsqueeze(1).clamp(min=self.obstacle_manager.box_min, max=self.obstacle_manager.box_max) # [n_envs, n_cubes, 3]
+        dist2cube = torch.norm(nearest_point2cube - self.p.unsqueeze(1), dim=-1) # [n_envs, n_cubes]
         collision_cube = torch.any(dist2cube < self.r_drone, dim=-1) # [n_envs]
         
         collision = collision_sphere | collision_cube
@@ -253,4 +257,4 @@ class ObstacleAvoidance(BaseEnv):
     def truncated(self) -> torch.Tensor:
         out_of_bound = torch.any(self.p < -1.5*self.L, dim=-1) | \
                        torch.any(self.p >  1.5*self.L, dim=-1)
-        return (self.progress > self.max_steps) | out_of_bound
+        return (self.progress >= self.max_steps) | out_of_bound

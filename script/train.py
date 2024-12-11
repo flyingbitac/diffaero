@@ -48,8 +48,9 @@ def learn(
         t1 = pbar._time()
         env.detach()
         state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
-        l_episode = env_info["stats"]["l"].float().mean().item()
-        success_rate = env_info['stats']['success_rate']
+        l_episode = env_info["stats"]["l"]
+        success_rate = env_info["stats"]["success_rate"]
+        arrive_time = env_info["stats"]["arrive_time"]
         pbar.set_postfix({
             "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
             "loss": f"{env_info['loss_components']['total_loss']:.3f}",
@@ -60,7 +61,7 @@ def learn(
             "env_loss": env_info["loss_components"],
             "agent_loss": losses,
             "agent_grad_norm": grad_norms,
-            "metrics": {"l_episode": l_episode, "success_rate": success_rate}
+            "metrics": {"l_episode": l_episode, "success_rate": success_rate, "arrive_time": arrive_time}
         }
         if "value" in policy_info.keys():
             log_info["value"] = policy_info["value"].mean().item()

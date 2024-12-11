@@ -32,11 +32,17 @@ class PositionControl(BaseEnv):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         action = self.rescale_action(action)
         self.model.step(action)
-        self.progress += 1
         terminated, truncated = self.terminated(), self.truncated()
+        self.progress += 1
+        if self.renderer is not None:
+            self.renderer.step(*self.state_for_render())
+            reset_all = self.renderer.render()
+            truncated = torch.full_like(truncated, reset_all) | truncated
         reset = terminated | truncated
         reset_indices = reset.nonzero().squeeze(-1)
-        success = truncated & torch.lt((self.p - self.target_pos).norm(dim=-1), 0.5)
+        arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
+        self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
+        success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
         extra = {
             "truncated": truncated,
@@ -44,15 +50,12 @@ class PositionControl(BaseEnv):
             "reset": reset,
             "reset_indicies": reset_indices,
             "success": success,
+            "arrive_time": self.arrive_time.clone(),
             "next_state_before_reset": self.state(with_grad=True),
             "loss_components": loss_components
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        if self.renderer is not None:
-            if self.renderer.enable_viewer_sync:
-                self.renderer.step(self.state_for_render())
-            self.renderer.render()
         return self.state(), loss, terminated, extra
     
     def state_for_render(self) -> Tensor:
@@ -106,6 +109,7 @@ class PositionControl(BaseEnv):
         self.model._state = torch.where(state_mask.bool(), new_state, self.model._state)
         self.target_pos.fill_(0.)
         self.progress[env_idx] = 0
+        self.arrive_time[env_idx] = 0
     
     def reset(self):
         super().reset()
