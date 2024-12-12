@@ -5,6 +5,7 @@ n_envs: ${env.n_envs}
 env_spacing: ${env.length}
 physics_engine: "physx"
 ground_plane: ${env.ground_plane}
+record_video: ${record_video}
 
 sim:
   dt: ${env.dt}
@@ -34,6 +35,17 @@ viewer:
   lookat: [0, 0, 0]
 
 camera: ${env.sensor}
+
+rgb_camera:
+  width: 128
+  height: 128
+  horizontal_fov: 120.0
+  enable_tensors: True
+  supersampling_horizontal: 1
+  supersampling_vertical: 1
+  far_plane:
+  onboard_position: [0.2, 0., 0.05]
+  onboard_attitude: [0., 0., 0., 1.] # xyzw quaternion
 
 robot_asset:
   file: "resources/robots/simple_quad.urdf"

@@ -9,3 +9,5 @@ gpustat
 opencv-python
 pytorch3d
 numpy
+imageio
+imageio-ffmpeg

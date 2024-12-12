@@ -19,8 +19,9 @@ class BaseEnv:
         self.L: float = cfg.length
         self.n_envs: int = cfg.n_envs
         self.target_pos = torch.zeros(self.n_envs, 3, device=device)
-        self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.int)
-        self.max_steps: float = cfg.max_time / cfg.dt
+        self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.long)
+        self.arrive_time = torch.zeros(self.n_envs, device=device, dtype=torch.float)
+        self.max_steps: int = int(cfg.max_time / cfg.dt)
         self.max_vel: float = cfg.max_vel
         self.cfg = cfg
         self.reset_indices = None
@@ -88,7 +89,7 @@ class BaseEnv:
         raise NotImplementedError
     
     def truncated(self) -> Tensor:
-        return self.progress > self.max_steps
+        return self.progress >= self.max_steps
     
     def rescale_action(self, action: Tensor) -> Tensor:
         return self.model.min_action + (self.model.max_action - self.model.min_action) * (action + 1) / 2

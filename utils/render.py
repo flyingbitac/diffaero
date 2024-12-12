@@ -99,6 +99,8 @@ class BaseRenderer:
                 self.viewer, gymapi.KEY_ESCAPE, "exit")
             self.gym.subscribe_viewer_keyboard_event(
                 self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_R, "reset_all")
 
         # optimization flags for pytorch JIT
         torch._C._jit_set_profiling_mode(False)
@@ -138,7 +140,8 @@ class BaseRenderer:
         # self.gym.fetch_results(self.sim, True) # use only when device is not "cpu"
         # Step graphics. Skipping this causes the onboard robot camera tensors to not be updated
         self.gym.step_graphics(self.sim)
-        if self.headless: return
+        reset_all = False
+        if self.headless: return reset_all
         
         # if viewer exists update it based on requirement
         if self.viewer:
@@ -156,6 +159,8 @@ class BaseRenderer:
                     sys.exit()
                 elif evt.action == "toggle_viewer_sync" and evt.value > 0:
                     self.enable_viewer_sync = not self.enable_viewer_sync
+                elif evt.action == "reset_all" and evt.value > 0:
+                    reset_all = True
 
             # update viewer based on requirement
             if self.enable_viewer_sync:
@@ -164,6 +169,7 @@ class BaseRenderer:
                     self.gym.sync_frame_time(self.sim)
             else:
                 self.gym.poll_viewer_events(self.viewer)
+        return reset_all
     
     def close(self):
         self.gym.destroy_viewer(self.viewer)
@@ -226,9 +232,10 @@ class PositionControlRenderer(BaseRenderer):
             self.actor_handles.append(actor_handle)
             
     def step(self, drone_state: torch.Tensor):
-        self.drone_states.copy_(drone_state)
-        self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
-        self.simulation_step()
+        if self.enable_viewer_sync:
+            self.drone_states.copy_(drone_state)
+            self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
+            self.simulation_step()
 
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
@@ -238,12 +245,19 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         device: int,
         obstacle_manager: ObstacleManager,
         z_ground_plane: Optional[float] = None,
-        enable_camera: bool = False):
+        enable_camera: bool = False
+    ):
         self.env_spacing = cfg.env_spacing
         self.enable_camera = enable_camera
-        self.camera_cfg = cfg.camera
-        self.camera_handles = []
-        self.camera_tensor_list = []
+        if self.enable_camera:
+            self.camera_cfg = cfg.camera
+            self.camera_handles = []
+            self.camera_tensor_list = []
+        self.record_video = cfg.record_video
+        if self.record_video:
+            self.rgb_camera_cfg = cfg.rgb_camera
+            self.rgb_camera_handles = []
+            self.rgb_camera_tensor_list = []
         self.env_asset_handles = defaultdict(list)
         self.n_obstacles = cfg.env_asset.n_assets
         self.z_ground_plane = z_ground_plane
@@ -293,6 +307,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         
         if self.enable_camera:
             camera_props, local_transform = get_camera_properties(self.camera_cfg)
+        if self.record_video:
+            rgb_camera_props, rgb_local_transform = get_camera_properties(self.rgb_camera_cfg)
         
         pbar = tqdm(range(self.n_envs), unit="env")
         for i in pbar:
@@ -327,6 +343,16 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
                     camera_tensor = camera_tensor.unsqueeze(0)
                 self.camera_tensor_list.append(camera_tensor)
             
+            if self.record_video:
+                # create camera
+                rgb_cam_handle = self.gym.create_camera_sensor(env_handle, rgb_camera_props)
+                self.gym.attach_camera_to_body(rgb_cam_handle, env_handle, actor_handle, rgb_local_transform, gymapi.FOLLOW_TRANSFORM)
+                self.rgb_camera_handles.append(rgb_cam_handle)
+                cam_type = gymapi.IMAGE_COLOR # gymapi.IMAGE_DEPTH or gymapi.IMAGE_COLOR
+                _rgb_camera_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_handle, rgb_cam_handle, cam_type)
+                rgb_camera_tensor: torch.Tensor = gymtorch.wrap_tensor(_rgb_camera_tensor)
+                self.rgb_camera_tensor_list.append(rgb_camera_tensor)
+            
             # create environment assets
             env_asset_list = self.generate_env_assets(
                 r_spheres=self.obstacle_manager.r_spheres[i],
@@ -355,10 +381,11 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         return self.contact_forces[:, :self.robot_num_bodies].abs().sum(dim=-1).norm(dim=-1) > 0.1
     
     def step(self, state: torch.Tensor, target_pos: torch.Tensor):
-        self.root_states.copy_(state)
-        self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
-        self.target_pos.copy_(target_pos)
-        self.simulation_step()
+        if self.enable_viewer_sync or self.enable_camera or self.record_video:
+            self.root_states.copy_(state)
+            self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
+            self.target_pos.copy_(target_pos)
+            self.simulation_step()
     
     def render_camera(self) -> torch.Tensor:
         if not self.enable_camera:
@@ -367,6 +394,16 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.gym.start_access_image_tensors(self.sim)
         new_camera = 1 - (-torch.concat(self.camera_tensor_list, dim=0) / self.camera_cfg.far_plane).clamp(0, 1)
         # new_camera = torch.stack(self.camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255 # for rgb camera
+        self.gym.end_access_image_tensors(self.sim)
+        return new_camera
+    
+    def render_rgb_camera(self) -> torch.Tensor:
+        if not self.record_video:
+            raise ValueError("Camera is not initialized")
+        self.gym.render_all_camera_sensors(self.sim)
+        self.gym.start_access_image_tensors(self.sim)
+        # new_camera = torch.stack(self.rgb_camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255 # for rgb camera
+        new_camera = torch.stack(self.rgb_camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2) # for rgb camera
         self.gym.end_access_image_tensors(self.sim)
         return new_camera
     
@@ -391,9 +428,10 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             for i, env in enumerate(self.env_handles):
                 self.gym.add_lines(self.viewer, env, 1, lines[i:i+1].T, colors[i:i+1].T.cpu().numpy())
                 self.gym.add_lines(self.viewer, env, 1, vel[i:i+1].T, yellow.T.cpu().numpy())
-        super().render(sync_frame_time=sync_frame_time)
+        reset_all = super().render(sync_frame_time=sync_frame_time)
         if add_lines:
             self.gym.clear_lines(self.viewer)
+        return reset_all
 
 
 def get_sim_params(sim_cfg):

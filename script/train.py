@@ -61,7 +61,7 @@ def learn(
             "env_loss": env_info["loss_components"],
             "agent_loss": losses,
             "agent_grad_norm": grad_norms,
-            "metrics": {"l_episode": l_episode, "success_rate": success_rate}
+            "metrics": {"l_episode": l_episode, "success_rate": success_rate, "arrive_time": arrive_time}
         }
         if "value" in policy_info.keys():
             log_info["value"] = policy_info["value"].mean().item()

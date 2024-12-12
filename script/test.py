@@ -14,7 +14,7 @@ import cv2
 
 from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
-from quaddif.utils.logger import RecordEpisodeStatistics
+from quaddif.utils.logger import RecordEpisodeStatistics, Logger
 from quaddif.utils.device import idle_device
 
 def on_step_cb(state, action, policy_info, env_info):
@@ -35,8 +35,15 @@ def test(
     cfg: DictConfig,
     agent,
     env,
+    logger: Logger,
     on_step_cb: Optional[Callable] = None
 ):
+    if cfg.record_video:
+        import imageio
+        video_tensor = torch.zeros(
+            (cfg.n_envs, env.max_steps, 3, cfg.env.render.rgb_camera.height, cfg.env.render.rgb_camera.width),
+            dtype=torch.uint8, device=env.device)
+    
     state = env.reset()
     pbar = tqdm(range(10000))
     n_resets = 1
@@ -47,7 +54,7 @@ def test(
         env.detach()
         action, policy_info = agent.act(state, test=True)
         state, loss, terminated, env_info = env.step(action)
-        l_episode = env_info["stats"]["l"].float().mean().item()
+        l_episode = env_info["stats"]["l"]
         n_resets += env_info["reset"].sum().item()
         n_survive += env_info["truncated"].sum().item()
         n_success += env_info["success"].sum().item()
@@ -56,6 +63,33 @@ def test(
             "survive_rate": f"{n_survive / n_resets:.2f}",
             "success_rate": f"{n_success / n_resets:.2f}",
             "fps": f"{cfg.env.n_envs/(pbar._time()-t1):,.0f}"})
+        
+        log_info = {"metrics": {"success_rate": n_success / n_resets}}
+        logger.log_scalars(log_info, i+1)
+        
+        if cfg.record_video:
+            rgb_image: torch.Tensor = env.renderer.render_rgb_camera()
+            index = (torch.arange(env.n_envs, device=env.device), env.progress-1)
+            video_tensor[index] = rgb_image
+            
+            if env_info["reset"].sum().item() > env_info["success"].sum().item():
+                failed = env_info["reset"] & ~env_info["success"]
+                idx = failed.nonzero().flatten()[0]
+                video_length = env_info["l"][idx] - 1
+                
+                # save the video using imageio
+                # path = os.path.join(logger.logdir, "video")
+                # if not os.path.exists(path):
+                #     os.makedirs(path)
+                # with imageio.get_writer(os.path.join(path, f"failed_{i+1}.mp4"), fps=1/env.dt) as video:
+                #     for frame_index in range(video_length):
+                #         frame = video_tensor[idx, frame_index]
+                #         frame = frame.permute(1, 2, 0).cpu().numpy()
+                #         video.append_data(frame)
+
+                # save the video using tensorboard
+                logger.log_video("video/fail", video_tensor[idx.unsqueeze(0), :video_length], step=i+1, fps=1/env.dt)
+            
         if on_step_cb is not None:
             on_step_cb(
                 state=state,
@@ -92,8 +126,9 @@ def main(cfg: DictConfig):
     agent = agent_class.build(cfg, env, device)
     agent.load(cfg.checkpoint)
     
-    # test(cfg, agent, env, on_step_cb=on_step_cb)
-    test(cfg, agent, env)
+    logger = Logger(cfg, run_name=cfg.runname)
+    # test(cfg, agent, env, logger, on_step_cb=on_step_cb)
+    test(cfg, agent, env, logger)
     
     if env.renderer is not None:
         env.renderer.close()
