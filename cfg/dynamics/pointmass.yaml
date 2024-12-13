@@ -8,7 +8,7 @@ align_yaw_with_vel_direction: False
 aligh_yaw_with_vel_ema: True
 vel_ema_factor: 0.1
 
-min_action: [-15, -15, 0]
-max_action: [15, 15, 15]
+min_action: [-40, -40, 0]
+max_action: [40, 40, 40]
 
 solver_type: "rk4" # "rk4" or "euler"
