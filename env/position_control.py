@@ -35,7 +35,7 @@ class PositionControl(BaseEnv):
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
         if self.renderer is not None:
-            self.renderer.step(*self.state_for_render())
+            self.renderer.step(self.state_for_render())
             reset_all = self.renderer.render()
             truncated = torch.full_like(truncated, reset_all) | truncated
         reset = terminated | truncated

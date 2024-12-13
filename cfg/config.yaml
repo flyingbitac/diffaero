@@ -1,5 +1,5 @@
 defaults:
-  - algo: apg
+  - algo: apg_sto
   - env: pc
   - dynamics: pointmass # [pointmass, quadrotor]
   - network: mlp # [mlp, cnn]
@@ -19,6 +19,9 @@ checkpoint: # must be an absolute path. example: "/home/username/workspace/quadd
 
 seed: -1
 torch_deterministic: False
+
+env:
+  dt: 0.0333
 
 hydra:
   sweep:

@@ -240,8 +240,7 @@ class SHAC_RPL(SHAC):
     ):
         super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
         del self.agent, self.actor_optim, self.critic_optim, self._critic_target
-        self.agent = RPLActorCritic(cfg)(
-            cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
+        self.agent = RPLActorCritic(cfg, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
         self._critic_target = deepcopy(self.agent.critic)
@@ -251,7 +250,14 @@ class SHAC_RPL(SHAC):
     def value_target(self, state):
         # type: (Tensor) -> Tensor
         return self._critic_target(self.agent.rpl_obs(state)[0]).squeeze(-1)
-        
+    
+    def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        if not os.path.exists(os.path.join(path, "anchor_agent")):
+            os.makedirs(os.path.join(path, "anchor_agent"))
+        self.agent.save(path)
+    
     @staticmethod
     def build(cfg, env, device):
         return SHAC_RPL(
@@ -262,6 +268,7 @@ class SHAC_RPL(SHAC):
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
+
 
 class SHACQRolloutBuffer:
     def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
