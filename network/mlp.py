@@ -12,19 +12,30 @@ from quaddif.utils.nn import mlp
 # Since the state may be a Tensor or a TensorDict containing some other perceptional information
 # and this file only contains actor and critic networks based on MLP, we need to preprocess
 # the state_dim and state such that the MLP can process it.
-def mlp_state_dim(state_dim: Union[int, Tuple[int, Tuple[int, int]]]) -> int:
-    if isinstance(state_dim, int):
-        return state_dim
-    elif isinstance(state_dim, tuple):
-        D, (H, W) = state_dim
-        return D + H * W
 
-def preprocess_state(state: Union[Tensor, TensorDict]) -> Tensor:
-    if isinstance(state, TensorDict):
-        return torch.cat([state["state"], state["perception"].flatten(1)], dim=-1)
-    else:
-        return state
-
+class MLP(nn.Module):
+    def __init__(
+        self,
+        input_dim: Union[int, Tuple[int, Tuple[int, int]]],
+        hidden_dim: Union[int, List[int]],
+        output_dim: int,
+        output_act: Optional[nn.Module] = None
+    ):
+        super().__init__()
+        if not isinstance(input_dim, int):
+            D, (H, W) = input_dim
+            input_dim = D + H * W
+        self.net = mlp(input_dim, hidden_dim, output_dim, output_act=output_act)
+    
+    def forward(self, obs: Union[Tensor, TensorDict], action: Optional[Tensor] = None) -> Tensor:
+        return self.net(self.preprocess(obs, action))
+    
+    @staticmethod
+    def preprocess(state: Union[Tensor, TensorDict], action: Optional[Tensor] = None) -> Tensor:
+        if isinstance(state, TensorDict):
+            return torch.cat([state["state"], state["perception"].flatten(1)] + ([] if action is None else [action]), dim=-1)
+        else:
+            return torch.cat([state, action], dim=-1) if action is not None else state
 
 class DeterministicActorMLP(nn.Module):
     def __init__(
@@ -34,10 +45,9 @@ class DeterministicActorMLP(nn.Module):
         action_dim: int
     ):
         super().__init__()
-        self.actor = mlp(mlp_state_dim(state_dim), hidden_dim, action_dim, hidden_act=nn.ELU(), output_act=nn.Tanh())
+        self.actor = MLP(state_dim, hidden_dim, action_dim, output_act=nn.Tanh())
         
     def forward(self, obs: Union[Tensor, TensorDict]) -> Tensor:
-        obs = preprocess_state(obs)
         return self.actor(obs)
     
     def save(self, path: str):
@@ -55,12 +65,11 @@ class StochasticActorMLP(nn.Module):
         action_dim: int
     ):
         super().__init__()
-        self.actor_mean = mlp(mlp_state_dim(state_dim), hidden_dim, action_dim, hidden_act=nn.ELU())
+        self.actor_mean = MLP(state_dim, hidden_dim, action_dim)
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
 
     def forward(self, obs, sample=None, test=False):
         # type: (Union[Tensor, TensorDict], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor]
-        obs = preprocess_state(obs)
         action_mean: Tensor = self.actor_mean(obs)
         LOG_STD_MAX = 2
         LOG_STD_MIN = -5
@@ -73,7 +82,7 @@ class StochasticActorMLP(nn.Module):
         elif test:
             sample = action_mean.detach()
         action = torch.tanh(sample)
-        logprob = probs.log_prob(sample) - torch.log(1. - torch.tanh(sample).pow(2) + 1e-8)
+        logprob = probs.log_prob(sample) - torch.log(1. - action.pow(2) + 1e-8)
         # entropy = (-logprob * logprob.exp()).sum(-1)
         entropy = probs.entropy().sum(-1)
         return action, sample, logprob.sum(-1), entropy
@@ -96,11 +105,9 @@ class CriticVMLP(nn.Module):
         hidden_dim: Union[int, List[int]]
     ):
         super().__init__()
-        state_dim = mlp_state_dim(state_dim)
-        self.critic = mlp(state_dim, hidden_dim, 1, hidden_act=nn.ELU())
+        self.critic = MLP(state_dim, hidden_dim, 1)
     
     def forward(self, obs: Union[Tensor, TensorDict]) -> Tensor:
-        obs = preprocess_state(obs)
         return self.critic(obs).squeeze(-1)
     
     def save(self, path: str):
@@ -118,12 +125,12 @@ class CriticQMLP(nn.Module):
         action_dim: int
     ):
         super().__init__()
-        state_dim = mlp_state_dim(state_dim)
-        self.critic = mlp(state_dim + action_dim, hidden_dim, 1, hidden_act=nn.ELU())
+        if not isinstance(state_dim, int):
+            input_dim = (state_dim[0] + action_dim, state_dim[1])
+        self.critic = MLP(input_dim, hidden_dim, 1)
     
     def forward(self, obs: Union[Tensor, TensorDict], action: Tensor) -> Tensor:
-        obs = preprocess_state(obs)
-        return self.critic(torch.cat([obs, action], dim=-1)).squeeze(-1)
+        return self.critic(obs, action).squeeze(-1)
     
     def save(self, path: str):
         torch.save(self.critic.state_dict(), os.path.join(path, "critic.pth"))
@@ -206,13 +213,14 @@ class RPLActorCriticMLP(StochasticActorCriticVMLP):
         action_dim: int,
         rpl_action: bool = True
     ):
+        rpl_state_dim = (state_dim[0] + action_dim, state_dim[1])
         super().__init__(
-            state_dim=mlp_state_dim(state_dim)+action_dim,
+            state_dim=rpl_state_dim,
             hidden_dim=hidden_dim,
             action_dim=action_dim)
         
-        torch.nn.init.zeros_(self.actor.actor_mean[-1].weight)
-        torch.nn.init.zeros_(self.actor.actor_mean[-1].bias)
+        torch.nn.init.zeros_(self.actor.actor_mean.net[-1].weight)
+        torch.nn.init.zeros_(self.actor.actor_mean.net[-1].bias)
         
         cfg_path = os.path.join(os.path.dirname(os.path.abspath(anchor_ckpt)), ".hydra", "config.yaml")
         ckpt_cfg = OmegaConf.load(cfg_path)
@@ -222,11 +230,15 @@ class RPLActorCriticMLP(StochasticActorCriticVMLP):
         self.anchor_state_dim = anchor_state_dim
         self.rpl_action = rpl_action
     
-    def rpl_obs(self, obs: TensorDict) -> Tuple[Tensor, Tensor]:
+    def rpl_obs(self, obs: TensorDict) -> Tuple[TensorDict, Tensor]:
         with torch.no_grad():
             anchor_action, _, _, _ = self.anchor_agent.get_action(
                 obs["state"], test=True)
-        return torch.cat([preprocess_state(obs), anchor_action], dim=-1), anchor_action
+        rpl_obs = TensorDict({
+            "state": torch.cat([obs["state"], anchor_action], dim=-1),
+            "perception": obs["perception"]
+        }, batch_size=obs.batch_size)
+        return rpl_obs, anchor_action
 
     def get_value(self, obs: TensorDict) -> Tensor:
         return super().get_value(self.rpl_obs(obs)[0])

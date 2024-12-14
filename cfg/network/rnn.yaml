@@ -1,0 +1,4 @@
+name: rnn
+
+rnn_hidden_dim: 512
+rnn_n_layers: 1

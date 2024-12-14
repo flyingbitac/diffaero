@@ -9,41 +9,8 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 
 from quaddif.network import RPLActorCritic, StochasticActorCritic_V
-
-class PPORolloutBuffer:
-    def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
-        factory_kwargs = {"dtype": torch.float32, "device": device}
-        
-        assert isinstance(state_dim, tuple) or isinstance(state_dim, int)
-        if isinstance(state_dim, tuple):
-            self.states = TensorDict({
-                "state": torch.zeros((l_rollout, num_envs, state_dim[0]), **factory_kwargs),
-                "perception": torch.zeros((l_rollout, num_envs, state_dim[1][0], state_dim[1][1]), **factory_kwargs)
-            }, batch_size=(l_rollout, num_envs))
-        else:
-            self.states = torch.zeros((l_rollout, num_envs, state_dim), **factory_kwargs)
-        self.samples = torch.zeros((l_rollout, num_envs, action_dim), **factory_kwargs)
-        self.logprobs = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.next_dones = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.next_values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-    
-    def clear(self):
-        self.step = 0
-    
-    @torch.no_grad()
-    def add(self, state, sample, logprob, reward, next_done, value, next_value):
-        # type: (Union[Tensor, TensorDict], Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
-        self.states[self.step] = state
-        self.samples[self.step] = sample
-        self.logprobs[self.step] = logprob
-        self.rewards[self.step] = reward
-        self.next_dones[self.step] = next_done.float()
-        self.values[self.step] = value
-        self.next_values[self.step] = next_value
-        self.step += 1
-
+from quaddif.network.rnn import RNNBasedAgent
+from quaddif.algo.buffer import RolloutBufferPPO, RNNStateBuffer
 
 class PPO:
     def __init__(
@@ -60,7 +27,9 @@ class PPO:
         self.action_dim = action_dim
         self.agent = StochasticActorCritic_V(cfg, state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
-        self.buffer = PPORolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
+        self.buffer = RolloutBufferPPO(l_rollout, n_envs, state_dim, action_dim, device)
+        if isinstance(self.agent, RNNBasedAgent):
+            self.rnn_state_buffer = RNNStateBuffer(l_rollout, n_envs, cfg.network.rnn_hidden_dim, cfg.network.rnn_n_layers, device)
         
         self.discount = cfg.gamma
         self.lmbda = cfg.lmbda
@@ -77,7 +46,9 @@ class PPO:
         self.device = device
     
     def act(self, state, test=False):
-        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        if isinstance(self.agent, RNNBasedAgent):
+            self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
         action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
@@ -102,6 +73,9 @@ class PPO:
         samples = self.buffer.samples.flatten(0, 1)
         logprobs = self.buffer.logprobs.flatten(0, 1)
         values = self.buffer.values.flatten(0, 1)
+        if isinstance(self.agent, RNNBasedAgent):
+            actor_hidden_state = self.rnn_state_buffer.actor_rnn_state.flatten(0, 1)
+            critic_hidden_state = self.rnn_state_buffer.critic_rnn_state.flatten(0, 1)
         if self.norm_adv:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         batch_indices = torch.randperm(T*N, device=self.device)
@@ -113,16 +87,29 @@ class PPO:
             end = start + mb_size
             mb_indices = batch_indices[start:end]
             # policy loss
-            _, _, newlogprob, entropy, _ = self.agent.get_action_and_value(states, samples)
-            logratio = newlogprob - logprobs
+            if isinstance(self.agent, RNNBasedAgent):
+                _, _, newlogprob, entropy = self.agent.get_action(
+                    states[mb_indices],
+                    samples[mb_indices],
+                    hidden=actor_hidden_state[mb_indices].permute(1, 0, 2))
+            else:
+                _, _, newlogprob, entropy = self.agent.get_action(
+                    states[mb_indices],
+                    samples[mb_indices])
+            
+            logratio = newlogprob - logprobs[mb_indices]
             ratio = logratio.exp()
-            pg_loss1 = -advantages * ratio
-            pg_loss2 = -advantages * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
+            advantages_mb = advantages[mb_indices]
+            pg_loss1 = -advantages_mb * ratio
+            pg_loss2 = -advantages_mb * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2).mean()
             # entropy loss
             entropy_loss = -entropy.mean()
             # value loss
-            newvalue = self.agent.get_value(states[mb_indices])
+            if isinstance(self.agent, RNNBasedAgent):
+                newvalue = self.agent.get_value(states[mb_indices], hidden=critic_hidden_state[mb_indices].permute(1, 0, 2))
+            else:
+                newvalue = self.agent.get_value(states[mb_indices])
             if self.clip_value_loss:
                 v_loss_unclipped = (newvalue - target_values[mb_indices]) ** 2
                 v_clipped = values[mb_indices] + torch.clamp(
@@ -168,6 +155,8 @@ class PPO:
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
+        if isinstance(self.agent, RNNBasedAgent):
+            self.rnn_state_buffer.clear()
         with torch.no_grad():
             for t in range(cfg.l_rollout):
                 action, policy_info = self.act(state)
@@ -180,8 +169,9 @@ class PPO:
                     done=terminated,
                     value=policy_info["value"],
                     next_value=self.agent.get_value(env_info["next_state_before_reset"]))
-                # terminated = next_terminated
                 state = next_state
+                if isinstance(self.agent, RNNBasedAgent):
+                    self.agent.reset(env_info["reset"])
                 if on_step_cb is not None:
                     on_step_cb(
                         state=state,
@@ -192,6 +182,8 @@ class PPO:
         advantages, target_values = self.bootstrap()
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = self.train(advantages, target_values)
+        if isinstance(self.agent, RNNBasedAgent):
+            self.agent.detach()
         return state, policy_info, env_info, losses, grad_norms
 
     @staticmethod

@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 
 from quaddif.network import DeterministicActor, StochasticActor
+from quaddif.network.rnn import RNNBasedAgent
 
 class APG:
     def __init__(
@@ -19,7 +20,6 @@ class APG:
     ):
         self.actor = DeterministicActor(cfg, state_dim, hidden_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
-        self.discount: float = cfg.gamma
         self.max_grad_norm: float = cfg.max_grad_norm
         self.l_rollout: int = l_rollout
         self.actor_loss = torch.zeros(1, device=device)
@@ -50,6 +50,8 @@ class APG:
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(state)
             state, loss, terminated, env_info = env.step(action)
+            if isinstance(self.actor, RNNBasedAgent):
+                self.actor.reset(env_info["reset"])
             self.record_loss(loss, policy_info, env_info)
             if on_step_cb is not None:
                 on_step_cb(
@@ -59,6 +61,8 @@ class APG:
                     env_info=env_info)
             
         losses, grad_norms = self.update_actor()
+        if isinstance(self.actor, RNNBasedAgent):
+            self.actor.detach()
         return state, policy_info, env_info, losses, grad_norms
     
     def save(self, path):
