@@ -71,8 +71,8 @@ class QuadrotorModel:
         self.max_action = self.controller.max_action
     
     def detach(self):
-        self._state = self._state.detach()
-        self._acc = self._acc.detach()
+        self._state.detach_()
+        self._acc.detach_()
 
     def dynamics(self, X: torch.Tensor, U: torch.Tensor) -> torch.Tensor:
         # Unpacking state and input variables

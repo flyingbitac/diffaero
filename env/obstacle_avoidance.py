@@ -22,7 +22,8 @@ class ObstacleAvoidance(BaseEnv):
         assert self.sensor_type in ["camera", "lidar", "relpos"]
         
         if self.sensor_type == "camera":
-            if self.sensor_type == "camera" and cfg.sensor.type == "raydist":
+            self.camera_type = cfg.sensor.type
+            if self.sensor_type == "camera" and self.camera_type == "raydist":
                 self.camera = Camera(cfg.sensor, device=device)
             H, W = cfg.sensor.height, cfg.sensor.width
         elif self.sensor_type == "lidar":
@@ -35,7 +36,7 @@ class ObstacleAvoidance(BaseEnv):
         self.state_dim = (13, (H, W)) # flattened depth image as additional observation
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
-        use_isaacgym_camera = self.sensor_type == "camera" and cfg.sensor.type == "isaacgym"
+        use_isaacgym_camera = self.sensor_type == "camera" and self.camera_type == "isaacgym"
         need_renderer = (not cfg.render.headless) or cfg.render.record_video or use_isaacgym_camera
         if need_renderer:
             self.renderer = ObstacleAvoidanceRenderer(
@@ -56,7 +57,6 @@ class ObstacleAvoidance(BaseEnv):
         else:
             state = [self.target_vel, self._q, self._v, self._w]
         state = torch.cat(state, dim=-1)
-        self.update_sensor_data()
         state = TensorDict({
             "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
         state = state if with_grad else state.detach()
@@ -64,9 +64,9 @@ class ObstacleAvoidance(BaseEnv):
     
     def update_sensor_data(self):
         if self.sensor_type == "camera":
-            if self.cfg.sensor.type == "isaacgym":
+            if self.camera_type == "isaacgym":
                 self.sensor_tensor.copy_(self.renderer.render_camera())
-            elif self.cfg.sensor.type == "raydist":
+            elif self.camera_type == "raydist":
                 H, W = self.sensor_tensor.shape[1:]
                 self.sensor_tensor.copy_(self.camera(
                     sphere_pos=self.obstacle_manager.p_spheres,
