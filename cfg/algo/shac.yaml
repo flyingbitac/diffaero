@@ -1,7 +1,7 @@
 name: shac
 network: ${network}
 
-hidden_dim: [64]
+hidden_dim: [256, 128]
 l_rollout: 24
 
 actor_lr: 0.001

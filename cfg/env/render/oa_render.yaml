@@ -37,8 +37,8 @@ viewer:
 camera: ${env.sensor}
 
 rgb_camera:
-  width: 128
-  height: 128
+  width: 256
+  height: 256
   horizontal_fov: 120.0
   enable_tensors: True
   supersampling_horizontal: 1
