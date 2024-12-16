@@ -107,6 +107,7 @@ class ObstacleAvoidance(BaseEnv):
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
         success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
+        self.update_sensor_data()
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
