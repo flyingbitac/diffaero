@@ -1,7 +1,6 @@
 name: ppo
 network: ${network}
 
-hidden_dim: [256, 128]
 l_rollout: 16
 
 lr: 0.0026

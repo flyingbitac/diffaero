@@ -5,7 +5,6 @@ anchor_ckpt:
 anchor_state_dim: 13
 rpl_action: True
 
-hidden_dim: [256, 128]
 l_rollout: 16
 
 lr: 0.0026

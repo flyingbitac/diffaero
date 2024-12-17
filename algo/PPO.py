@@ -8,8 +8,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.network import RPLActorCritic, StochasticActorCritic_V
-from quaddif.network.rnn import RNNBasedAgent
+from quaddif.network.agents import RPLActorCritic, StochasticActorCriticV
 from quaddif.algo.buffer import RolloutBufferPPO, RNNStateBuffer
 
 class PPO:
@@ -25,10 +24,10 @@ class PPO:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCritic_V(cfg, state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCriticV(cfg.network, state_dim, hidden_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
         self.buffer = RolloutBufferPPO(l_rollout, n_envs, state_dim, action_dim, device)
-        if isinstance(self.agent, RNNBasedAgent):
+        if self.agent.is_rnn_based:
             self.rnn_state_buffer = RNNStateBuffer(l_rollout, n_envs, cfg.network.rnn_hidden_dim, cfg.network.rnn_n_layers, device)
         
         self.discount = cfg.gamma
@@ -47,7 +46,7 @@ class PPO:
     
     def act(self, state, test=False):
         # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
-        if isinstance(self.agent, RNNBasedAgent):
+        if self.agent.is_rnn_based:
             self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
         action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
@@ -73,7 +72,7 @@ class PPO:
         samples = self.buffer.samples.flatten(0, 1)
         logprobs = self.buffer.logprobs.flatten(0, 1)
         values = self.buffer.values.flatten(0, 1)
-        if isinstance(self.agent, RNNBasedAgent):
+        if self.agent.is_rnn_based:
             actor_hidden_state = self.rnn_state_buffer.actor_rnn_state.flatten(0, 1)
             critic_hidden_state = self.rnn_state_buffer.critic_rnn_state.flatten(0, 1)
         if self.norm_adv:
@@ -87,7 +86,7 @@ class PPO:
             end = start + mb_size
             mb_indices = batch_indices[start:end]
             # policy loss
-            if isinstance(self.agent, RNNBasedAgent):
+            if self.agent.is_rnn_based:
                 _, _, newlogprob, entropy = self.agent.get_action(
                     states[mb_indices],
                     samples[mb_indices],
@@ -106,7 +105,7 @@ class PPO:
             # entropy loss
             entropy_loss = -entropy.mean()
             # value loss
-            if isinstance(self.agent, RNNBasedAgent):
+            if self.agent.is_rnn_based:
                 newvalue = self.agent.get_value(states[mb_indices], hidden=critic_hidden_state[mb_indices].permute(1, 0, 2))
             else:
                 newvalue = self.agent.get_value(states[mb_indices])
@@ -155,7 +154,7 @@ class PPO:
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
-        if isinstance(self.agent, RNNBasedAgent):
+        if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()
         with torch.no_grad():
             for t in range(cfg.l_rollout):
@@ -170,7 +169,7 @@ class PPO:
                     value=policy_info["value"],
                     next_value=self.agent.get_value(env_info["next_state_before_reset"]))
                 state = next_state
-                if isinstance(self.agent, RNNBasedAgent):
+                if self.agent.is_rnn_based:
                     self.agent.reset(env_info["reset"])
                 if on_step_cb is not None:
                     on_step_cb(
@@ -182,7 +181,7 @@ class PPO:
         advantages, target_values = self.bootstrap()
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = self.train(advantages, target_values)
-        if isinstance(self.agent, RNNBasedAgent):
+        if self.agent.is_rnn_based:
             self.agent.detach()
         return state, policy_info, env_info, losses, grad_norms
 
@@ -191,7 +190,7 @@ class PPO:
         return PPO(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
+            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
@@ -212,7 +211,7 @@ class PPO_RPL(PPO):
         super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
         del self.agent, self.optim
         self.agent = RPLActorCritic(
-            cfg, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
+            cfg.network, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
         self.optim = torch.optim.Adam([
             {"params": self.agent.actor.parameters()},
             {"params": self.agent.critic.parameters()},
@@ -223,7 +222,7 @@ class PPO_RPL(PPO):
         return PPO_RPL(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
+            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,

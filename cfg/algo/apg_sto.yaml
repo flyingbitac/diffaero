@@ -1,7 +1,6 @@
 name: apg_sto
 network: ${network}
 
-hidden_dim: [256, 128]
 l_rollout: 32
 
 lr: 0.001
