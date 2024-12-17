@@ -48,8 +48,9 @@ def learn(
         t1 = pbar._time()
         env.detach()
         state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
-        l_episode = env_info["stats"]["l"].float().mean().item()
+        l_episode = env_info["stats"]["l"]
         success_rate = env_info['stats']['success_rate']
+        arrive_time = env_info["stats"]["arrive_time"]
         if cfg.algo.name != 'world':
             pbar.set_postfix({
                 "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",

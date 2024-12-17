@@ -78,17 +78,17 @@ def test(
                 video_length = env_info["l"][idx] - 1
                 
                 # save the video using imageio
-                # path = os.path.join(logger.logdir, "video")
-                # if not os.path.exists(path):
-                #     os.makedirs(path)
-                # with imageio.get_writer(os.path.join(path, f"failed_{i+1}.mp4"), fps=1/env.dt) as video:
-                #     for frame_index in range(video_length):
-                #         frame = video_tensor[idx, frame_index]
-                #         frame = frame.permute(1, 2, 0).cpu().numpy()
-                #         video.append_data(frame)
+                path = os.path.join(logger.logdir, "video")
+                if not os.path.exists(path):
+                    os.makedirs(path)
+                with imageio.get_writer(os.path.join(path, f"failed_{i+1}.mp4"), fps=1/env.dt) as video:
+                    for frame_index in range(video_length):
+                        frame = video_tensor[idx, frame_index]
+                        frame = frame.permute(1, 2, 0).cpu().numpy()
+                        video.append_data(frame)
 
                 # save the video using tensorboard
-                logger.log_video("video/fail", video_tensor[idx.unsqueeze(0), :video_length], step=i+1, fps=1/env.dt)
+                # logger.log_video("video/fail", video_tensor[idx.unsqueeze(0), :video_length], step=i+1, fps=1/env.dt)
             
         if on_step_cb is not None:
             on_step_cb(
