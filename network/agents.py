@@ -19,11 +19,10 @@ class DeterministicActor(AgentBase):
         self,
         cfg: DictConfig,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
         action_dim: int
     ):
         super().__init__(cfg)
-        self.actor = build_network(cfg, state_dim, hidden_dim, action_dim, output_act=nn.Tanh())
+        self.actor = build_network(cfg, state_dim, action_dim, output_act=nn.Tanh())
         
     def forward(self, obs: Union[Tensor, TensorDict], hidden: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         return self.actor(obs, hidden=hidden)
@@ -46,12 +45,10 @@ class StochasticActor(AgentBase):
         self,
         cfg: DictConfig,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
         action_dim: int
     ):
         super().__init__(cfg)
-        print(hidden_dim)
-        self.actor_mean = build_network(cfg, state_dim, hidden_dim, action_dim)
+        self.actor_mean = build_network(cfg, state_dim, action_dim)
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
 
     def forward(self, obs, sample=None, test=False, hidden=None):
@@ -94,11 +91,10 @@ class CriticV(AgentBase):
     def __init__(
         self,
         cfg: DictConfig,
-        state_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
+        state_dim: Union[int, Tuple[int, Tuple[int, int]]]
     ):
         super().__init__(cfg)
-        self.critic = build_network(cfg, state_dim, hidden_dim, 1)
+        self.critic = build_network(cfg, state_dim, 1)
     
     def forward(self, obs: Union[Tensor, TensorDict], hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, hidden=hidden).squeeze(-1)
@@ -121,7 +117,6 @@ class CriticQ(AgentBase):
         self,
         cfg: DictConfig,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
         action_dim: int
     ):
         super().__init__(cfg)
@@ -129,7 +124,7 @@ class CriticQ(AgentBase):
             state_dim = (state_dim[0] + action_dim, state_dim[1])
         else:
             state_dim = state_dim + action_dim
-        self.critic = build_network(cfg, state_dim, hidden_dim, 1)
+        self.critic = build_network(cfg, state_dim, 1)
     
     def forward(self, obs: Union[Tensor, TensorDict], action: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, action, hidden=hidden).squeeze(-1)
@@ -152,12 +147,11 @@ class StochasticActorCriticV(AgentBase):
         self,
         cfg: DictConfig,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
         action_dim: int
     ):
         super().__init__(cfg)
-        self.critic = CriticV(cfg, state_dim, hidden_dim)
-        self.actor = StochasticActor(cfg, state_dim, hidden_dim, action_dim)
+        self.critic = CriticV(cfg, state_dim)
+        self.actor = StochasticActor(cfg, state_dim, action_dim)
 
     def get_value(self, obs: Union[Tensor, TensorDict], hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, hidden=hidden)
@@ -192,12 +186,11 @@ class StochasticActorCriticQ(AgentBase):
         self,
         cfg: DictConfig,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
         action_dim: int
     ):
         super().__init__(cfg)
-        self.critic = CriticQ(cfg, state_dim, hidden_dim, action_dim)
-        self.actor = StochasticActor(cfg, state_dim, hidden_dim, action_dim)
+        self.critic = CriticQ(cfg, state_dim, action_dim)
+        self.actor = StochasticActor(cfg, state_dim, action_dim)
 
     def get_value(self, obs: Union[Tensor, TensorDict], action: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, action, hidden=hidden)
@@ -236,7 +229,6 @@ class RPLActorCritic(StochasticActorCriticV):
         anchor_ckpt: str,
         state_dim: Tuple[int, Tuple[int, int]],
         anchor_state_dim: int,
-        hidden_dim: int,
         action_dim: int,
         rpl_action: bool = True
     ):
@@ -244,7 +236,6 @@ class RPLActorCritic(StochasticActorCriticV):
         super().__init__(
             cfg=cfg,
             state_dim=rpl_state_dim,
-            hidden_dim=hidden_dim,
             action_dim=action_dim)
         
         torch.nn.init.zeros_(self.actor.actor_mean.net[-1].weight)
@@ -252,7 +243,7 @@ class RPLActorCritic(StochasticActorCriticV):
         
         cfg_path = os.path.join(os.path.dirname(os.path.abspath(anchor_ckpt)), ".hydra", "config.yaml")
         ckpt_cfg = OmegaConf.load(cfg_path)
-        self.anchor_agent = StochasticActorCriticV(ckpt_cfg.algo.network, anchor_state_dim, list(ckpt_cfg.algo.hidden_dim), action_dim)
+        self.anchor_agent = StochasticActorCriticV(ckpt_cfg.algo.network, anchor_state_dim, action_dim)
         self.anchor_agent.load(anchor_ckpt)
         self.anchor_agent.eval()
         self.anchor_state_dim = anchor_state_dim

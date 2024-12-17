@@ -16,7 +16,6 @@ class PPO:
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: List[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
@@ -24,7 +23,7 @@ class PPO:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCriticV(cfg.network, state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCriticV(cfg.network, state_dim, action_dim).to(device)
         self.optim = torch.optim.Adam(self.agent.parameters(), lr=cfg.lr, eps=cfg.eps)
         self.buffer = RolloutBufferPPO(l_rollout, n_envs, state_dim, action_dim, device)
         if self.agent.is_rnn_based:
@@ -190,7 +189,6 @@ class PPO:
         return PPO(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
@@ -202,16 +200,15 @@ class PPO_RPL(PPO):
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: List[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
         device: torch.device
     ):
-        super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
+        super().__init__(cfg, state_dim, action_dim, n_envs, l_rollout, device)
         del self.agent, self.optim
         self.agent = RPLActorCritic(
-            cfg.network, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
+            cfg.network, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, action_dim, cfg.rpl_action).to(device)
         self.optim = torch.optim.Adam([
             {"params": self.agent.actor.parameters()},
             {"params": self.agent.critic.parameters()},
@@ -222,7 +219,6 @@ class PPO_RPL(PPO):
         return PPO_RPL(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,

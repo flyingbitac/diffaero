@@ -12,12 +12,11 @@ class APG:
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         l_rollout: int,
         device: torch.device
     ):
-        self.actor = DeterministicActor(cfg.network, state_dim, hidden_dim, action_dim).to(device)
+        self.actor = DeterministicActor(cfg.network, state_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.max_grad_norm: float = cfg.max_grad_norm
         self.l_rollout: int = l_rollout
@@ -77,7 +76,6 @@ class APG:
         return APG(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             l_rollout=cfg.l_rollout,
             device=device)
@@ -88,14 +86,13 @@ class APG_stochastic(APG):
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         l_rollout: int,
         device: torch.device
     ):
-        super().__init__(cfg, state_dim, hidden_dim, action_dim, l_rollout, device)
+        super().__init__(cfg, state_dim, action_dim, l_rollout, device)
         del self.optimizer; del self.actor
-        self.actor = StochasticActor(cfg.network, state_dim, hidden_dim, action_dim).to(device)
+        self.actor = StochasticActor(cfg.network, state_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.entropy_loss = torch.zeros(1, device=device)
         self.entropy_weight: float = cfg.entropy_weight
@@ -130,7 +127,6 @@ class APG_stochastic(APG):
         return APG_stochastic(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             l_rollout=cfg.l_rollout,
             device=device)

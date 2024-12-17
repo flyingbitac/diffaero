@@ -104,8 +104,9 @@ def main(cfg: DictConfig):
     except KeyboardInterrupt:
         pass
     finally:
-        agent.save(os.path.join(logger.logdir, "checkpoints"))
-        print(f"The checkpoint is saved to {logger.logdir}.")
+        ckpt_path = os.path.join(logger.logdir, "checkpoints")
+        agent.save(ckpt_path)
+        print(f"The checkpoint is saved to {ckpt_path}.")
     
     if env.renderer is not None:
         env.renderer.close()

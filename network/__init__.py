@@ -15,8 +15,7 @@ BACKBONE_ALIAS: Dict[str, Union[MLP, CNN, RNN]] = {
 def build_network(
     cfg: DictConfig,
     input_dim: Union[int, Tuple[int, Tuple[int, int]]],
-    hidden_dim: Union[int, List[int]],
     output_dim: int,
     output_act: Optional[nn.Module] = None
-) -> Union[MLP, CNN, RNN]:
-    return BACKBONE_ALIAS[cfg.name](cfg, input_dim, hidden_dim, output_dim, output_act)
+) -> Union[MLP, CNN, RNN, RCNN]:
+    return BACKBONE_ALIAS[cfg.name](cfg, input_dim, output_dim, output_act)

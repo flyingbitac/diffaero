@@ -16,7 +16,6 @@ class SHAC:
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
@@ -24,7 +23,7 @@ class SHAC:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCriticV(cfg.network, state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCriticV(cfg.network, state_dim, action_dim).to(device)
         if self.agent.is_rnn_based:
             self.rnn_state_buffer = RNNStateBuffer(l_rollout, n_envs, cfg.network.rnn_hidden_dim, cfg.network.rnn_n_layers, device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
@@ -204,7 +203,6 @@ class SHAC:
         return SHAC(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
@@ -216,15 +214,14 @@ class SHAC_RPL(SHAC):
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
         device: torch.device
     ):
-        super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
+        super().__init__(cfg, state_dim, action_dim, n_envs, l_rollout, device)
         del self.agent, self.actor_optim, self.critic_optim, self._critic_target
-        self.agent = RPLActorCritic(cfg.network, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
+        self.agent = RPLActorCritic(cfg.network, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, action_dim, cfg.rpl_action).to(device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
         self._critic_target = deepcopy(self.agent.critic)
@@ -258,7 +255,6 @@ class SHAC_Q:
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
@@ -266,7 +262,7 @@ class SHAC_Q:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCriticQ(cfg.network, state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCriticQ(cfg.network, state_dim, action_dim).to(device)
         if self.agent.is_rnn_based:
             self.rnn_state_buffer = RNNStateBuffer(l_rollout, n_envs, cfg.network.rnn_hidden_dim, cfg.network.rnn_n_layers, device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
@@ -405,7 +401,6 @@ class SHAC_Q:
         return SHAC_Q(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,

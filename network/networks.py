@@ -29,7 +29,6 @@ class MLP(BaseNetwork):
         self,
         cfg: DictConfig,
         input_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
@@ -37,7 +36,7 @@ class MLP(BaseNetwork):
         if not isinstance(input_dim, int):
             D, (H, W) = input_dim
             input_dim = D + H * W
-        self.head = mlp(input_dim, hidden_dim, output_dim, output_act=output_act)
+        self.head = mlp(input_dim, cfg.hidden_dim, output_dim, output_act=output_act)
     
     def forward(
         self,
@@ -68,13 +67,12 @@ class CNN(BaseNetwork):
         self,
         cfg: DictConfig,
         input_dim: Tuple[int, Tuple[int, int]],
-        hidden_dim: Union[int, List[int]],
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
         super().__init__()
         self.cnn = CNNBackbone(input_dim)
-        self.head = mlp(self.cnn.out_dim, hidden_dim, output_dim, output_act=output_act)
+        self.head = mlp(self.cnn.out_dim, cfg.hidden_dim, output_dim, output_act=output_act)
     
     def forward(
         self,
@@ -94,7 +92,6 @@ class RNN(BaseNetwork):
         self,
         cfg: DictConfig,
         input_dim: Union[int, Tuple[int, Tuple[int, int]]],
-        hidden_dim: Union[int, List[int]],
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
@@ -114,7 +111,7 @@ class RNN(BaseNetwork):
             bidirectional=False,
             dtype=torch.float
         )
-        self.head = mlp(self.rnn_hidden_dim, hidden_dim, output_dim, output_act=output_act)
+        self.head = mlp(self.rnn_hidden_dim, cfg.hidden_dim, output_dim, output_act=output_act)
         self.hidden_state: Optional[Tensor] = None
     
     def forward(
@@ -151,7 +148,6 @@ class RCNN(BaseNetwork):
         self,
         cfg: DictConfig,
         input_dim: Tuple[int, Tuple[int, int]],
-        hidden_dim: Union[int, List[int]],
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
@@ -169,7 +165,7 @@ class RCNN(BaseNetwork):
             bidirectional=False,
             dtype=torch.float
         )
-        self.head = mlp(self.rnn_hidden_dim, hidden_dim, output_dim, output_act=output_act)
+        self.head = mlp(self.rnn_hidden_dim, cfg.hidden_dim, output_dim, output_act=output_act)
         self.hidden_state: Optional[Tensor] = None
     
     def forward(
