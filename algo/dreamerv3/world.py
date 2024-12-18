@@ -116,11 +116,10 @@ class World_Agent:
     
     @torch.no_grad()
     def act(self,obs,test=False):
-        state,perception = obs['state'],obs['perception'].flatten(1)
-        state = torch.cat([state,perception],dim=-1)
+        state,perception = obs['state'],obs['perception'].unsqueeze(1)
         if self.world_agent_cfg.common.use_symlog:
             state = symlog(state)   
-        latent = self.state_model.sample_with_post(state,self.hidden)[0].flatten(1)
+        latent = self.state_model.sample_with_post(state,perception,self.hidden)[0].flatten(1)
         action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1))[0]
         self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
         return action,None
