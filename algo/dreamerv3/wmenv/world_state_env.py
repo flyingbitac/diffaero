@@ -44,21 +44,16 @@ class StateEnv:
         batch_length = self.cfg.batch_length
         states, actions, _ , _, _, perceptions = self.replaybuffer.sample(batch_size, batch_length)
         hidden = None
-
-        if self.cfg.use_perception:
-            feats = perceptions
-        else:
-            feats = states
             
         for i in range(batch_length):
-            latent,_ = self.state_model.sample_with_post(feats[:,i],hidden)
+            latent,_ = self.state_model.sample_with_post(states[:,i],perceptions[:,i],hidden)
             latent = self.state_model.flatten(latent)
             latent,_,hidden=self.state_model.sample_with_prior(latent,actions[:,i],hidden)
 
         latent = self.state_model.flatten(latent)
         self.latent = latent
         self.hidden = hidden
-        self.drone_state = self.state_model.decode(latent,hidden)
+        self.drone_state,self.drone_perception = self.state_model.decode(latent,hidden)
         
         return latent,hidden,self.drone_state
         

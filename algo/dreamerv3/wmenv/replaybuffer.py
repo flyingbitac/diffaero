@@ -21,7 +21,7 @@ class ReplayBuffer():
         device = torch.device(cfg.device)
         if cfg.store_on_gpu:
             self.state_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.state_dim), dtype=torch.float32, device=device, requires_grad=False)
-            self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.perception_dim), dtype=torch.float32, device=device, requires_grad=False)
+            self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_dim, cfg.perception_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.action_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs,cfg.action_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_components_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 5), dtype=torch.float32, device=device, requires_grad=False)
@@ -34,7 +34,7 @@ class ReplayBuffer():
         self.last_pointer = -1
         self.max_length = cfg.max_length
         self.warmup_length = cfg.warmup_length
-        self.use_perception = cfg.use_perception
+        self.use_perception = True
 
     def ready(self):
         return self.length * self.num_envs > self.warmup_length and self.length > 64

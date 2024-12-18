@@ -76,7 +76,7 @@ world_state_env:
 
 replaybuffer:
   _target_: algo.dreamerv3.wmenv.buffercfg
-  perception_dim: 144
+  perception_dim: 16
   state_dim: 13
   action_dim: 3
   num_envs: 64
@@ -89,7 +89,8 @@ replaybuffer:
 state_predictor:
   state_model:
     _target_: algo.dreamerv3.models.state_predictor.StateModelCfg
-    state_dim: 43 #state_dim+wall_distances_dim + obstacles_num*3
+    state_dim: 13 #state_dim+wall_distances_dim + obstacles_num*3
+    image_width: 16
     hidden_dim: 512
     action_dim: 3
     latent_dim: 1024

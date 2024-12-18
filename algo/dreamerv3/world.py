@@ -53,11 +53,14 @@ def train_agents(agent:ActorCriticAgent,state_env:StateEnv,cfg):
     
 def train_worldmodel(world_model:StateModel,replaybuffer:ReplayBuffer,opt,training_hyper):
     for _ in range(training_hyper.worldmodel_update_freq):
-        sample_state, sample_action, sample_reward, sample_termination,sample_reward_components,_ = replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
+        sample_state, sample_action, sample_reward, sample_termination,sample_reward_components,sample_perception = \
+                                            replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
         if not training_hyper.use_multirew:
-            total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = world_model.compute_loss(sample_state, sample_action, sample_reward, sample_termination)
+            total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = \
+                world_model.compute_loss(sample_state, sample_perception, sample_action, sample_reward, sample_termination)
         else:
-            total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = world_model.compute_loss(sample_state, sample_action, sample_reward_components, sample_termination)
+            total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = \
+                world_model.compute_loss(sample_state, sample_perception, sample_action, sample_reward_components, sample_termination)
     
     total_loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(world_model.parameters(),training_hyper.max_grad_norm)
@@ -90,14 +93,14 @@ class World_Agent:
         self.world_agent_cfg = world_agent_cfg
         
         statemodelcfg = getattr(world_agent_cfg,"state_predictor").state_model
-        statemodelcfg.state_dim = 157
+        statemodelcfg.state_dim = 13
         # statemodelcfg.hidden_dim = 512
         # statemodelcfg.latent_dim = 1024
         actorcriticcfg = getattr(world_agent_cfg,"actor_critic").model
         actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
         buffercfg = getattr(world_agent_cfg,"replaybuffer")
-        buffercfg.state_dim = 157
+        buffercfg.state_dim = 13
         worldcfg = getattr(world_agent_cfg,"world_state_env")
         training_hyper = getattr(world_agent_cfg,"state_predictor").training
         training_hyper.use_multirew = statemodelcfg.use_multirew
@@ -125,19 +128,18 @@ class World_Agent:
     def step(self,cfg,env,obs,on_step_cb=None):
         policy_info = {}
         with torch.no_grad():
-            state,perception = obs['state'],obs['perception'].flatten(1)
-            state = torch.cat([state,perception],dim=-1)
+            state,perception = obs['state'],obs['perception'].unsqueeze(1)
             if self.world_agent_cfg.common.use_symlog:
                 state = symlog(state)
             if self.replaybuffer.ready() or self.world_agent_cfg.common.use_checkpoint:
-                latent = self.state_model.sample_with_post(state,self.hidden)[0].flatten(1)
+                latent = self.state_model.sample_with_post(state,perception,self.hidden)[0].flatten(1)
                 action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1))[0]
                 self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
             else:
                 action = torch.randn(self.cfg.n_envs,3,device=state.device)
             next_obs,rewards,terminated,env_info = env.step(action)
             rewards = 10.*(1-rewards*0.1)
-            self.replaybuffer.append(state,action,rewards,terminated)
+            self.replaybuffer.append(state,action,rewards,terminated,None,perception)
             
             if terminated.any():
                 for i in range(cfg.n_envs):

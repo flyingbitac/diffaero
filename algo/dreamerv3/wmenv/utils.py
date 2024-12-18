@@ -133,8 +133,8 @@ def configure_opt(model: nn.Module, lr: float, weight_decay: float, eps: float, 
     # separate out all parameters to those that will and won't experience regularizing weight decay
     decay = set()
     no_decay = set()
-    whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.LSTMCell, nn.LSTM, nn.GRUCell)
-    blacklist_weight_modules = (nn.LayerNorm, nn.Embedding, nn.GroupNorm)
+    whitelist_weight_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.LSTMCell, nn.LSTM, nn.GRUCell, nn.ConvTranspose2d)
+    blacklist_weight_modules = (nn.LayerNorm, nn.Embedding, nn.GroupNorm, nn.BatchNorm2d)
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
             fpn = "%s.%s" % (mn, pn) if mn else pn  # full param name
