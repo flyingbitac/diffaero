@@ -18,7 +18,7 @@ from quaddif.algo import AGENT_ALIAS
 from quaddif.utils.device import idle_device
 from quaddif.utils.logger import RecordEpisodeStatistics, Logger
 
-def on_step_cb(state, action, policy_info, env_info):
+def display_image(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
     if "sensor" in env_info.keys():
         N, C = 64, 1
@@ -99,7 +99,7 @@ def main(cfg: DictConfig):
     
     logger = Logger(cfg, run_name=cfg.runname)
     try:
-        # learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
+        # learn(cfg, agent, env, logger, on_step_cb=display_image)
         learn(cfg, agent, env, logger)
     except KeyboardInterrupt:
         pass
