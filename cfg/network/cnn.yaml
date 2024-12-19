@@ -1,1 +1,3 @@
 name: cnn
+
+hidden_dim: [256, 128]

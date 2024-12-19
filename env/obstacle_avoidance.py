@@ -16,13 +16,15 @@ class ObstacleAvoidance(BaseEnv):
         super(ObstacleAvoidance, self).__init__(cfg, device)
         self.obstacle_manager = ObstacleManager(cfg.obstacles, self.n_envs, self.L, device)
         self.n_obstacles = self.obstacle_manager.n_obstacles
-        self.z_ground_plane = -0.5*self.L if cfg.ground_plane else None
+        self.height_scale = cfg.height_scale
+        self.z_ground_plane = -self.height_scale*self.L if cfg.ground_plane else None
         
         self.sensor_type = cfg.sensor.name
         assert self.sensor_type in ["camera", "lidar", "relpos"]
         
         if self.sensor_type == "camera":
-            if self.sensor_type == "camera" and cfg.sensor.type == "raydist":
+            self.camera_type = cfg.sensor.type
+            if self.sensor_type == "camera" and self.camera_type == "raydist":
                 self.camera = Camera(cfg.sensor, device=device)
             H, W = cfg.sensor.height, cfg.sensor.width
         elif self.sensor_type == "lidar":
@@ -35,7 +37,7 @@ class ObstacleAvoidance(BaseEnv):
         self.state_dim = (13, (H, W)) # flattened depth image as additional observation
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
-        use_isaacgym_camera = self.sensor_type == "camera" and cfg.sensor.type == "isaacgym"
+        use_isaacgym_camera = self.sensor_type == "camera" and self.camera_type == "isaacgym"
         need_renderer = (not cfg.render.headless) or cfg.render.record_video or use_isaacgym_camera
         if need_renderer:
             self.renderer = ObstacleAvoidanceRenderer(
@@ -52,11 +54,9 @@ class ObstacleAvoidance(BaseEnv):
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":
-            state = [self.target_vel, self.q, self._v, self._a]
+            state = torch.cat([self.target_vel, self.q, self._v, self._a], dim=-1)
         else:
-            state = [self.target_vel, self._q, self._v, self._w]
-        state = torch.cat(state, dim=-1)
-        self.update_sensor_data()
+            state = torch.cat([self.target_vel, self._q, self._v, self._w], dim=-1)
         state = TensorDict({
             "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
         state = state if with_grad else state.detach()
@@ -64,9 +64,9 @@ class ObstacleAvoidance(BaseEnv):
     
     def update_sensor_data(self):
         if self.sensor_type == "camera":
-            if self.cfg.sensor.type == "isaacgym":
+            if self.camera_type == "isaacgym":
                 self.sensor_tensor.copy_(self.renderer.render_camera())
-            elif self.cfg.sensor.type == "raydist":
+            elif self.camera_type == "raydist":
                 H, W = self.sensor_tensor.shape[1:]
                 self.sensor_tensor.copy_(self.camera(
                     sphere_pos=self.obstacle_manager.p_spheres,
@@ -107,6 +107,7 @@ class ObstacleAvoidance(BaseEnv):
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
         success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
+        self.update_sensor_data()
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
@@ -192,7 +193,7 @@ class ObstacleAvoidance(BaseEnv):
         state_mask[env_idx] = 1
         
         xy_min, xy_max = -self.L+0.5, self.L-0.5
-        z_min, z_max = -0.5*self.L+0.5, 0.5*self.L-0.5
+        z_min, z_max = -self.height_scale*self.L+0.5, self.height_scale*self.L-0.5
         p_new = torch.cat([
             torch.rand((self.n_envs, 2), device=self.device) * (xy_max - xy_min) + xy_min,
             torch.rand((self.n_envs, 1), device=self.device) * (z_max - z_min) + z_min
@@ -207,15 +208,20 @@ class ObstacleAvoidance(BaseEnv):
         N = 10
         x = y = torch.linspace(xy_min, xy_max, N, device=self.device)
         z = torch.linspace(z_min, z_max, N, device=self.device)
-        random_idx = torch.randperm(N**3, device=self.device)
+        
+        random_idx = torch.stack([torch.randperm(N**3, device=self.device) for _ in range(n_resets)], dim=0) # [n_resets, N**3]
+        random_idx = random_idx.unsqueeze(-1).expand(-1, -1, 3) # [n_resets, N**3, 3]
         # indexing of meshgrid dosen't really matter here, explicitly setting to avoid warning
-        xyz = torch.stack(torch.meshgrid(x, y, z, indexing="ij"), dim=-1).reshape(N**3, 3)[random_idx]
-        validility = torch.gt((xyz[None, ...] - self.p[env_idx, None, :]).norm(dim=-1), min_init_dist)
-        sub_idx = validility.nonzero()
-        env_sub_idx = torch.tensor([(sub_idx[:, 0] == i).sum() for i in range(n_resets)]).roll(1, dims=0)
-        env_sub_idx[0] = 0
-        env_sub_idx = torch.cumsum(env_sub_idx, dim=0)
-        self.target_pos[env_idx] = xyz[sub_idx[env_sub_idx, 1]]
+        xyz = torch.stack(torch.meshgrid(x, y, z, indexing="ij"), dim=-1)
+        xyz = xyz.reshape(1, N**3, 3).expand(n_resets, -1, -1).gather(dim=1, index=random_idx) # [n_resets, N**3, 3]
+        valid = torch.gt((xyz - self.p[env_idx, None, :]).norm(dim=-1), min_init_dist)
+        
+        valid_points = valid.nonzero()
+        point_index = torch.tensor([(valid_points[:, 0] == i).sum() for i in range(n_resets)]).roll(1, dims=0)
+        point_index[0] = 0
+        point_index = torch.cumsum(point_index, dim=0)
+        chosen_points = valid_points[point_index]
+        self.target_pos[env_idx] = xyz[chosen_points[:, 0], chosen_points[:, 1]]
         # check that all regenerated initial and target positions meet the minimal distance contraint
         assert torch.all((self.p[env_idx] - self.target_pos[env_idx]).norm(dim=-1) > min_init_dist).item()
         

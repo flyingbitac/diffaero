@@ -15,12 +15,12 @@ setup(
         'tqdm',
         'tensorboard==2.12.0',
         'opencv-python',
-        'six',
-        'h5py',
         'isaacgym',
-        "welford_torch",
+        'welford_torch',
         'opencv-python'
-        # Add any other dependencies here
+        'moviepy',
+        'imageio',
+        'imageio-ffmpeg'
     ],
     author='Xinhong Zhang',
     author_email='zxh0916@126.com',

@@ -208,6 +208,5 @@ class LiDAR:
         roll = torch.zeros_like(pitch)
         rpy = torch.stack([roll, pitch, yaw], dim=-1)
         rotmat = T.euler_angles_to_matrix(rpy, convention='XYZ') # [H, W, 3, 3]
-        # rotmat = T.euler_angles_to_matrix(ypr, convention='ZYX') # [H, W, 3, 3]
         directions = rotmat.transpose(-1, -2) @ forward.unsqueeze(-1) # [H, W, 3, 1]
         return directions.squeeze(-1) # [H, W, 3]

@@ -8,47 +8,14 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.network import StochasticActorCritic_V, RPLActorCritic, StochasticActorCritic_Q
-
-class SHACRolloutBuffer:
-    def __init__(self, l_rollout, num_envs, state_dim, device):
-        factory_kwargs = {"dtype": torch.float32, "device": device}
-        
-        assert isinstance(state_dim, tuple) or isinstance(state_dim, int)
-        if isinstance(state_dim, tuple):
-            self.states = TensorDict({
-                "state": torch.zeros((l_rollout, num_envs, state_dim[0]), **factory_kwargs),
-                "perception": torch.zeros((l_rollout, num_envs, state_dim[1][0], state_dim[1][1]), **factory_kwargs)
-            }, batch_size=(l_rollout, num_envs))
-        else:
-            self.states = torch.zeros((l_rollout, num_envs, state_dim), **factory_kwargs)
-        self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.next_dones = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.next_terminated = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.next_values = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-    
-    def clear(self):
-        self.step = 0
-    
-    @torch.no_grad()
-    def add(self, state, reward, value, next_done, next_terminated, next_value):
-        # type: (Union[Tensor, TensorDict], Tensor, Tensor, Tensor, Tensor, Tensor) -> None
-        self.states[self.step] = state
-        self.rewards[self.step] = reward
-        self.values[self.step] = value
-        self.next_dones[self.step] = next_done.float()
-        self.next_terminated[self.step] = next_terminated.float()
-        self.next_values[self.step] = next_value
-        self.step += 1
-
+from quaddif.network.agents import StochasticActorCriticV, RPLActorCritic, StochasticActorCriticQ
+from quaddif.algo.buffer import RolloutBufferSHAC, RolloutBufferSHACQ, RNNStateBuffer
 
 class SHAC:
     def __init__(
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
@@ -56,10 +23,12 @@ class SHAC:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCritic_V(cfg, state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCriticV(cfg.network, state_dim, action_dim).to(device)
+        if self.agent.is_rnn_based:
+            self.rnn_state_buffer = RNNStateBuffer(l_rollout, n_envs, cfg.network.rnn_hidden_dim, cfg.network.rnn_n_layers, device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
-        self.buffer = SHACRolloutBuffer(l_rollout, n_envs, state_dim, device)
+        self.buffer = RolloutBufferSHAC(l_rollout, n_envs, state_dim, device)
         self._critic_target = deepcopy(self.agent.critic)
         for p in self._critic_target.parameters():
             p.requires_grad_(False)
@@ -81,6 +50,8 @@ class SHAC:
     
     def act(self, state, test=False):
         # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        if self.agent.is_rnn_based:
+            self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
         action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
@@ -169,10 +140,15 @@ class SHAC:
         batch_indices = torch.randperm(T*N, device=self.device)
         mb_size = T*N // self.n_minibatch
         states = self.buffer.states.flatten(0, 1)
+        if self.agent.is_rnn_based:
+            critic_hidden_state = self.rnn_state_buffer.critic_rnn_state.flatten(0, 1)
         for start in range(0, T*N, mb_size):
             end = start + mb_size
             mb_indices = batch_indices[start:end]
-            values = self.agent.get_value(states[mb_indices])
+            if self.agent.is_rnn_based:
+                values = self.agent.get_value(states[mb_indices], critic_hidden_state[mb_indices].permute(1, 0, 2))
+            else:
+                values = self.agent.get_value(states[mb_indices])
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()
@@ -194,6 +170,8 @@ class SHAC:
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
+        if self.agent.is_rnn_based:
+            self.rnn_state_buffer.clear()
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(state)
@@ -201,6 +179,8 @@ class SHAC:
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(state, loss/10, policy_info["value"], env_info["reset"], terminated, next_value)
+            if self.agent.is_rnn_based:
+                self.agent.reset(env_info["reset"])
             state = next_state
             if on_step_cb is not None:
                 on_step_cb(
@@ -211,6 +191,9 @@ class SHAC:
         target_values = self.bootstrap_gae()
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic(target_values)
+        if self.agent.is_rnn_based:
+            self.agent.detach()
+            self._critic_target.detach()
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return state, policy_info, env_info, losses, grad_norms
@@ -220,7 +203,6 @@ class SHAC:
         return SHAC(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
@@ -232,16 +214,14 @@ class SHAC_RPL(SHAC):
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
         device: torch.device
     ):
-        super().__init__(cfg, state_dim, hidden_dim, action_dim, n_envs, l_rollout, device)
+        super().__init__(cfg, state_dim, action_dim, n_envs, l_rollout, device)
         del self.agent, self.actor_optim, self.critic_optim, self._critic_target
-        self.agent = RPLActorCritic(cfg)(
-            cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, hidden_dim, action_dim, cfg.rpl_action).to(device)
+        self.agent = RPLActorCritic(cfg.network, cfg.anchor_ckpt, state_dim, cfg.anchor_state_dim, action_dim, cfg.rpl_action).to(device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
         self._critic_target = deepcopy(self.agent.critic)
@@ -251,54 +231,30 @@ class SHAC_RPL(SHAC):
     def value_target(self, state):
         # type: (Tensor) -> Tensor
         return self._critic_target(self.agent.rpl_obs(state)[0]).squeeze(-1)
-        
+    
+    def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        if not os.path.exists(os.path.join(path, "anchor_agent")):
+            os.makedirs(os.path.join(path, "anchor_agent"))
+        self.agent.save(path)
+    
     @staticmethod
     def build(cfg, env, device):
         return SHAC_RPL(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
+            hidden_dim=list(cfg.algo.network.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
-
-class SHACQRolloutBuffer:
-    def __init__(self, l_rollout, num_envs, state_dim, action_dim, device):
-        factory_kwargs = {"dtype": torch.float32, "device": device}
-        
-        assert isinstance(state_dim, tuple) or isinstance(state_dim, int)
-        if isinstance(state_dim, tuple):
-            self.states = TensorDict({
-                "state": torch.zeros((l_rollout, num_envs, state_dim[0]), **factory_kwargs),
-                "perception": torch.zeros((l_rollout, num_envs, state_dim[1][0], state_dim[1][1]), **factory_kwargs)
-            }, batch_size=(l_rollout, num_envs))
-        else:
-            self.states = torch.zeros((l_rollout, num_envs, state_dim), **factory_kwargs)
-        self.next_states = self.states.clone()
-        self.actions = torch.zeros((l_rollout, num_envs, action_dim), **factory_kwargs)
-        self.rewards = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-        self.next_terminated = torch.zeros((l_rollout, num_envs), **factory_kwargs)
-    
-    def clear(self):
-        self.step = 0
-    
-    @torch.no_grad()
-    def add(self, state, action, reward, next_state, next_terminated):
-        # type: (Union[Tensor, TensorDict], Tensor, Tensor, Union[Tensor, TensorDict], Tensor) -> None
-        self.states[self.step] = state
-        self.actions[self.step] = action
-        self.rewards[self.step] = reward
-        self.next_states[self.step] = next_state
-        self.next_terminated[self.step] = next_terminated.float()
-        self.step += 1
 
 class SHAC_Q:
     def __init__(
         self,
         cfg: DictConfig,
         state_dim: int,
-        hidden_dim: Sequence[int],
         action_dim: int,
         n_envs: int,
         l_rollout: int,
@@ -306,10 +262,12 @@ class SHAC_Q:
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.agent = StochasticActorCritic_Q(cfg, state_dim, hidden_dim, action_dim).to(device)
+        self.agent = StochasticActorCriticQ(cfg.network, state_dim, action_dim).to(device)
+        if self.agent.is_rnn_based:
+            self.rnn_state_buffer = RNNStateBuffer(l_rollout, n_envs, cfg.network.rnn_hidden_dim, cfg.network.rnn_n_layers, device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
-        self.buffer = SHACQRolloutBuffer(l_rollout, n_envs, state_dim, action_dim, device)
+        self.buffer = RolloutBufferSHACQ(l_rollout, n_envs, state_dim, action_dim, device)
         self.agent_target = deepcopy(self.agent)
         for p in self.agent_target.parameters():
             p.requires_grad_(False)
@@ -329,6 +287,8 @@ class SHAC_Q:
     
     def act(self, state, test=False):
         # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        if self.agent.is_rnn_based:
+            self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
         action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
@@ -372,6 +332,8 @@ class SHAC_Q:
         rewards = self.buffer.rewards.flatten(0, 1)
         next_states = self.buffer.next_states.flatten(0, 1)
         terminated = self.buffer.next_terminated.flatten(0, 1)
+        if self.agent.is_rnn_based:
+            critic_hidden_state = self.rnn_state_buffer.critic_rnn_state.flatten(0, 1)
         with torch.no_grad():
             next_values = self.agent_target.get_action_and_value(next_states)[-1]
             target_values = rewards + (1 - terminated) * self.discount * next_values
@@ -379,7 +341,13 @@ class SHAC_Q:
         for start in range(0, T*N, mb_size):
             end = start + mb_size
             mb_indices = batch_indices[start:end]
-            values = self.agent.get_value(states[mb_indices], actions[mb_indices])
+            if self.agent.is_rnn_based:
+                values = self.agent.get_value(
+                    states[mb_indices],
+                    actions[mb_indices],
+                    critic_hidden_state[mb_indices].permute(1, 0, 2))
+            else:
+                values = self.agent.get_value(states[mb_indices], actions[mb_indices])
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()
@@ -401,6 +369,8 @@ class SHAC_Q:
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
+        if self.agent.is_rnn_based:
+            self.rnn_state_buffer.clear()
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(state)
@@ -408,6 +378,8 @@ class SHAC_Q:
             self.record_loss(loss, policy_info, env_info, terminated)
             # divide by 10 to avoid disstability
             self.buffer.add(state, action, loss/10, env_info["next_state_before_reset"], terminated)
+            if self.agent.is_rnn_based:
+                self.agent.reset(env_info["reset"])
             state = next_state
             if on_step_cb is not None:
                 on_step_cb(
@@ -417,6 +389,9 @@ class SHAC_Q:
                     env_info=env_info)
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic()
+        if self.agent.is_rnn_based:
+            self.agent.detach()
+            self.agent_target.detach()
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return state, policy_info, env_info, losses, grad_norms
@@ -426,7 +401,6 @@ class SHAC_Q:
         return SHAC_Q(
             cfg=cfg.algo,
             state_dim=env.state_dim,
-            hidden_dim=list(cfg.algo.hidden_dim),
             action_dim=env.action_dim,
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,

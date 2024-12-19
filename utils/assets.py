@@ -74,12 +74,11 @@ class ObstacleManager:
         third_axis = torch.cross(target_axis, horizontal_axis, dim=-1)
         
         # sample uniformally along the target axis
-        target_axis_ratio = torch.rand(
-            len(env_idx), self.n_obstacles, 1, device=self.device) * 1.4 - 0.2
+        target_axis_ratio = torch.rand(len(env_idx), self.n_obstacles, 1, device=self.device)
         target_axis_pos = target_axis_ratio * rel_pos.unsqueeze(1)
         
         # sample from gaussian distribution
-        std = (torch.abs(target_axis_ratio - 0.5) / 0.7) * (self.randpos_maxstd - self.randpos_minstd) + self.randpos_minstd
+        std = torch.abs(target_axis_ratio - 0.5) * 2 * (self.randpos_maxstd - self.randpos_minstd) + self.randpos_minstd
         horizontal_axis_ratio = torch.randn(
             len(env_idx), self.n_obstacles, 1, device=self.device) * std
         third_axis_ratio = torch.randn(

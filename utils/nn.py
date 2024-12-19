@@ -11,24 +11,25 @@ def layer_init(layer, std=2.**0.5, bias_const=0.0):
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
 
-def weight_init(m):
-	"""Custom weight initialization for TD-MPC2."""
-	if isinstance(m, nn.Linear):
-		nn.init.trunc_normal_(m.weight, std=0.02)
-		if m.bias is not None:
-			nn.init.constant_(m.bias, 0)
-	elif isinstance(m, nn.Embedding):
-		nn.init.uniform_(m.weight, -0.02, 0.02)
-	elif isinstance(m, nn.ParameterList):
-		for i,p in enumerate(m):
-			if p.dim() == 3: # Linear
-				nn.init.trunc_normal_(p, std=0.02) # Weight
-				nn.init.constant_(m[i+1], 0) # Bias
+def weight_init(m, std=0.02, bias_const=0.0):
+    """Custom weight initialization for TD-MPC2."""
+    if isinstance(m, nn.Linear):
+        nn.init.trunc_normal_(m.weight, std=std)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, bias_const)
+    elif isinstance(m, nn.Embedding):
+        nn.init.uniform_(m.weight, -0.02, 0.02)
+    elif isinstance(m, nn.ParameterList):
+        for i,p in enumerate(m):
+            if p.dim() == 3: # Linear
+                nn.init.trunc_normal_(p, std=0.02) # Weight
+                nn.init.constant_(m[i+1], 0) # Bias
+    return m
 
 def zero_(params):
-	"""Initialize parameters to zero."""
-	for p in params:
-		p.data.fill_(0)
+    """Initialize parameters to zero."""
+    for p in params:
+        p.data.fill_(0)
 
 class NormedLinear(nn.Linear):
     """
@@ -51,7 +52,7 @@ def mlp(
     in_dim: int,
     mlp_dims: Union[int, List[int]],
     out_dim: int,
-    hidden_act: nn.Module = nn.Mish(inplace=True),
+    hidden_act: nn.Module = nn.ELU(inplace=True),
     output_act: Optional[nn.Module] = None):
     """
     Basic building block of TD-MPC2.

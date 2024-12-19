@@ -1,5 +1,5 @@
 defaults:
-  - algo: apg
+  - algo: apg_sto
   - env: pc
   - dynamics: pointmass # [pointmass, quadrotor]
   - network: mlp # [mlp, cnn]
@@ -13,12 +13,16 @@ n_updates: 1000
 device: 0
 headless: True
 record_video: False
+video_saveas: mp4 # [mp4, tensorboard]
 
 runname: ""
 checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
 
 seed: -1
 torch_deterministic: False
+
+env:
+  dt: 0.0333
 
 hydra:
   sweep:

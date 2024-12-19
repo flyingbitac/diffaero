@@ -42,8 +42,8 @@ class PointMassModel:
         self.lmbda = cfg.lmbda # soft control latency
     
     def detach(self):
-        self._state = self._state.detach()
-        self._vel_ema = self._vel_ema.detach()
+        self._state.detach_()
+        self._vel_ema.detach_()
     
     def dynamics(self, X: Tensor, U: Tensor) -> Tensor:
         # Unpacking state and input variables

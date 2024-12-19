@@ -18,7 +18,7 @@ from quaddif.algo import AGENT_ALIAS
 from quaddif.utils.device import idle_device
 from quaddif.utils.logger import RecordEpisodeStatistics, Logger
 
-def on_step_cb(state, action, policy_info, env_info):
+def display_image(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
     if "sensor" in env_info.keys():
         N, C = 64, 1
@@ -48,8 +48,8 @@ def learn(
         t1 = pbar._time()
         env.detach()
         state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
-        l_episode = env_info["stats"]["l"]
-        success_rate = env_info['stats']['success_rate']
+        l_episode = (env_info["stats"]["l"] - 1) * env.dt
+        success_rate = env_info["stats"]["success_rate"]
         arrive_time = env_info["stats"]["arrive_time"]
         if cfg.algo.name != 'world':
             pbar.set_postfix({
@@ -102,13 +102,14 @@ def main(cfg: DictConfig):
     
     logger = Logger(cfg, run_name=cfg.runname)
     try:
-        # learn(cfg, agent, env, logger, on_step_cb=on_step_cb)
+        # learn(cfg, agent, env, logger, on_step_cb=display_image)
         learn(cfg, agent, env, logger)
     except KeyboardInterrupt:
         pass
     finally:
-        agent.save(os.path.join(logger.logdir, "checkpoints"))
-        print(f"The checkpoint is saved to {logger.logdir}.")
+        ckpt_path = os.path.join(logger.logdir, "checkpoints")
+        agent.save(ckpt_path)
+        print(f"The checkpoint is saved to {ckpt_path}.")
     
     if env.renderer is not None:
         env.renderer.close()
