@@ -13,6 +13,7 @@ n_updates: 1000
 device: 0
 headless: True
 record_video: False
+video_saveas: mp4 # [mp4, tensorboard]
 
 runname: ""
 checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"

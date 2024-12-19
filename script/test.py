@@ -11,6 +11,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import cv2
+import imageio
 
 from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
@@ -30,6 +31,20 @@ def display_image(state, action, policy_info, env_info):
         cv2.imshow('image', disp_image)
         cv2.waitKey(1)
 
+def save_video_mp4(cfg: DictConfig, video_tensor: torch.Tensor, logger: Logger, name: str):
+    # save the video using imageio
+    path = os.path.join(logger.logdir, "video")
+    if not os.path.exists(path):
+        os.makedirs(path)
+    with imageio.get_writer(os.path.join(path, name), fps=1/cfg.env.dt) as video:
+        for frame_index in range(video_tensor.size(0)):
+            frame = video_tensor[frame_index]
+            frame = frame.permute(1, 2, 0).cpu().numpy()
+            video.append_data(frame)
+
+def save_video_tensorboard(cfg: DictConfig, video_tensor: torch.Tensor, logger: Logger, tag: str, step: int):
+    logger.log_video(tag, video_tensor, step=step, fps=1/cfg.env.dt)
+
 @torch.no_grad()
 def test(
     cfg: DictConfig,
@@ -39,7 +54,6 @@ def test(
     on_step_cb: Optional[Callable] = None
 ):
     if cfg.record_video:
-        import imageio
         video_tensor = torch.zeros(
             (cfg.n_envs, env.max_steps, 3, cfg.env.render.rgb_camera.height, cfg.env.render.rgb_camera.width),
             dtype=torch.uint8, device=env.device)
@@ -73,22 +87,20 @@ def test(
             video_tensor[index] = rgb_image
             
             if env_info["reset"].sum().item() > env_info["success"].sum().item():
-                failed = env_info["reset"] & ~env_info["success"]
+                failed = torch.logical_and(env_info["reset"], ~env_info["success"])
                 idx = failed.nonzero().flatten()[0]
                 video_length = env_info["l"][idx] - 1
-                
-                # save the video using imageio
-                # path = os.path.join(logger.logdir, "video")
-                # if not os.path.exists(path):
-                #     os.makedirs(path)
-                # with imageio.get_writer(os.path.join(path, f"failed_{i+1}.mp4"), fps=1/env.dt) as video:
-                #     for frame_index in range(video_length):
-                #         frame = video_tensor[idx, frame_index]
-                #         frame = frame.permute(1, 2, 0).cpu().numpy()
-                #         video.append_data(frame)
-
-                # save the video using tensorboard
-                logger.log_video("video/fail", video_tensor[idx.unsqueeze(0), :video_length], step=i+1, fps=1/env.dt)
+                if cfg.video_saveas == "mp4":
+                    save_video_mp4(cfg, video_tensor[idx, :video_length], logger, f"failed_{i+1}.mp4")
+                elif cfg.video_saveas == "tensorboard":
+                    save_video_tensorboard(cfg, video_tensor[idx.unsqueeze(0), :video_length], logger, "video/fail", i+1)
+            if env_info["success"].sum().item() > 0:
+                idx = env_info["success"].nonzero().flatten()[0]
+                video_length = min(env_info["l"][idx].item(), int(env_info["arrive_time"][idx].item()/env.dt) + 100) - 1
+                if cfg.video_saveas == "mp4":
+                    save_video_mp4(cfg, video_tensor[idx, :video_length], logger, f"success_{i+1}.mp4")
+                elif cfg.video_saveas == "tensorboard":
+                    save_video_tensorboard(cfg, video_tensor[idx.unsqueeze(0), :video_length], logger, "video/success", i+1)
             
         if on_step_cb is not None:
             on_step_cb(
