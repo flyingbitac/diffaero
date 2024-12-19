@@ -142,11 +142,16 @@ class ObstacleAvoidance(BaseEnv):
         cube_relpos = nearest_point - self.p.unsqueeze(1) # [n_envs, n_cubes, 3]
         dist2surface_cube = cube_relpos.norm(dim=-1).clamp(min=0) # [n_envs, n_cubes]
         # concatenate the relative direction and distance to the surface of both type of obstacles
-        obstacle_reldirection = F.normalize(torch.cat([sphere_relpos, cube_relpos], dim=1), dim=-1)
-        dist2surface = torch.cat([dist2surface_sphere, dist2surface_cube], dim=1) # [n_envs, n_obstacles, 3]
+        obstacle_reldirection = F.normalize(torch.cat([sphere_relpos, cube_relpos], dim=1), dim=-1) # [n_envs, n_obstacles, 3]
+        dist2surface = torch.cat([dist2surface_sphere, dist2surface_cube], dim=1) # [n_envs, n_obstacles]
         # calculate the obstacle avoidance loss
-        approaching_vel = torch.sum(obstacle_reldirection * self._v.unsqueeze(1), dim=-1)
-        oa_loss = (approaching_vel.clamp(min=0) / dist2surface.exp()).max(dim=-1).values
+        approaching_vel = torch.sum(obstacle_reldirection * self._v.unsqueeze(1), dim=-1) # [n_envs, n_obstacles]
+        approaching = approaching_vel > 0
+        avoiding_vel = torch.norm(self._v.unsqueeze(1) - approaching_vel.detach().unsqueeze(-1) * obstacle_reldirection, dim=-1) # [n_envs, n_obstacles]
+        approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dist2surface.neg().exp()).max(dim=-1) # [n_envs]
+        avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dist2surface.neg().exp() # [n_envs, n_obstacles]
+        avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
+        oa_loss = 1.5 * approaching_penalty - 0.5 * avoiding_reward
         
         collision_loss = self.collision().float() * 100
         
