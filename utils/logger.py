@@ -40,6 +40,13 @@ class Logger:
             )
             self.writer = wandb
         print(f"Output directory  : {self.logdir}")
+        self.steps = {}
+    
+    def log(self,tag,value):
+        if tag not in self.steps:
+            self.steps[tag] = 0
+        self.steps[tag] += 1
+        self.writer.add_scalar(tag,value,self.steps[tag])
     
     def log_scalar(self, tag, value, step):
         if isinstance(self.writer, SummaryWriter):

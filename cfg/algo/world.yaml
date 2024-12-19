@@ -1,0 +1,175 @@
+name: world
+
+common:
+  device: cuda:1
+  run_name: v3oaa2cbigcontinu
+  use_checkpoint: False
+  use_symlog: True
+  total_timesteps: 200_000_000
+  state_model_checkpoint_path: "/home/zxh/ws/wrqws/quaddif/outputs/2024-12-01/15-23-24/ckpt/v3oaa2cbigger/statemodel/statemodel_80000.pth"
+  actor_critic_checkpoint_path: "/home/zxh/ws/wrqws/quaddif/outputs/2024-12-01/15-23-24/ckpt/v3oaa2cbigger/actorcritic/actorcritic_80000.pth"
+
+denoiser:
+  denoiser:
+    _target_: algo.dreamerv3.models.diffusion.DenoiserConfig
+    sigma_data: 0.5
+    sigma_offset_noise: 0.3
+    inner_model:
+      _target_: algo.dreamerv3.models.diffusion.InnerModelConfig
+      img_channels: 1
+      num_steps_conditioning: 4
+      cond_channels: 256
+      depths: [2,2,2,2]
+      channels: [64,64,64,64]
+      attn_depths: [0,0,0,0]
+      num_actions: 3
+      drone_states_dim: 13
+      obstacles_num: 20
+      d_model: 32
+      
+  training:
+    num_autoregressive_steps: 1
+    start_after_epochs: 0
+    steps_first_epoch: 400
+    sample_weights: [0.1,0.1,0.1,0.7]
+    batch_size: 32
+    grad_acc_steps: 1
+    lr_warmup_steps: 100
+    max_grad_norm: 1.0
+  
+  optimizer:
+    lr: 1e-4
+    weight_decay: 1e-2
+    eps: 1e-8
+  
+  sigma_distribution:
+    _target_: algo.dreamerv3.models.diffusion.SigmaDistributionConfig
+    loc: -0.4
+    scale: 1.2
+    sigma_min: 2e-3
+    sigma_max: 20
+
+world_model_env:
+  _target_: algo.wmenv.WorldModelEnvConfig
+  horizon: 15
+  batch_size: 16
+  batch_length: 4
+  diffusion_sampler:
+    _target_: algo.dreamerv3.models.diffusion.DiffusionSamplerConfig
+    num_steps_denoising: 3
+    sigma_min: 2e-3
+    sigma_max: 5.0
+    rho: 7
+    order: 1  # 1: Euler, 2: Heun
+    s_churn: 0.0  # Amount of stochasticity
+    s_tmin: 0.0
+    # s_tmax: ${eval:'float("inf")'}
+    s_tmax:  100000.0
+    s_noise: 1.0
+  
+world_state_env:
+  _target_: algo.dreamerv3.wmenv.StateEnvConfig
+  horizon: 16
+  batch_size: 1024
+  batch_length: 4
+  use_perception: False
+
+replaybuffer:
+  _target_: algo.dreamerv3.wmenv.buffercfg
+  perception_dim: 16
+  state_dim: 13
+  action_dim: 3
+  num_envs: 64
+  max_length: 4194304
+  warmup_length: 5000
+  store_on_gpu: True
+  device: "cuda:1"
+  use_perception: False
+
+state_predictor:
+  state_model:
+    _target_: algo.dreamerv3.models.state_predictor.StateModelCfg
+    state_dim: 13 #state_dim+wall_distances_dim + obstacles_num*3
+    image_width: 16
+    hidden_dim: 512
+    action_dim: 3
+    latent_dim: 1024
+    categoricals: 32
+    obstacle_relpos_dim: 60 #num_obstacles*3
+    num_classes: 255
+    use_simnorm: False
+    use_multirew: False
+
+  perception_model:
+    _target_: algo.dreamerv3.models.state_predictor.PercModelCfg
+    state_dim: 144 
+    hidden_dim: 256
+    action_dim: 3 
+    latent_dim: 256
+    categoricals: 16
+    obstacle_relpos_dim: 60 #num_obstacles*3
+    num_classes: 255
+    use_simnorm: False
+    use_multirew: False
+
+  training:
+    max_grad_norm: 100.0
+    total_steps: 500000
+    batch_size: 64
+    batch_length: 64
+    use_multirew: False
+    worldmodel_update_freq: 1
+
+  optimizer:
+    lr: 1e-4
+    weight_decay: 1e-2
+    eps: 1e-8
+
+actor_critic:
+  model:
+    __target__: algo.dreamerv3.models.agent.ActorCriticConfig
+    feat_dim: 1536 # hidden + latent
+    num_layers: 2
+    hidden_dim: 512
+    action_dim: 3
+    gamma: 0.985
+    lambd: 0.95
+    entropy_coef: 3e-4
+    device: cuda:1
+    max_std: 1
+    min_std: 0.1
+  training:
+    max_grad_norm: 100.0
+    total_steps: 500000
+    imagine_length: 16
+    use_states: False
+    scale_rewards: False
+
+training:
+  max_grad_norm: 1.0 
+  total_steps: 500000
+  batch_size: 64     # 这里batch_size的设置已经趋近最大值了，显存占用到20G左右
+  batch_length: 6    
+  total_episodes: 1000
+  imagine_period: 10000
+
+imagine:
+  imagine_length: 64 # 实际imagine的长度是imagine_length-num_steps_conditioning
+
+td3:
+  feat_dim: 512 #latent_dim + hidden_dim
+  hidden_dim: 512
+  action_dim: 3
+  use_states: False
+
+  train:
+    gamma: 0.99
+    tau: 0.005
+    actor_lr: 0.0003
+    critic_lr: 0.003
+    noise_clip: 0.75
+    policy_noise: 1.5
+    policy_freq: 4
+    expl_noise: 1.5
+    max_grad_norm: 1.0
+    update_freq: 4
