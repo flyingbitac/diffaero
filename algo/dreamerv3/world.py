@@ -120,7 +120,7 @@ class World_Agent:
         if self.world_agent_cfg.common.use_symlog:
             state = symlog(state)   
         latent = self.state_model.sample_with_post(state,perception,self.hidden)[0].flatten(1)
-        action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1))[0]
+        action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1),test)[0]
         self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
         return action,None
 
