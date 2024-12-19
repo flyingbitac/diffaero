@@ -54,7 +54,7 @@ def test(
         env.detach()
         action, policy_info = agent.act(state, test=True)
         state, loss, terminated, env_info = env.step(action)
-        l_episode = env_info["stats"]["l"]
+        l_episode = (env_info["stats"]["l"] - 1) * env.dt
         n_resets += env_info["reset"].sum().item()
         n_survive += env_info["truncated"].sum().item()
         n_success += env_info["success"].sum().item()

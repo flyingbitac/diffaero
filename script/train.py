@@ -48,7 +48,7 @@ def learn(
         t1 = pbar._time()
         env.detach()
         state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
-        l_episode = env_info["stats"]["l"]
+        l_episode = (env_info["stats"]["l"] - 1) * env.dt
         success_rate = env_info["stats"]["success_rate"]
         arrive_time = env_info["stats"]["arrive_time"]
         pbar.set_postfix({
