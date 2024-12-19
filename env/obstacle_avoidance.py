@@ -16,7 +16,8 @@ class ObstacleAvoidance(BaseEnv):
         super(ObstacleAvoidance, self).__init__(cfg, device)
         self.obstacle_manager = ObstacleManager(cfg.obstacles, self.n_envs, self.L, device)
         self.n_obstacles = self.obstacle_manager.n_obstacles
-        self.z_ground_plane = -0.5*self.L if cfg.ground_plane else None
+        self.height_scale = cfg.height_scale
+        self.z_ground_plane = -self.height_scale*self.L if cfg.ground_plane else None
         
         self.sensor_type = cfg.sensor.name
         assert self.sensor_type in ["camera", "lidar", "relpos"]
@@ -192,7 +193,7 @@ class ObstacleAvoidance(BaseEnv):
         state_mask[env_idx] = 1
         
         xy_min, xy_max = -self.L+0.5, self.L-0.5
-        z_min, z_max = -0.5*self.L+0.5, 0.5*self.L-0.5
+        z_min, z_max = -self.height_scale*self.L+0.5, self.height_scale*self.L-0.5
         p_new = torch.cat([
             torch.rand((self.n_envs, 2), device=self.device) * (xy_max - xy_min) + xy_min,
             torch.rand((self.n_envs, 1), device=self.device) * (z_max - z_min) + z_min

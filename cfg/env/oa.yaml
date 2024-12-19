@@ -4,6 +4,7 @@ sensor: ${sensor}
 dynamics: ${dynamics}
 dt: 0.0333
 length: 15
+height_scale: 0.5
 n_envs: ${n_envs}
 max_time: 30
 max_vel: 5.
