@@ -208,15 +208,20 @@ class ObstacleAvoidance(BaseEnv):
         N = 10
         x = y = torch.linspace(xy_min, xy_max, N, device=self.device)
         z = torch.linspace(z_min, z_max, N, device=self.device)
-        random_idx = torch.randperm(N**3, device=self.device)
+        
+        random_idx = torch.stack([torch.randperm(N**3, device=self.device) for _ in range(n_resets)], dim=0) # [n_resets, N**3]
+        random_idx = random_idx.unsqueeze(-1).expand(-1, -1, 3) # [n_resets, N**3, 3]
         # indexing of meshgrid dosen't really matter here, explicitly setting to avoid warning
-        xyz = torch.stack(torch.meshgrid(x, y, z, indexing="ij"), dim=-1).reshape(N**3, 3)[random_idx]
-        validility = torch.gt((xyz[None, ...] - self.p[env_idx, None, :]).norm(dim=-1), min_init_dist)
-        sub_idx = validility.nonzero()
-        env_sub_idx = torch.tensor([(sub_idx[:, 0] == i).sum() for i in range(n_resets)]).roll(1, dims=0)
-        env_sub_idx[0] = 0
-        env_sub_idx = torch.cumsum(env_sub_idx, dim=0)
-        self.target_pos[env_idx] = xyz[sub_idx[env_sub_idx, 1]]
+        xyz = torch.stack(torch.meshgrid(x, y, z, indexing="ij"), dim=-1)
+        xyz = xyz.reshape(1, N**3, 3).expand(n_resets, -1, -1).gather(dim=1, index=random_idx) # [n_resets, N**3, 3]
+        valid = torch.gt((xyz - self.p[env_idx, None, :]).norm(dim=-1), min_init_dist)
+        
+        valid_points = valid.nonzero()
+        point_index = torch.tensor([(valid_points[:, 0] == i).sum() for i in range(n_resets)]).roll(1, dims=0)
+        point_index[0] = 0
+        point_index = torch.cumsum(point_index, dim=0)
+        chosen_points = valid_points[point_index]
+        self.target_pos[env_idx] = xyz[chosen_points[:, 0], chosen_points[:, 1]]
         # check that all regenerated initial and target positions meet the minimal distance contraint
         assert torch.all((self.p[env_idx] - self.target_pos[env_idx]).norm(dim=-1) > min_init_dist).item()
         
