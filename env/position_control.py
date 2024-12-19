@@ -22,10 +22,9 @@ class PositionControl(BaseEnv):
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":
-            state = [self.target_vel, self.q, self._v, self._a]
+            state = torch.cat([self.target_vel, self.q, self._v, self._a], dim=-1)
         else:
-            state = [self.target_vel, self._q, self._v, self._w]
-        state = torch.cat(state, dim=-1)
+            state = torch.cat([self.target_vel, self._q, self._v, self._w], dim=-1)
         return state if with_grad else state.detach()
     
     def step(self, action):
