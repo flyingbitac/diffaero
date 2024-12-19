@@ -121,6 +121,8 @@ def main(cfg: DictConfig):
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo
     cfg.dynamics = ckpt_cfg.dynamics
+    if cfg.algo.name != 'world':
+        cfg.model = ckpt_cfg.model
     cfg.network = ckpt_cfg.network
     
     if cfg.seed != -1:
