@@ -205,6 +205,8 @@ class ObstacleAvoidance(BaseEnv):
         new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.model.state_dim-3, device=self.device)], dim=-1)
         if self.dynamic_type == "quadrotor":
             new_state[:, 6] = 1 # real part of the quaternion
+        elif self.dynamic_type == "pointmass":
+            new_state[:, -1] = 9.8
         self.model._state = torch.where(state_mask.bool(), new_state, self.model._state)
         
         min_init_dist = 1.3 * self.L
