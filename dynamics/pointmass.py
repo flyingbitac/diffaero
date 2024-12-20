@@ -82,9 +82,8 @@ class PointMassModel:
     def _a(self) -> Tensor: return self._state[:, 6:9]
     @property
     def _q(self) -> Tensor:
-        warnings.warn("Direct access of quaternion with gradient in point mass model is strongly not recommanded. Please consider using the detached version instead.")
-        orientation = self._vel_ema if self.aligh_yaw_with_vel_ema else self._v
-        return point_mass_quat(self._a, orientation=orientation)
+        warnings.warn("Direct access of quaternion with gradient in point mass model is not supported. Returning detached version instead.")
+        return self.q
     @property
     def _w(self) -> Tensor:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")
