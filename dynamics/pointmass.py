@@ -25,7 +25,6 @@ class PointMassModel:
         self.vel_ema_factor = cfg.vel_ema_factor
         self.dt = dt
         self.n_substeps = n_substeps
-        self.align_yaw_with_vel_direction = cfg.align_yaw_with_vel_direction
         self.aligh_yaw_with_vel_ema = cfg.aligh_yaw_with_vel_ema
         self.min_action = torch.tensor([list(cfg.min_action)], device=device)
         self.max_action = torch.tensor([list(cfg.max_action)], device=device)
