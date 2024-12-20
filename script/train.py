@@ -43,7 +43,7 @@ def learn(
 ):
     state = env.reset()
     max_success_rate = 0
-    pbar = tqdm(range(cfg.n_updates),ncols=150)
+    pbar = tqdm(range(cfg.n_updates))
     for i in pbar:
         t1 = pbar._time()
         env.detach()
