@@ -193,8 +193,8 @@ class ObstacleAvoidance(BaseEnv):
 
     def reset_idx(self, env_idx):
         n_resets = len(env_idx)
-        state_mask = torch.zeros_like(self.model._state)
-        state_mask[env_idx] = 1
+        state_mask = torch.zeros_like(self.model._state, dtype=torch.bool)
+        state_mask[env_idx] = True
         
         xy_min, xy_max = -self.L+0.5, self.L-0.5
         z_min, z_max = -self.height_scale*self.L+0.5, self.height_scale*self.L-0.5
@@ -207,7 +207,8 @@ class ObstacleAvoidance(BaseEnv):
             new_state[:, 6] = 1 # real part of the quaternion
         elif self.dynamic_type == "pointmass":
             new_state[:, -1] = 9.8
-        self.model._state = torch.where(state_mask.bool(), new_state, self.model._state)
+        self.model._state = torch.where(state_mask, new_state, self.model._state)
+        self.model.reset_idx(env_idx)
         
         min_init_dist = 1.3 * self.L
         # randomly select a target position that meets the minimum distance constraint

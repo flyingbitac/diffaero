@@ -113,6 +113,11 @@ class QuadrotorModel:
         new_state[:, 3:7] = new_state[:, 3:7] / q_l
         self._state = new_state
     
+    def reset_idx(self, env_idx: Tensor) -> None:
+        mask = torch.zeros_like(self._acc, dtype=torch.bool)
+        mask[env_idx] = True
+        self._acc = torch.where(mask, 0., self._acc)
+    
     @property
     def p(self) -> Tensor: return self._state[:, 0:3].detach()
     @property

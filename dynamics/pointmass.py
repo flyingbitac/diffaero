@@ -60,6 +60,11 @@ class PointMassModel:
         self._state = new_state
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
     
+    def reset_idx(self, env_idx: Tensor) -> None:
+        mask = torch.zeros_like(self._vel_ema, dtype=torch.bool)
+        mask[env_idx] = True
+        self._vel_ema = torch.where(mask, 0., self._vel_ema)
+    
     @property
     def p(self) -> Tensor: return self._state[:, 0:3].detach()
     @property
