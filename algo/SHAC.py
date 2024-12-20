@@ -159,14 +159,6 @@ class SHAC:
         for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
             p_t.data.lerp_(p.data, 5e-3)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
-
-    def save(self, path):
-        if not os.path.exists(path):
-            os.makedirs(path)
-        self.agent.save(path)
-    
-    def load(self, path):
-        self.agent.load(path)
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
@@ -179,8 +171,7 @@ class SHAC:
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(state, loss/10, policy_info["value"], env_info["reset"], terminated, next_value)
-            if self.agent.is_rnn_based:
-                self.agent.reset(env_info["reset"])
+            self.reset(env_info["reset"])
             state = next_state
             if on_step_cb is not None:
                 on_step_cb(
@@ -191,12 +182,27 @@ class SHAC:
         target_values = self.bootstrap_gae()
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic(target_values)
-        if self.agent.is_rnn_based:
-            self.agent.detach()
-            self._critic_target.detach()
+        self.detach()
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return state, policy_info, env_info, losses, grad_norms
+
+    def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.agent.save(path)
+    
+    def load(self, path):
+        self.agent.load(path)
+    
+    def reset(self, env_idx: Tensor):
+        if self.agent.is_rnn_based:
+            self.agent.reset(env_idx)
+    
+    def detach(self):
+        if self.agent.is_rnn_based:
+            self.agent.detach()
+            self._critic_target.detach()
         
     @staticmethod
     def build(cfg, env, device):
@@ -358,14 +364,6 @@ class SHAC_Q:
         for p, p_t in zip(self.agent.critic.parameters(), self.agent_target.critic.parameters()):
             p_t.data.lerp_(p.data, 5e-3)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
-
-    def save(self, path):
-        if not os.path.exists(path):
-            os.makedirs(path)
-        self.agent.save(path)
-    
-    def load(self, path):
-        self.agent.load(path)
     
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
@@ -378,8 +376,7 @@ class SHAC_Q:
             self.record_loss(loss, policy_info, env_info, terminated)
             # divide by 10 to avoid disstability
             self.buffer.add(state, action, loss/10, env_info["next_state_before_reset"], terminated)
-            if self.agent.is_rnn_based:
-                self.agent.reset(env_info["reset"])
+            self.reset(env_info["reset"])
             state = next_state
             if on_step_cb is not None:
                 on_step_cb(
@@ -389,12 +386,27 @@ class SHAC_Q:
                     env_info=env_info)
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic()
-        if self.agent.is_rnn_based:
-            self.agent.detach()
-            self.agent_target.detach()
+        self.detach()
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return state, policy_info, env_info, losses, grad_norms
+
+    def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.agent.save(path)
+    
+    def load(self, path):
+        self.agent.load(path)
+    
+    def reset(self, env_idx: Tensor):
+        if self.agent.is_rnn_based:
+            self.agent.reset(env_idx)
+    
+    def detach(self):
+        if self.agent.is_rnn_based:
+            self.agent.detach()
+            self.agent_target.detach()
         
     @staticmethod
     def build(cfg, env, device):

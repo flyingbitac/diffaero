@@ -48,8 +48,7 @@ class APG:
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(state)
             state, loss, terminated, env_info = env.step(action)
-            if self.actor.is_rnn_based:
-                self.actor.reset(env_info["reset"])
+            self.reset(env_info["reset"])
             self.record_loss(loss, policy_info, env_info)
             if on_step_cb is not None:
                 on_step_cb(
@@ -59,8 +58,7 @@ class APG:
                     env_info=env_info)
             
         losses, grad_norms = self.update_actor()
-        if self.actor.is_rnn_based:
-            self.actor.detach()
+        self.detach()
         return state, policy_info, env_info, losses, grad_norms
     
     def save(self, path):
@@ -70,6 +68,15 @@ class APG:
     
     def load(self, path):
         self.actor.load(path)
+    
+    def reset(self, env_idx: Tensor):
+        if self.actor.is_rnn_based:
+            self.actor.reset(env_idx)
+    
+    def detach(self):
+        if self.actor.is_rnn_based:
+            self.actor.detach()
+        
     
     @staticmethod
     def build(cfg, env, device):
