@@ -6,6 +6,7 @@ sys.path.append('..')
 
 import isaacgym
 import torch
+import torchvision
 import numpy as np
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -54,8 +55,9 @@ def test(
     on_step_cb: Optional[Callable] = None
 ):
     if cfg.record_video:
+        H, W = cfg.env.render.rgb_camera.height, cfg.env.render.rgb_camera.width
         video_tensor = torch.zeros(
-            (cfg.n_envs, env.max_steps, 3, cfg.env.render.rgb_camera.height, cfg.env.render.rgb_camera.width),
+            (cfg.n_envs, env.max_steps, 3, H, W * 2),
             dtype=torch.uint8, device=env.device)
     
     state = env.reset()
@@ -85,9 +87,13 @@ def test(
         if cfg.record_video:
             rgb_image: torch.Tensor = env.renderer.render_rgb_camera()
             index = (torch.arange(env.n_envs, device=env.device), env.progress-1)
-            video_tensor[index] = rgb_image
+            depth_image = torchvision.transforms.Resize(
+                (H, W), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(env_info["sensor"])
+            depth_image = (depth_image * 255).to(torch.uint8)
+            image = torch.cat([rgb_image, depth_image.unsqueeze(1).expand(-1, 3, -1, -1)], dim=-1)
+            video_tensor[index] = image
             
-            if env_info["reset"].sum().item() > env_info["success"].sum().item():
+            if env_info["reset"].sum().item() > env_info["success"].sum().item(): # some episodes failed
                 failed = torch.logical_and(env_info["reset"], ~env_info["success"])
                 idx = failed.nonzero().flatten()[0]
                 video_length = env_info["l"][idx] - 1
@@ -95,7 +101,7 @@ def test(
                     save_video_mp4(cfg, video_tensor[idx, :video_length], logger, f"failed_{i+1}.mp4")
                 elif cfg.video_saveas == "tensorboard":
                     save_video_tensorboard(cfg, video_tensor[idx.unsqueeze(0), :video_length], logger, "video/fail", i+1)
-            if env_info["success"].sum().item() > 0:
+            if env_info["success"].sum().item() > 0: # some episodes succeeded
                 idx = env_info["success"].nonzero().flatten()[0]
                 video_length = min(env_info["l"][idx].item(), int(env_info["arrive_time"][idx].item()/env.dt) + 100) - 1
                 if cfg.video_saveas == "mp4":
