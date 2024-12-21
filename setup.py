@@ -17,7 +17,7 @@ setup(
         'opencv-python',
         'isaacgym',
         'welford_torch',
-        'opencv-python'
+        'opencv-python',
         'moviepy',
         'imageio',
         'imageio-ffmpeg'

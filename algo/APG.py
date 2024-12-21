@@ -76,7 +76,6 @@ class APG:
     def detach(self):
         if self.actor.is_rnn_based:
             self.actor.detach()
-        
     
     @staticmethod
     def build(cfg, env, device):

@@ -25,6 +25,3 @@ obstacles:
 defaults:
   - render: oa_render
   - _self_
-
-overrides:
-  - sensor.max_dist: 30.
