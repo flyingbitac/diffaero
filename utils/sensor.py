@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
+from quaddif.utils.math import quaternion_apply
+
 @torch.jit.script
 def raydist3d_sphere(
     obst_pos: Tensor, # [n_envs, n_spheres, 3]
@@ -95,6 +97,41 @@ def raydist3d_ground_plane(
     raydist = torch.where(valid, (z_ground_plane - start[..., 2]) / direction[..., 2], max_dist) # [n_envs, n_rays]
     return raydist
 
+@torch.jit.script
+def ray_directions_world2body(
+    ray_directions: torch.Tensor,
+    quat_xyzw: torch.Tensor,
+    H: int,
+    W: int
+):
+    quat_wxyz = quat_xyzw.roll(1, dims=-1) # [n_envs, 4]
+    quat_wxyz = quat_wxyz.unsqueeze(1).expand(-1, H*W, -1) # [n_envs, n_rays, 4]
+    return quaternion_apply(quat_wxyz, ray_directions.view(1, -1, 3)) # [n_envs, n_rays, 3]
+
+@torch.jit.script
+def get_ray_dist(
+    sphere_pos: Tensor, # [n_envs, n_spheres, 3]
+    sphere_r: Tensor, # [n_envs, n_spheres]
+    box_min: Tensor, # [n_envs, n_cubes, 3]
+    box_max: Tensor, # [n_envs, n_cubes, 3]
+    start: Tensor, # [n_envs, n_rays, 3]
+    ray_directions: Tensor, # [n_envs, n_rays, 3]
+    quat_xyzw: Tensor, # [n_envs, 4]
+    max_dist: float,
+    z_ground_plane: Optional[float] = None,
+) -> Tensor: # [n_envs, n_rays]
+    H, W = ray_directions.shape[:2]
+    ray_directions = ray_directions_world2body(ray_directions, quat_xyzw, H, W) # [n_envs, n_rays, 3]
+    raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, max_dist) # [n_envs, n_rays]
+    raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions, max_dist) # [n_envs, n_rays]
+    raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
+    if z_ground_plane is not None:
+        raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions, max_dist) # [n_envs, n_rays]
+        raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
+    raydist.clamp_(max=max_dist)
+    depth = 1. - raydist.reshape(-1, H, W) / max_dist # [n_envs, H, W]
+    return depth
+
 class Camera:
     def __init__(self, cfg: DictConfig, device: torch.device):
         assert cfg.name == "camera"
@@ -117,22 +154,16 @@ class Camera:
         quat_xyzw: Tensor, # [n_envs, 4]
         z_ground_plane: Optional[float] = None
     ) -> Tensor: # [n_envs, n_rays]
-        ray_directions = self.world2body(quat_xyzw) # [n_envs, n_rays, 3]
-        raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, self.max_dist) # [n_envs, n_rays]
-        raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions, self.max_dist) # [n_envs, n_rays]
-        raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
-        if z_ground_plane is not None:
-            raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions, self.max_dist) # [n_envs, n_rays]
-            raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
-        raydist.clamp_(max=self.max_dist)
-        depth = 1. - raydist.reshape(-1, self.H, self.W) / self.max_dist # [n_envs, H, W]
-        return depth
-    
-    # TODO: add domain randomization
-    def world2body(self, quat_xyzw: Tensor) -> Tensor:
-        quat_wxyz = quat_xyzw.roll(1, dims=-1) # [n_envs, 4]
-        quat_wxyz = quat_wxyz.unsqueeze(1).expand(-1, self.H*self.W, -1) # [n_envs, n_rays, 4]
-        return T.quaternion_apply(quat_wxyz, self.ray_directions.view(1, -1, 3)) # [n_envs, n_rays, 3]
+        return get_ray_dist(
+            sphere_pos=sphere_pos,
+            sphere_r=sphere_r,
+            box_min=box_min,
+            box_max=box_max,
+            start=start,
+            ray_directions=self.ray_directions,
+            quat_xyzw=quat_xyzw,
+            max_dist=self.max_dist,
+            z_ground_plane=z_ground_plane)
         
     def _get_ray_directions_sphere(self):
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
@@ -180,24 +211,18 @@ class LiDAR:
         box_max: Tensor, # [n_envs, n_cubes, 3]
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
-        z_ground_plane: Optional[float] = None,
+        z_ground_plane: Optional[float] = None
     ) -> Tensor: # [n_envs, n_rays]
-        ray_directions = self.world2body(quat_xyzw) # [n_envs, n_rays, 3]
-        raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, self.max_dist) # [n_envs, n_rays]
-        raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions, self.max_dist) # [n_envs, n_rays]
-        raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
-        if z_ground_plane is not None:
-            raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions, self.max_dist) # [n_envs, n_rays]
-            raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
-        raydist.clamp_(max=self.max_dist)
-        depth = 1. - raydist.reshape(-1, self.H, self.W) / self.max_dist # [n_envs, H, W]
-        return depth
-    
-    # TODO: add domain randomization
-    def world2body(self, quat_xyzw: Tensor) -> Tensor:
-        quat_wxyz = quat_xyzw.roll(1, dims=-1) # [n_envs, 4]
-        quat_wxyz = quat_wxyz.unsqueeze(1).expand(-1, self.H*self.W, -1) # [n_envs, n_rays, 4]
-        return T.quaternion_apply(quat_wxyz, self.ray_directions.view(1, -1, 3)) # [n_envs, n_rays, 3]
+        return get_ray_dist(
+            sphere_pos=sphere_pos,
+            sphere_r=sphere_r,
+            box_min=box_min,
+            box_max=box_max,
+            start=start,
+            ray_directions=self.ray_directions,
+            quat_xyzw=quat_xyzw,
+            max_dist=self.max_dist,
+            z_ground_plane=z_ground_plane)
     
     def _get_ray_directions(self):
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]

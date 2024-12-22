@@ -42,14 +42,7 @@ class BaseEnv:
     @property
     def w(self): return self.model.w
     @property
-    def q(self) -> Tensor:
-        if self.dynamic_type == "pointmass": # Ugly implementation of quaternion for point mass
-            if self.model.align_yaw_with_vel_direction:
-                return self.model.q
-            else:
-                return point_mass_quat(self.a, orientation=self.target_vel)
-        else:
-            return self.model.q
+    def q(self): return self.model.q
     @property
     def _p(self): return self.model._p
     @property

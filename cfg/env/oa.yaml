@@ -4,7 +4,7 @@ sensor: ${sensor}
 dynamics: ${dynamics}
 dt: 0.0333
 length: 15
-height_scale: 0.5
+height_scale: 0.25
 n_envs: ${n_envs}
 max_time: 30
 max_vel: 5.
@@ -20,11 +20,8 @@ obstacles:
   sphere_radius_range: [0.6, 2.0, 0.2] # [min, max, step]
   cube_lwh_range: [0.6, 3.0, 0.4] # [min, max, step]
   randpos_std_min: 2
-  randpos_std_max: 4
+  randpos_std_max: 3
 
 defaults:
   - render: oa_render
   - _self_
-
-overrides:
-  - sensor.max_dist: 30.

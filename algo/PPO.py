@@ -143,14 +143,6 @@ class PPO:
     def add(self, state, sample, logprob, reward, done, value, next_value):
         self.buffer.add(state, sample, logprob, reward, done, value, next_value)
     
-    def save(self, path):
-        if not os.path.exists(path):
-            os.makedirs(path)
-        self.agent.save(path)
-    
-    def load(self, path):
-        self.agent.load(path)
-    
     def step(self, cfg, env, state, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
@@ -168,8 +160,7 @@ class PPO:
                     value=policy_info["value"],
                     next_value=self.agent.get_value(env_info["next_state_before_reset"]))
                 state = next_state
-                if self.agent.is_rnn_based:
-                    self.agent.reset(env_info["reset"])
+                self.reset(env_info["reset"])
                 if on_step_cb is not None:
                     on_step_cb(
                         state=state,
@@ -180,9 +171,24 @@ class PPO:
         advantages, target_values = self.bootstrap()
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = self.train(advantages, target_values)
+        self.agent.detach()
+        return state, policy_info, env_info, losses, grad_norms
+    
+    def save(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.agent.save(path)
+    
+    def load(self, path):
+        self.agent.load(path)
+    
+    def reset(self, env_idx: Tensor):
+        if self.agent.is_rnn_based:
+            self.agent.reset(env_idx)
+    
+    def detach(self):
         if self.agent.is_rnn_based:
             self.agent.detach()
-        return state, policy_info, env_info, losses, grad_norms
 
     @staticmethod
     def build(cfg, env, device):

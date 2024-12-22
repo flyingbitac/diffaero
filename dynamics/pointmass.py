@@ -25,7 +25,6 @@ class PointMassModel:
         self.vel_ema_factor = cfg.vel_ema_factor
         self.dt = dt
         self.n_substeps = n_substeps
-        self.align_yaw_with_vel_direction = cfg.align_yaw_with_vel_direction
         self.aligh_yaw_with_vel_ema = cfg.aligh_yaw_with_vel_ema
         self.min_action = torch.tensor([list(cfg.min_action)], device=device)
         self.max_action = torch.tensor([list(cfg.max_action)], device=device)
@@ -61,6 +60,11 @@ class PointMassModel:
         self._state = new_state
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
     
+    def reset_idx(self, env_idx: Tensor) -> None:
+        mask = torch.zeros_like(self._vel_ema, dtype=torch.bool)
+        mask[env_idx] = True
+        self._vel_ema = torch.where(mask, 0., self._vel_ema)
+    
     @property
     def p(self) -> Tensor: return self._state[:, 0:3].detach()
     @property
@@ -83,9 +87,8 @@ class PointMassModel:
     def _a(self) -> Tensor: return self._state[:, 6:9]
     @property
     def _q(self) -> Tensor:
-        warnings.warn("Direct access of quaternion with gradient in point mass model is strongly not recommanded. Please consider using the detached version instead.")
-        orientation = self._vel_ema if self.aligh_yaw_with_vel_ema else self._v
-        return point_mass_quat(self._a, orientation=orientation)
+        warnings.warn("Direct access of quaternion with gradient in point mass model is not supported. Returning detached version instead.")
+        return self.q
     @property
     def _w(self) -> Tensor:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")

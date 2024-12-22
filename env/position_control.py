@@ -99,13 +99,16 @@ class PositionControl(BaseEnv):
         return total_loss, loss_components
 
     def reset_idx(self, env_idx):
-        state_mask = torch.zeros_like(self.model._state)
-        state_mask[env_idx] = 1
+        state_mask = torch.zeros_like(self.model._state, dtype=torch.bool)
+        state_mask[env_idx] = True
         p_new = rand_range(-self.L+0.5, self.L-0.5, size=(self.n_envs, 3), device=self.device)
         new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.model.state_dim-3, device=self.device)], dim=-1)
         if self.dynamic_type == "quadrotor":
             new_state[:, 6] = 1 # real part of the quaternion
-        self.model._state = torch.where(state_mask.bool(), new_state, self.model._state)
+        elif self.dynamic_type == "pointmass":
+            new_state[:, 8] = 9.8
+        self.model._state = torch.where(state_mask, new_state, self.model._state)
+        self.model.reset_idx(env_idx)
         self.target_pos.fill_(0.)
         self.progress[env_idx] = 0
         self.arrive_time[env_idx] = 0

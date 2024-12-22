@@ -2,6 +2,7 @@ from typing import Callable, Union, Optional, Tuple
 
 import torch
 from torch import Tensor
+from pytorch3d import transforms as T
 
 # Runge-Kutta 4th Order Method
 def rk4(f, X0, U, dt, M=1):
@@ -26,7 +27,7 @@ def EulerIntegral(f, X0, U, dt, M=1):
     return X1
 
 @torch.jit.script
-def quat_from_euler_xyz(roll, pitch, yaw):
+def euler_to_quaternion(roll, pitch, yaw):
     # type: (Tensor, Tensor, Tensor) -> Tensor
     cy = torch.cos(yaw * 0.5)
     sy = torch.sin(yaw * 0.5)
@@ -63,23 +64,23 @@ def random_quat_from_eular_zyx(
     yaw = torch.rand(size, device=device) * (yaw_range[1] - yaw_range[0]) + yaw_range[0]
     pitch = torch.rand(size, device=device) * (pitch_range[1] - pitch_range[0]) + pitch_range[0]
     roll = torch.rand(size, device=device) * (roll_range[1] - roll_range[0]) + roll_range[0]
-    quat_xyzw = quat_from_euler_xyz(roll, pitch, yaw)
+    quat_xyzw = euler_to_quaternion(roll, pitch, yaw)
     return quat_xyzw
 
 @torch.jit.script
-def quat_rotate(q: Tensor, v: Tensor) -> Tensor:
-    q_w = q[..., -1]
-    q_vec = q[..., :3]
+def quat_rotate(quat_xyzw: Tensor, v: Tensor) -> Tensor:
+    q_w = quat_xyzw[..., -1]
+    q_vec = quat_xyzw[..., :3]
     a = v * (q_w ** 2 - q_vec.pow(2).sum(dim=-1)).unsqueeze(-1)
     b = 2. * q_w.unsqueeze(-1) * torch.cross(q_vec, v, dim=-1)
     c = 2. * q_vec * (q_vec * v).sum(dim=-1, keepdim=True)
     return a + b + c
 
 @torch.jit.script
-def quat_axis(q: Tensor, axis: int = 0) -> Tensor:
-    basis_vec = torch.zeros(q.shape[0], 3, device=q.device)
+def quat_axis(quat_xyzw: Tensor, axis: int = 0) -> Tensor:
+    basis_vec = torch.zeros(quat_xyzw.shape[0], 3, device=quat_xyzw.device)
     basis_vec[..., axis] = 1
-    return quat_rotate(q, basis_vec)
+    return quat_rotate(quat_xyzw, basis_vec)
 
 @torch.jit.script
 def quat_mul(a: Tensor, b: Tensor) -> Tensor:
@@ -105,9 +106,10 @@ def quat_mul(a: Tensor, b: Tensor) -> Tensor:
     return quat
 
 @torch.jit.script
-def quat_inv(q: Tensor) -> Tensor:
-    return torch.cat([-q[..., :3], q[..., 3:4]], dim=-1)
+def quat_inv(quat_xyzw: Tensor) -> Tensor:
+    return torch.cat([-quat_xyzw[..., :3], quat_xyzw[..., 3:4]], dim=-1)
 
+@torch.jit.script
 def axis_rotmat(axis: str, angle: Tensor) -> Tensor:
     """
     Return the rotation matrices for one of the rotations about an axis
@@ -137,3 +139,30 @@ def axis_rotmat(axis: str, angle: Tensor) -> Tensor:
 
 def rand_range(min: float, max: float, size: Tuple[int, int], device: Optional[torch.device]=None):
     return torch.rand(*size, device=device) * (max - min) + min
+
+@torch.jit.script
+def quaternion_to_euler(quat_xyzw: Tensor) -> Tensor:
+    # return T.matrix_to_euler_angles(T.quaternion_to_matrix(quat_wxyz), "XYZ")
+    x, y, z, w = quat_xyzw.unbind(dim=-1)
+    roll = torch.atan2(2.0 * (w * x - y * z), 1.0 - 2.0 * (x**2 + y**2))
+    pitch = torch.asin(2.0 * (w * y + x * z))
+    yaw = torch.atan2(2.0 * (w * z - x * y), 1.0 - 2.0 * (y**2 + z**2))
+    return torch.stack([roll, pitch, yaw], dim=-1)
+
+@torch.jit.script
+def quaternion_invert(quat_wxyz: Tensor) -> Tensor:
+    neg = torch.ones_like(quat_wxyz)
+    neg[..., 1:] = -1
+    return quat_wxyz * neg
+
+@torch.jit.script
+def quaternion_apply(quat_wxyz: Tensor, point: Tensor) -> Tensor:
+    if point.size(-1) != 3:
+        raise ValueError(f"Points are not in 3D, f{point.shape}.")
+    real_parts = torch.zeros_like(point[..., 0:1])
+    point_as_quaternion = torch.cat((real_parts, point), -1)
+    out = T.quaternion_raw_multiply(
+        T.quaternion_raw_multiply(quat_wxyz, point_as_quaternion),
+        quaternion_invert(quat_wxyz),
+    )
+    return out[..., 1:]

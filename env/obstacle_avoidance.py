@@ -153,7 +153,7 @@ class ObstacleAvoidance(BaseEnv):
         avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
         oa_loss = 1.5 * approaching_penalty - 0.5 * avoiding_reward
         
-        collision_loss = self.collision().float() * 100
+        collision_loss = self.collision().float() * 10
         
         if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
@@ -170,7 +170,6 @@ class ObstacleAvoidance(BaseEnv):
                 "jerk_loss": jerk_loss.mean().item(),
                 "collision_loss": collision_loss.mean().item(),
                 "oa_loss": oa_loss.mean().item(),
-                "collision_loss": collision_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
         else:
@@ -194,8 +193,8 @@ class ObstacleAvoidance(BaseEnv):
 
     def reset_idx(self, env_idx):
         n_resets = len(env_idx)
-        state_mask = torch.zeros_like(self.model._state)
-        state_mask[env_idx] = 1
+        state_mask = torch.zeros_like(self.model._state, dtype=torch.bool)
+        state_mask[env_idx] = True
         
         xy_min, xy_max = -self.L+0.5, self.L-0.5
         z_min, z_max = -self.height_scale*self.L+0.5, self.height_scale*self.L-0.5
@@ -206,7 +205,10 @@ class ObstacleAvoidance(BaseEnv):
         new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.model.state_dim-3, device=self.device)], dim=-1)
         if self.dynamic_type == "quadrotor":
             new_state[:, 6] = 1 # real part of the quaternion
-        self.model._state = torch.where(state_mask.bool(), new_state, self.model._state)
+        elif self.dynamic_type == "pointmass":
+            new_state[:, -1] = 9.8
+        self.model._state = torch.where(state_mask, new_state, self.model._state)
+        self.model.reset_idx(env_idx)
         
         min_init_dist = 1.3 * self.L
         # randomly select a target position that meets the minimum distance constraint
