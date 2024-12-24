@@ -8,7 +8,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.network.agents import RPLActorCritic, StochasticActorCriticV
+from quaddif.network.agents import RPLActorCritic, StochasticActorCriticV, tensordict2tuple
 from quaddif.algo.buffer import RolloutBufferPPO, RNNStateBuffer
 
 class PPO:
@@ -47,7 +47,7 @@ class PPO:
         # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
-        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
+        action, sample, logprob, entropy, value = self.agent.get_action_and_value(tensordict2tuple(state), test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
     @torch.no_grad()
@@ -87,12 +87,12 @@ class PPO:
             # policy loss
             if self.agent.is_rnn_based:
                 _, _, newlogprob, entropy = self.agent.get_action(
-                    states[mb_indices],
+                    tensordict2tuple(states[mb_indices]),
                     samples[mb_indices],
                     hidden=actor_hidden_state[mb_indices].permute(1, 0, 2))
             else:
                 _, _, newlogprob, entropy = self.agent.get_action(
-                    states[mb_indices],
+                    tensordict2tuple(states[mb_indices]),
                     samples[mb_indices])
             
             logratio = newlogprob - logprobs[mb_indices]
@@ -105,9 +105,10 @@ class PPO:
             entropy_loss = -entropy.mean()
             # value loss
             if self.agent.is_rnn_based:
-                newvalue = self.agent.get_value(states[mb_indices], hidden=critic_hidden_state[mb_indices].permute(1, 0, 2))
+                newvalue = self.agent.get_value(tensordict2tuple(states[mb_indices]),
+                                                hidden=critic_hidden_state[mb_indices].permute(1, 0, 2))
             else:
-                newvalue = self.agent.get_value(states[mb_indices])
+                newvalue = self.agent.get_value(tensordict2tuple(states[mb_indices]))
             if self.clip_value_loss:
                 v_loss_unclipped = (newvalue - target_values[mb_indices]) ** 2
                 v_clipped = values[mb_indices] + torch.clamp(
@@ -158,7 +159,7 @@ class PPO:
                     reward=1-loss*0.1,
                     done=terminated,
                     value=policy_info["value"],
-                    next_value=self.agent.get_value(env_info["next_state_before_reset"]))
+                    next_value=self.agent.get_value(tensordict2tuple(env_info["next_state_before_reset"])))
                 state = next_state
                 self.reset(env_info["reset"])
                 if on_step_cb is not None:
