@@ -8,8 +8,13 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.network.agents import StochasticActorCriticV, RPLActorCritic, StochasticActorCriticQ, tensordict2tuple
 from quaddif.algo.buffer import RolloutBufferSHAC, RolloutBufferSHACQ, RNNStateBuffer
+from quaddif.network.agents import (
+    tensordict2tuple,
+    StochasticActorCriticV,
+    RPLActorCritic,
+    StochasticActorCriticQ,
+    PolicyExporter)
 
 class SHAC:
     def __init__(
@@ -214,6 +219,9 @@ class SHAC:
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
+    
+    def export(self, path: str, verbose: bool = False):
+        PolicyExporter(self.agent.actor).export(path, verbose=verbose)
 
 
 class SHAC_RPL(SHAC):
@@ -420,3 +428,6 @@ class SHAC_Q:
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
+    
+    def export(self, path: str, verbose: bool = False):
+        PolicyExporter(self.agent.actor).export(path, verbose=verbose)

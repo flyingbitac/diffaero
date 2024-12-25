@@ -117,8 +117,8 @@ class RNN(BaseNetwork):
         obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
         action: Optional[Tensor] = None, # [N, D_action]
         hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
-    ) -> Tuple[Tensor, Tensor]:
-        self.gru.flatten_parameters()
+    ) -> Tensor:
+        # self.gru.flatten_parameters()
         rnn_input = state_action_concat(obs, action)
         
         use_own_hidden = hidden is None
@@ -126,13 +126,23 @@ class RNN(BaseNetwork):
             if self.hidden_state is None:
                 self.hidden_state = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
             hidden = self.hidden_state
-        else:
-            assert hidden.size(1) == rnn_input.size(0)
+        # else:
+        #     assert hidden.size(1) == rnn_input.size(0)
         
         rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
         if use_own_hidden:
             self.hidden_state = hidden
         return self.head(rnn_out.squeeze(1))
+    
+    def forward_pure(
+        self,
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        hidden: Tensor, # [n_layers, N, D_hidden]
+        action: Optional[Tensor] = None, # [N, D_action]
+    ) -> Tuple[Tensor, Tensor]:
+        rnn_input = state_action_concat(obs, action)
+        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
+        return self.head(rnn_out.squeeze(1)), hidden
 
     def reset(self, indices: Tensor):
         self.hidden_state[:, indices, :] = 0
@@ -171,26 +181,39 @@ class RCNN(BaseNetwork):
         obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
         action: Optional[Tensor] = None, # [N, D_action]
         hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
-    ) -> Tuple[Tensor, Tensor]:
-        self.gru.flatten_parameters()
+    ) -> Tensor:
+        # self.gru.flatten_parameters()
         
-        perception = obs["perception"]
-        if perception.ndim == 3 and perception.shape[0] != 1:
+        perception = obs[1]
+        if perception.ndim == 3:
             perception = perception.unsqueeze(1)
-        rnn_input = torch.cat([obs["state"], self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
+        rnn_input = torch.cat([obs[0], self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
         
         use_own_hidden = hidden is None
         if use_own_hidden:
             if self.hidden_state is None:
                 self.hidden_state = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
             hidden = self.hidden_state
-        else:
-            assert hidden.size(1) == rnn_input.size(0)
+        # else:
+        #     assert hidden.size(1) == rnn_input.size(0)
         
         rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden.contiguous())
         if use_own_hidden:
             self.hidden_state = hidden
         return self.head(rnn_out.squeeze(1))
+    
+    def forward_pure(
+        self,
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        hidden: Tensor, # [n_layers, N, D_hidden]
+        action: Optional[Tensor] = None, # [N, D_action]
+    ) -> Tuple[Tensor, Tensor]:
+        perception = obs[1]
+        if perception.ndim == 3:
+            perception = perception.unsqueeze(1)
+        rnn_input = torch.cat([obs[0], self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
+        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
+        return self.head(rnn_out.squeeze(1)), hidden
 
     def reset(self, indices: Tensor):
         self.hidden_state[:, indices, :] = 0

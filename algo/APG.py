@@ -6,7 +6,11 @@ import torch
 from torch import Tensor
 from tensordict import TensorDict
 
-from quaddif.network.agents import DeterministicActor, StochasticActor, tensordict2tuple
+from quaddif.network.agents import (
+    tensordict2tuple,
+    DeterministicActor,
+    StochasticActor,
+    PolicyExporter)
 
 class APG:
     def __init__(
@@ -86,6 +90,9 @@ class APG:
             action_dim=env.action_dim,
             l_rollout=cfg.l_rollout,
             device=device)
+    
+    def export(self, path: str, verbose: bool = False):
+        PolicyExporter(self.actor).export(path, verbose=verbose)
 
 
 class APG_stochastic(APG):

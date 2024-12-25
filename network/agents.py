@@ -1,4 +1,5 @@
 from typing import Tuple, Dict, Union, Optional, List
+from copy import deepcopy
 import os
 
 from omegaconf import DictConfig, OmegaConf
@@ -10,8 +11,9 @@ from tensordict import TensorDict
 from quaddif.network import build_network
 
 class AgentBase(nn.Module):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig, state_dim: Union[int, Tuple[int, Tuple[int, int]]]):
         super().__init__()
+        self.state_dim = state_dim
         self.is_rnn_based = cfg.name.lower() == "rnn" or cfg.name.lower() == "rcnn"
 
 class DeterministicActor(AgentBase):
@@ -21,7 +23,7 @@ class DeterministicActor(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.actor = build_network(cfg, state_dim, action_dim, output_act=nn.Tanh())
         
     def forward(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], hidden: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
@@ -47,7 +49,7 @@ class StochasticActor(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.actor_mean = build_network(cfg, state_dim, action_dim)
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
 
@@ -93,7 +95,7 @@ class CriticV(AgentBase):
         cfg: DictConfig,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]]
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.critic = build_network(cfg, state_dim, 1)
     
     def forward(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], hidden: Optional[Tensor] = None) -> Tensor:
@@ -119,7 +121,7 @@ class CriticQ(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         if not isinstance(state_dim, int):
             state_dim = (state_dim[0] + action_dim, state_dim[1])
         else:
@@ -149,7 +151,7 @@ class StochasticActorCriticV(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.critic = CriticV(cfg, state_dim)
         self.actor = StochasticActor(cfg, state_dim, action_dim)
 
@@ -188,7 +190,7 @@ class StochasticActorCriticQ(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.critic = CriticQ(cfg, state_dim, action_dim)
         self.actor = StochasticActor(cfg, state_dim, action_dim)
 
@@ -295,3 +297,53 @@ def tensordict2tuple(state: Union[Tensor, TensorDict]):
         return (state["state"], state["perception"])
     else:
         return state
+
+from quaddif.dynamics.pointmass import point_mass_quat
+
+class PolicyExporter(nn.Module):
+    def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
+        super().__init__()
+        self.is_stochastic = isinstance(actor, StochasticActor)
+        self.is_rnn_based = actor.is_rnn_based
+        self.actor = deepcopy(actor.actor_mean if self.is_stochastic else actor.actor).cpu()
+        
+        if self.is_rnn_based:
+            self.register_buffer("hidden_state", torch.zeros(self.actor.n_layers, 1, self.actor.rnn_hidden_dim))
+            self.hidden_state: Tensor = self.get_buffer("hidden_state")
+    
+    @torch.no_grad()
+    def forward(self, x):
+        # type: (Tensor) -> Tensor
+        if self.is_rnn_based:
+            action, hidden = self.actor.forward_pure(x.unsqueeze(0), hidden=self.hidden_state)
+            self.hidden_state[:] = hidden
+        else:
+            action = self.actor(x.unsqueeze(0))
+        action = action.tanh() if self.is_stochastic else action
+        return action
+    
+    @torch.jit.export
+    def post_process(self, acc, orientation):
+        # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor]
+        quat_xyzw = point_mass_quat(acc, orientation)
+        acc_norm = acc.norm(p=2, dim=-1)
+        return quat_xyzw, acc_norm
+    
+    @torch.jit.export
+    def reset(self):
+        if self.is_rnn_based:
+            self.hidden_state.zero_()
+    
+    @torch.jit.export
+    def rescale(self, raw_action, min_action, max_action):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
+        return (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
+    
+    def export(self, path: str, verbose=False):
+        traced_script_module = torch.jit.script(self)
+        if verbose:
+            print(traced_script_module.code)
+            print(traced_script_module.post_process.code)
+            print(traced_script_module.reset.code)
+            print(traced_script_module.rescale.code)
+        traced_script_module.save(path)
