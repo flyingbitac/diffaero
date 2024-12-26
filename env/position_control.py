@@ -68,11 +68,14 @@ class PositionControl(BaseEnv):
             vel_diff = (self.model._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
+            pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
+            
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 0.003 * jerk_loss
+            total_loss = vel_loss + 0.005 * jerk_loss + pos_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
+                "pos_loss": pos_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
@@ -86,9 +89,9 @@ class PositionControl(BaseEnv):
             
             jerk_loss = self._w.norm(dim=-1)
             
-            pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
+            pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            total_loss = vel_loss + jerk_loss + pos_loss
+            total_loss = vel_loss + 0.2 * jerk_loss + pos_loss + 0.1 * attitute_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
