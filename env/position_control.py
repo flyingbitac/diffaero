@@ -13,7 +13,7 @@ from quaddif.utils.math import rand_range
 class PositionControl(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super(PositionControl, self).__init__(cfg, device)
-        self.state_dim = 13
+        self.state_dim = 10
         self.action_dim = self.model.action_dim
         if cfg.render.headless:
             self.renderer = None
@@ -22,9 +22,9 @@ class PositionControl(BaseEnv):
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":
-            state = torch.cat([self.target_vel, self.q, self._v, self._a], dim=-1)
+            state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
         else:
-            state = torch.cat([self.target_vel, self._q, self._v, self._w], dim=-1)
+            state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         return state if with_grad else state.detach()
     
     def step(self, action):
