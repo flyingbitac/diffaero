@@ -290,8 +290,6 @@ class DepthStateModel(nn.Module):
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss
         return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss
 
-    
-        
 if __name__=='__main__':
 
     cfg = DepthStateModelCfg
