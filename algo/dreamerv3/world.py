@@ -85,8 +85,6 @@ class World_Agent:
         
         statemodelcfg = getattr(world_agent_cfg,"state_predictor").state_model
         statemodelcfg.state_dim = 13
-        # statemodelcfg.hidden_dim = 512
-        # statemodelcfg.latent_dim = 1024
         actorcriticcfg = getattr(world_agent_cfg,"actor_critic").model
         actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
