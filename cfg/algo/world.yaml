@@ -87,7 +87,7 @@ replaybuffer:
 
 state_predictor:
   state_model:
-    _target_: algo.dreamerv3.models.state_predictor.StateModelCfg
+    _target_: algo.dreamerv3.models.state_predictor.DepthStateModelCfg
     state_dim: 13 
     image_width: 16
     hidden_dim: 512

@@ -4,7 +4,7 @@ from typing import Any, Dict, Generator, List, Tuple,Optional
 import torch
 from torch import Tensor
 
-from quaddif.algo.dreamerv3.models.state_predictor import StateModel,StateModelCfg,PercStateModel
+from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel,PercStateModel
 from quaddif.algo.dreamerv3.models.blocks import symexp,symlog
 from .replaybuffer import ReplayBuffer
 from quaddif.utils.logger import Logger
@@ -25,7 +25,7 @@ class StateEnvConfig:
 class StateEnv:
     def __init__(
         self,
-        state_model: StateModel,
+        state_model: DepthStateModel,
         replaybuffer: ReplayBuffer,
         cfg: StateEnvConfig,
     ) -> None:

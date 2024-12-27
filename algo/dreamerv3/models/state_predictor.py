@@ -11,7 +11,7 @@ from einops.layers.torch import Rearrange
 from .blocks import SymLogTwoHotLoss,SymLogTwoHotLossMulti,proj
 
 @dataclass
-class StateModelCfg:
+class DepthStateModelCfg:
     state_dim: int
     image_width: int
     hidden_dim: int
@@ -150,8 +150,8 @@ class MSELoss(nn.Module):
         loss = reduce(loss, "B L C H W -> B L", "sum")
         return loss.mean()
 
-class StateModel(nn.Module):
-    def __init__(self, cfg:StateModelCfg) -> None:
+class DepthStateModel(nn.Module):
+    def __init__(self, cfg:DepthStateModelCfg) -> None:
         super().__init__()
         self.cfg = cfg
         self.use_simnorm = cfg.use_simnorm
@@ -302,7 +302,7 @@ class StateModel(nn.Module):
         return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss
 
 class PercStateModel(nn.Module):
-    def __init__(self, statecfg: StateModelCfg, perccfg: PercModelCfg) -> None:
+    def __init__(self, statecfg: DepthStateModelCfg, perccfg: PercModelCfg) -> None:
         super().__init__()
         self.statecfg = statecfg
         self.perccfg = perccfg
