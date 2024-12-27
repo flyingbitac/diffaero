@@ -8,7 +8,7 @@ from typing import Optional
 from einops import rearrange,reduce
 from einops.layers.torch import Rearrange
 
-from .blocks import SymLogTwoHotLoss,SymLogTwoHotLossMulti,proj
+from .blocks import SymLogTwoHotLoss
 
 @dataclass
 class DepthStateModelCfg:
@@ -20,17 +20,6 @@ class DepthStateModelCfg:
     categoricals: int
     num_classes: int
     use_simnorm: bool=False
-
-@dataclass
-class PercModelCfg:
-    state_dim: int
-    hidden_dim: int
-    action_dim: int
-    latent_dim: int
-    categoricals: int
-    num_classes: int
-    use_simnorm: bool=False
-    use_multirew: bool=False
 
 @dataclass
 class Batch:
@@ -301,203 +290,17 @@ class DepthStateModel(nn.Module):
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss
         return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss
 
-class PercStateModel(nn.Module):
-    def __init__(self, statecfg: DepthStateModelCfg, perccfg: PercModelCfg) -> None:
-        super().__init__()
-        self.statecfg = statecfg
-        self.perccfg = perccfg
-        self.use_simnorm = statecfg.use_simnorm
-        self.state_categoricals = statecfg.categoricals
-        self.perc_categoricals = perccfg.categoricals
-
-        # Loss functions
-        self.kl_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
-        loss_cls = SymLogTwoHotLossMulti if statecfg.use_multirew else SymLogTwoHotLoss
-        self.symlogtwohotloss = loss_cls(statecfg.num_classes,-20,20)
-        self.endloss = nn.BCEWithLogitsLoss()
-
-        # Models
-        self.state_model = nn.ModuleDict(self._create_components(statecfg))
-        self.perc_model = nn.ModuleDict(self._create_components(perccfg))
-        self.reward_predictor = RewardDecoder(statecfg.num_classes, perccfg.hidden_dim, statecfg.hidden_dim)
-        self.end_predictor = EndDecoder(perccfg.hidden_dim, statecfg.hidden_dim)
-
-    @staticmethod
-    def _create_components(cfg):
-        return {
-            "seq_model": nn.GRUCell(cfg.hidden_dim, cfg.hidden_dim),
-            "inp_proj": proj(cfg.state_dim + cfg.hidden_dim, cfg.latent_dim),
-            "state_act_proj": proj(cfg.latent_dim + cfg.action_dim, cfg.hidden_dim),
-            "decoder": proj(cfg.latent_dim + cfg.hidden_dim, cfg.state_dim, cfg.latent_dim),
-            "prior_proj": proj(cfg.hidden_dim, cfg.latent_dim),
-        }
-
-    def _init_hidden(self, batch_size, hidden_dim, device):
-        return torch.zeros(batch_size, hidden_dim, device=device)
-
-    def straight_with_gradient(self, logits: Tensor):
-        probs = F.softmax(logits, dim=-1)
-        sample = OneHotCategorical(probs=probs).sample()
-        return sample + probs - probs.detach()
-
-    def decode(self, state_latent: Tensor, perc_latent: Tensor, state_hidden=None, perc_hidden=None):
-        if state_hidden is None or perc_hidden is None:
-            state_hidden = self._init_hidden(state_latent.size(0), self.statecfg.hidden_dim, state_latent.device)
-            perc_hidden = self._init_hidden(perc_latent.size(0), self.perccfg.hidden_dim, perc_latent.device)
-        return (
-            self.state_model["decoder"](torch.cat([state_latent, state_hidden], dim=-1)),
-            self.perc_model["decoder"](torch.cat([perc_latent, perc_hidden], dim=-1)),
-        )
-
-    def sample_with_prior(self, state_latent, perc_latent, act, state_hidden=None, perc_hidden=None):
-        assert state_latent.ndim == perc_latent.ndim == act.ndim == 2
-        state_act = self.state_model["state_act_proj"](torch.cat([state_latent, act], dim=-1))
-        perc_act = self.perc_model["state_act_proj"](torch.cat([perc_latent, act], dim=-1))
-        if state_hidden is None or perc_hidden is None:
-            state_hidden = self._init_hidden(state_latent.size(0), self.statecfg.hidden_dim, state_latent.device)
-            perc_hidden = self._init_hidden(perc_latent.size(0), self.perccfg.hidden_dim, perc_latent.device)
-
-        state_hidden = self.state_model["seq_model"](state_act, state_hidden)
-        perc_hidden = self.perc_model["seq_model"](perc_act, perc_hidden)
-
-        state_prior_logits = self.state_model["prior_proj"](state_hidden)
-        perc_prior_logits = self.perc_model["prior_proj"](perc_hidden)
-        state_prior_logits = state_prior_logits.view(*state_prior_logits.shape[:-1], self.state_categoricals, -1)
-        perc_prior_logits = perc_prior_logits.view(*perc_prior_logits.shape[:-1], self.perc_categoricals, -1)
-
-        if self.use_simnorm:
-            return (
-                state_prior_logits.softmax(dim=-1),
-                state_prior_logits,
-                state_hidden,
-                perc_prior_logits.softmax(dim=-1),
-                perc_prior_logits,
-                perc_hidden,
-            )
-        else:
-            return (
-                self.straight_with_gradient(state_prior_logits),
-                state_prior_logits,
-                state_hidden,
-                self.straight_with_gradient(perc_prior_logits),
-                perc_prior_logits,
-                perc_hidden,
-            )
-
-    def flatten(self, categorical_sample: Tensor):
-        return categorical_sample.view(*categorical_sample.shape[:-2], -1)
-
-    def sample_with_post(self, state, perc, state_hidden=None, perc_hidden=None):
-        if state_hidden is None or perc_hidden is None:
-            state_hidden = self._init_hidden(state.size(0), self.statecfg.hidden_dim, state.device)
-            perc_hidden = self._init_hidden(perc.size(0), self.perccfg.hidden_dim, perc.device)
-
-        state_post_logits = self.state_model["inp_proj"](torch.cat([state, state_hidden], dim=-1))
-        state_post_logits = state_post_logits.view(*state_post_logits.shape[:-1], self.state_categoricals, -1)
-        perc_post_logits = self.perc_model["inp_proj"](torch.cat([perc, perc_hidden], dim=-1))
-        perc_post_logits = perc_post_logits.view(*perc_post_logits.shape[:-1], self.perc_categoricals, -1)
-
-        if self.use_simnorm:
-            return state_post_logits.softmax(dim=-1), state_post_logits, perc_post_logits.softmax(dim=-1), perc_post_logits
-        else:
-            return (
-                self.straight_with_gradient(state_post_logits),
-                state_post_logits,
-                self.straight_with_gradient(perc_post_logits),
-                perc_post_logits,
-            )
-
-    @torch.no_grad()
-    def predict_next(self, state_latent, perc_latent, act, state_hidden=None, perc_hidden=None):
-        state_prior_sample, _, state_hidden, perc_prior_sample, _, perc_hidden = self.sample_with_prior(
-            state_latent, perc_latent, act, state_hidden, perc_hidden
-        )
-        state_flat_prior = self.flatten(state_prior_sample)
-        perc_flat_prior = self.flatten(perc_prior_sample)
-
-        reward_logit = self.reward_predictor(state_hidden, perc_hidden)
-        end_logit = self.end_predictor(state_hidden, perc_hidden)
-        return (
-            state_prior_sample,
-            perc_prior_sample,
-            self.symlogtwohotloss.decode(reward_logit),
-            end_logit > 0,
-            state_hidden,
-            perc_hidden,
-        )
-
-    def compute_loss(self, states, percs, actions, rewards, terminations):
-        b, l, _ = states.shape
-        state_hidden = self._init_hidden(b, self.statecfg.hidden_dim, states.device)
-        perc_hidden = self._init_hidden(b, self.perccfg.hidden_dim, percs.device)
-
-        rec_states, rec_percs, reward_logits, end_logits = [], [], [], []
-        state_post_logits, state_prior_logits = [], []
-        perc_post_logits, perc_prior_logits = [], []
-
-        for i in range(l):
-            state_post_sample, state_post_logit, perc_post_sample, perc_post_logit = self.sample_with_post(
-                states[:, i], percs[:, i], state_hidden, perc_hidden
-            )
-            state_flat_post = self.flatten(state_post_sample)
-            perc_flat_post = self.flatten(perc_post_sample)
-
-            rec_state, rec_perc = self.decode(state_flat_post, perc_flat_post, state_hidden, perc_hidden)
-            rec_states.append(rec_state)
-            rec_percs.append(rec_perc)
-
-            action = actions[:, i]
-            state_prior_sample, state_prior_logit, state_hidden, perc_prior_sample, perc_prior_logit, perc_hidden = self.sample_with_prior(
-                state_flat_post, perc_flat_post, action, state_hidden, perc_hidden
-            )
-            state_post_logits.append(state_post_logit)
-            state_prior_logits.append(state_prior_logit)
-            perc_post_logits.append(perc_post_logit)
-            perc_prior_logits.append(perc_prior_logit)
-
-            reward_logits.append(self.reward_predictor(state_hidden, perc_hidden))
-            end_logits.append(self.end_predictor(state_hidden, perc_hidden))
-
-        # Stack tensors
-        rec_states, rec_percs = map(lambda x: torch.stack(x, dim=1), (rec_states, rec_percs))
-        state_post_logits, state_prior_logits = map(lambda x: torch.stack(x, dim=1), (state_post_logits, state_prior_logits))
-        perc_post_logits, perc_prior_logits = map(lambda x: torch.stack(x, dim=1), (perc_post_logits, perc_prior_logits))
-        reward_logits, end_logits = map(lambda x: torch.stack(x, dim=1), (reward_logits, end_logits))
-
-        # Loss calculation
-        state_rep_loss, _ = self.kl_loss(state_post_logits[:, 1:], state_prior_logits[:, :-1].detach())
-        state_dyn_loss, _ = self.kl_loss(state_post_logits[:, 1:].detach(), state_prior_logits[:, :-1])
-        perc_rep_loss, _ = self.kl_loss(perc_post_logits[:, 1:], perc_prior_logits[:, :-1].detach())
-        perc_dyn_loss, _ = self.kl_loss(perc_post_logits[:, 1:].detach(), perc_prior_logits[:, :-1])
-
-        rew_loss = self.symlogtwohotloss(reward_logits, rewards)
-        end_loss = self.endloss(end_logits, terminations)
-
-        state_rec_loss = F.mse_loss(rec_states, states)
-        perc_rec_loss = F.mse_loss(rec_percs, percs)
-
-        total_loss = (
-            state_rec_loss
-            + perc_rec_loss
-            + 0.5 * (state_dyn_loss + perc_dyn_loss)
-            + 0.1 * (state_rep_loss + perc_rep_loss)
-            + rew_loss
-            + end_loss
-        )
-
-        return total_loss, state_rep_loss, state_dyn_loss, state_rec_loss, perc_rep_loss, perc_dyn_loss, perc_rec_loss, rew_loss, end_loss
-
     
         
 if __name__=='__main__':
 
-    cfg = StateModelCfg
+    cfg = DepthStateModelCfg
     cfg.action_dim = 4
     cfg.categoricals = 16
     cfg.hidden_dim = 256
     cfg.latent_dim = 256
     cfg.state_dim = 13
-    state_predictor = StateModel(cfg)
+    state_predictor = DepthStateModel(cfg)
 
     batch = Batch(None,torch.randn(5,10,4),None,None,None,torch.randn(5,10,13),None)
     state_loss = state_predictor.compute_loss(batch)
