@@ -7,13 +7,13 @@ import torch.nn as nn
 from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel
 from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
 from quaddif.algo.dreamerv3.models.blocks import symlog
-from quaddif.algo.dreamerv3.wmenv.world_state_env import StateEnv
+from quaddif.algo.dreamerv3.wmenv.world_state_env import DepthStateEnv
 from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
 from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
 
 
 @torch.no_grad()
-def collect_imagine_trj(env:StateEnv,agent:ActorCriticAgent,cfg):
+def collect_imagine_trj(env:DepthStateEnv,agent:ActorCriticAgent,cfg):
     feats,rewards,ends,actions,states,org_samples = [],[],[],[],[],[]
     imagine_length = cfg.imagine_length
     latent,hidden,state = env.make_generator_init()
@@ -38,7 +38,7 @@ def collect_imagine_trj(env:StateEnv,agent:ActorCriticAgent,cfg):
 
     return feats,actions,rewards,ends,states,org_samples
 
-def train_agents(agent:ActorCriticAgent,state_env:StateEnv,cfg):
+def train_agents(agent:ActorCriticAgent,state_env:DepthStateEnv,cfg):
     trainingcfg = getattr(cfg,"actor_critic").training
     feats,_,rewards,ends,_,org_samples = collect_imagine_trj(state_env,agent,trainingcfg)
     agent_info = agent.update(feats,org_samples,rewards,ends)
@@ -99,7 +99,7 @@ class World_Agent:
         self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
         self.state_model = DepthStateModel(statemodelcfg).to(device)
         self.replaybuffer = ReplayBuffer(buffercfg)
-        self.world_model_env = StateEnv(self.state_model,self.replaybuffer,worldcfg)
+        self.world_model_env = DepthStateEnv(self.state_model,self.replaybuffer,worldcfg)
         self.opt = configure_opt(self.state_model,**getattr(world_agent_cfg,'state_predictor').optimizer)
         
         if world_agent_cfg.common.checkpoint_path != None:

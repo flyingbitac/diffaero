@@ -16,18 +16,18 @@ InitialCondition = Tuple[Tensor, Tensor, Tuple[Tensor, Tensor]]
 
 
 @dataclass
-class StateEnvConfig:
+class DepthStateEnvConfig:
     horizon: int
     batch_size: int
     batch_length: int
     use_perception: bool = False
 
-class StateEnv:
+class DepthStateEnv:
     def __init__(
         self,
         state_model: DepthStateModel,
         replaybuffer: ReplayBuffer,
-        cfg: StateEnvConfig,
+        cfg: DepthStateEnvConfig,
     ) -> None:
         self.state_model = state_model
         self.replaybuffer = replaybuffer
