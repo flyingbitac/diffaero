@@ -81,21 +81,3 @@ training:
 
 imagine:
   imagine_length: 64 # 实际imagine的长度是imagine_length-num_steps_conditioning
-
-td3:
-  feat_dim: 512 #latent_dim + hidden_dim
-  hidden_dim: 512
-  action_dim: 3
-  use_states: False
-
-  train:
-    gamma: 0.99
-    tau: 0.005
-    actor_lr: 0.0003
-    critic_lr: 0.003
-    noise_clip: 0.75
-    policy_noise: 1.5
-    policy_freq: 4
-    expl_noise: 1.5
-    max_grad_norm: 1.0
-    update_freq: 4
