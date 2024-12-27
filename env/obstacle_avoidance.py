@@ -153,7 +153,7 @@ class ObstacleAvoidance(BaseEnv):
         avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
         oa_loss = 1.5 * approaching_penalty - 0.5 * avoiding_reward
         
-        collision_loss = self.collision().float() * 10
+        collision_loss = self.collision().float() * 100.
         
         if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()

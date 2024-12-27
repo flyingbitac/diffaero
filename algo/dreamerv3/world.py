@@ -1,6 +1,8 @@
 import os
+from copy import deepcopy
 
 import torch
+import torch.nn as nn
 
 from quaddif.algo.dreamerv3.models.state_predictor import StateModel
 from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
@@ -111,6 +113,9 @@ class World_Agent:
         self.replaybuffer = ReplayBuffer(buffercfg)
         self.world_model_env = StateEnv(self.state_model,self.replaybuffer,worldcfg)
         self.opt = configure_opt(self.state_model,**getattr(world_agent_cfg,'state_predictor').optimizer)
+        
+        if world_agent_cfg.common.checkpoint_path != None:
+            self.load(world_agent_cfg.common.checkpoint_path)
 
         self.hidden = torch.zeros(cfg.n_envs, statemodelcfg.hidden_dim, device=device)
     

@@ -6,8 +6,7 @@ common:
   use_checkpoint: False
   use_symlog: True
   total_timesteps: 200_000_000
-  state_model_checkpoint_path: "/home/zxh/ws/wrqws/quaddif/outputs/2024-12-01/15-23-24/ckpt/v3oaa2cbigger/statemodel/statemodel_80000.pth"
-  actor_critic_checkpoint_path: "/home/zxh/ws/wrqws/quaddif/outputs/2024-12-01/15-23-24/ckpt/v3oaa2cbigger/actorcritic/actorcritic_80000.pth"
+  checkpoint_path: None
 
 denoiser:
   denoiser:
@@ -89,7 +88,7 @@ replaybuffer:
 state_predictor:
   state_model:
     _target_: algo.dreamerv3.models.state_predictor.StateModelCfg
-    state_dim: 13 #state_dim+wall_distances_dim + obstacles_num*3
+    state_dim: 13 
     image_width: 16
     hidden_dim: 512
     action_dim: 3
