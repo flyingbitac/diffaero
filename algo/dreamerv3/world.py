@@ -14,12 +14,7 @@ from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
 
 @torch.no_grad()
 def collect_imagine_trj(env:StateEnv,agent:ActorCriticAgent,cfg):
-    feats = []
-    rewards = []
-    ends = []
-    actions = []
-    states = []
-    org_samples = []
+    feats,rewards,ends,actions,states,org_samples = [],[],[],[],[]
     imagine_length = cfg.imagine_length
     latent,hidden,state = env.make_generator_init()
     for i in range(imagine_length):
@@ -45,24 +40,19 @@ def collect_imagine_trj(env:StateEnv,agent:ActorCriticAgent,cfg):
 
 def train_agents(agent:ActorCriticAgent,state_env:StateEnv,cfg):
     trainingcfg = getattr(cfg,"actor_critic").training
-    feats,actions,rewards,ends,states,org_samples = collect_imagine_trj(state_env,agent,trainingcfg)
+    feats,_,rewards,ends,_,org_samples = collect_imagine_trj(state_env,agent,trainingcfg)
     # rewards = rewards/100.
     agent_info = agent.update(feats,org_samples,rewards,ends)
     reward_sum = rewards.sum(dim=-1).mean()
     agent_info['reward_sum'] = reward_sum.item()
-    # logger.log('ActorCritic/avg_return', reward_sum.item())
     return agent_info
     
 def train_worldmodel(world_model:StateModel,replaybuffer:ReplayBuffer,opt,training_hyper):
     for _ in range(training_hyper.worldmodel_update_freq):
-        sample_state, sample_action, sample_reward, sample_termination,sample_reward_components,sample_perception = \
+        sample_state, sample_action, sample_reward, sample_termination,sample_perception = \
                                             replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
-        if not training_hyper.use_multirew:
-            total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = \
-                world_model.compute_loss(sample_state, sample_perception, sample_action, sample_reward, sample_termination)
-        else:
-            total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = \
-                world_model.compute_loss(sample_state, sample_perception, sample_action, sample_reward_components, sample_termination)
+        total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = \
+            world_model.compute_loss(sample_state, sample_perception, sample_action, sample_reward, sample_termination)
     
     total_loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(world_model.parameters(),training_hyper.max_grad_norm)
@@ -105,7 +95,6 @@ class World_Agent:
         buffercfg.state_dim = 13
         worldcfg = getattr(world_agent_cfg,"world_state_env")
         training_hyper = getattr(world_agent_cfg,"state_predictor").training
-        training_hyper.use_multirew = statemodelcfg.use_multirew
         self.training_hyper = training_hyper
         
         self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
@@ -143,7 +132,7 @@ class World_Agent:
                 action = torch.randn(self.cfg.n_envs,3,device=state.device)
             next_obs,rewards,terminated,env_info = env.step(action)
             rewards = 10.*(1-rewards*0.1)
-            self.replaybuffer.append(state,action,rewards,terminated,None,perception)
+            self.replaybuffer.append(state,action,rewards,terminated,perception)
             
             if terminated.any():
                 for i in range(cfg.n_envs):

@@ -18,10 +18,8 @@ class StateModelCfg:
     action_dim: int
     latent_dim: int
     categoricals: int
-    obstacle_relpos_dim: int
     num_classes: int
     use_simnorm: bool=False
-    use_multirew: bool=False
 
 @dataclass
 class PercModelCfg:
@@ -157,16 +155,13 @@ class StateModel(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.use_simnorm = cfg.use_simnorm
-        self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         self.categoricals = cfg.categoricals
         self.kl_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
         self.mse_loss = MSELoss()
-        if not cfg.use_multirew:
-            self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
-        else:
-            self.symlogtwohotloss = SymLogTwoHotLossMulti(cfg.num_classes,-20,20,5)
+        self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
         self.endloss = nn.BCEWithLogitsLoss()
 
+        self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         self.image_encoder = ImageEncoder(in_channels=1, stem_channels=16, image_width=cfg.image_width)
         self.state_encoder = nn.Sequential(nn.Linear(cfg.state_dim,64,bias=False),
                                            nn.LayerNorm(64),nn.SiLU())
@@ -179,18 +174,21 @@ class StateModel(nn.Module):
             nn.SiLU(),
             nn.Linear(cfg.latent_dim,cfg.latent_dim)
         )
+        
         self.act_state_proj = nn.Sequential(
             nn.Linear(cfg.latent_dim+cfg.action_dim,cfg.hidden_dim),
             nn.LayerNorm(cfg.hidden_dim),
             nn.SiLU(),
             nn.Linear(cfg.hidden_dim,cfg.hidden_dim)
         )
+        
         self.state_decoder = nn.Sequential(
             nn.Linear(cfg.latent_dim+cfg.hidden_dim,cfg.latent_dim),
             nn.LayerNorm(cfg.latent_dim),
             nn.SiLU(),
             nn.Linear(cfg.latent_dim,cfg.state_dim)
         )
+        
         self.prior_proj = nn.Sequential(
             nn.Linear(cfg.hidden_dim,cfg.latent_dim),
             nn.LayerNorm(cfg.latent_dim),

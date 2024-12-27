@@ -24,7 +24,6 @@ class ReplayBuffer():
             self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_dim, cfg.perception_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.action_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs,cfg.action_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
-            self.reward_components_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 5), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
         else:
             raise ValueError("Only support gpu!!!")
@@ -52,8 +51,6 @@ class ReplayBuffer():
                     action.append(torch.stack([self.action_buffer[idx:idx+batch_length, i] for idx in indexes]))
                     reward.append(torch.stack([self.reward_buffer[idx:idx+batch_length, i] for idx in indexes]))
                     termination.append(torch.stack([self.termination_buffer[idx:idx+batch_length, i] for idx in indexes]))
-                    # reward_components = torch.stack([self.reward_components_buffer[idx:idx+batch_length, i] for idx in indexes])
-                    reward_components = None
                     if self.use_perception:
                         perception.append(torch.stack([self.perception_buffer[idx:idx+batch_length, i] for idx in indexes]))
 
@@ -66,16 +63,15 @@ class ReplayBuffer():
         else:
             raise ValueError("Only support gpu!!!")
 
-        return state, action, reward, termination, reward_components, perception
+        return state, action, reward, termination, perception
 
-    def append(self, state, action, reward, termination, reward_components=None, perception=None):
+    def append(self, state, action, reward, termination,perception=None):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length//self.num_envs)
         if self.store_on_gpu:
             self.state_buffer[self.last_pointer] = state
             self.action_buffer[self.last_pointer] = action
             self.reward_buffer[self.last_pointer] = reward
             self.termination_buffer[self.last_pointer] = termination
-            # self.reward_components_buffer[self.last_pointer] = reward_components
             if self.use_perception and perception is not None:
                 self.perception_buffer[self.last_pointer] = perception
         else:

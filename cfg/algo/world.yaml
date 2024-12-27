@@ -6,7 +6,7 @@ common:
   use_checkpoint: False
   use_symlog: True
   total_timesteps: 200_000_000
-  checkpoint_path: None
+  checkpoint_path:
 
 denoiser:
   denoiser:
@@ -94,10 +94,8 @@ state_predictor:
     action_dim: 3
     latent_dim: 1024
     categoricals: 32
-    obstacle_relpos_dim: 60 #num_obstacles*3
     num_classes: 255
     use_simnorm: False
-    use_multirew: False
 
   perception_model:
     _target_: algo.dreamerv3.models.state_predictor.PercModelCfg
@@ -116,7 +114,6 @@ state_predictor:
     total_steps: 500000
     batch_size: 64
     batch_length: 64
-    use_multirew: False
     worldmodel_update_freq: 1
 
   optimizer:
