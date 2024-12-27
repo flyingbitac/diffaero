@@ -263,10 +263,6 @@ class StateModel(nn.Module):
         b,l,d = states.shape
 
         hidden = torch.zeros(b,self.cfg.hidden_dim,device=states.device)
-        # post_samples,post_logits = self.sample_with_post(states,hidden)
-        # flattened_post_samples = self.flatten(post_samples)
-        # rec_states = self.decode(flattened_post_samples)
-        # rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
 
         post_logits = []
         prior_logits = []
