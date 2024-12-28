@@ -94,10 +94,15 @@ class World_Agent:
         training_hyper = getattr(world_agent_cfg,"state_predictor").training
         self.training_hyper = training_hyper
         
+        if cfg.env.name=='position_control':
+            statemodelcfg.only_state = True
+            buffercfg.use_perception = False
+        
         self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
         self.state_model = DepthStateModel(statemodelcfg).to(device)
-        self.replaybuffer = ReplayBuffer(buffercfg)
-        self.world_model_env = DepthStateEnv(self.state_model,self.replaybuffer,worldcfg)
+        if not world_agent_cfg.common.is_test:
+            self.replaybuffer = ReplayBuffer(buffercfg)
+            self.world_model_env = DepthStateEnv(self.state_model,self.replaybuffer,worldcfg)
         self.opt = configure_opt(self.state_model,**getattr(world_agent_cfg,'state_predictor').optimizer)
         
         if world_agent_cfg.common.checkpoint_path != None:
@@ -107,7 +112,10 @@ class World_Agent:
     
     @torch.no_grad()
     def act(self,obs,test=False):
-        state,perception = obs['state'],obs['perception'].unsqueeze(1)
+        if type(obs)!=torch.Tensor:
+            state,perception = obs['state'],obs['perception'].unsqueeze(1)
+        else:
+            state,perception = obs,None
         if self.world_agent_cfg.common.use_symlog:
             state = symlog(state)   
         latent = self.state_model.sample_with_post(state,perception,self.hidden)[0].flatten(1)
@@ -118,7 +126,10 @@ class World_Agent:
     def step(self,cfg,env,obs,on_step_cb=None):
         policy_info = {}
         with torch.no_grad():
-            state,perception = obs['state'],obs['perception'].unsqueeze(1)
+            if type(obs)!=torch.Tensor:
+                state,perception = obs['state'],obs['perception'].unsqueeze(1)
+            else:
+                state,perception = obs,None
             if self.world_agent_cfg.common.use_symlog:
                 state = symlog(state)
             if self.replaybuffer.ready() or self.world_agent_cfg.common.use_checkpoint:

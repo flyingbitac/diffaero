@@ -46,7 +46,10 @@ class DepthStateEnv:
         hidden = None
             
         for i in range(batch_length):
-            latent,_ = self.state_model.sample_with_post(states[:,i],perceptions[:,i],hidden)
+            if perceptions != None:
+                latent,_ = self.state_model.sample_with_post(states[:,i],perceptions[:,i],hidden)
+            else:
+                latent,_ = self.state_model.sample_with_post(states[:,i],None,hidden)
             latent = self.state_model.flatten(latent)
             latent,_,hidden=self.state_model.sample_with_prior(latent,actions[:,i],hidden)
 

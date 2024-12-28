@@ -20,6 +20,7 @@ class DepthStateModelCfg:
     categoricals: int
     num_classes: int
     use_simnorm: bool=False
+    only_state: bool=False
 
 @dataclass
 class Batch:
@@ -151,14 +152,22 @@ class DepthStateModel(nn.Module):
         self.endloss = nn.BCEWithLogitsLoss()
 
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
-        self.image_encoder = ImageEncoder(in_channels=1, stem_channels=16, image_width=cfg.image_width)
+        if not cfg.only_state:
+            self.image_encoder = ImageEncoder(in_channels=1, stem_channels=16, image_width=cfg.image_width)
+            self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
+                                            last_channels=self.image_encoder.last_channels,final_image_width=4)
         self.state_encoder = nn.Sequential(nn.Linear(cfg.state_dim,64,bias=False),
                                            nn.LayerNorm(64),nn.SiLU())
-        self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
-                                          last_channels=self.image_encoder.last_channels,final_image_width=4)
 
+        depth_flatten_dim = cfg.image_width*cfg.image_width*4
+        origin_width = cfg.image_width
+        if origin_width>4:
+            depth_flatten_dim//=2
+            origin_width//=2
+        if cfg.only_state:
+            depth_flatten_dim = 0
         self.inp_proj = nn.Sequential(
-            nn.Linear(64 + self.image_encoder.last_channels*4*4 + cfg.hidden_dim,cfg.latent_dim),
+            nn.Linear(64 + depth_flatten_dim + cfg.hidden_dim,cfg.latent_dim),
             nn.LayerNorm(cfg.latent_dim),
             nn.SiLU(),
             nn.Linear(cfg.latent_dim,cfg.latent_dim)
@@ -199,7 +208,10 @@ class DepthStateModel(nn.Module):
         if hidden==None:
             hidden = torch.zeros(latent.shape[0],self.cfg.hidden_dim,device=latent.device)
         feat = torch.cat([latent,hidden],dim=-1)
-        return self.state_decoder(feat),self.image_decoder(feat)
+        if self.cfg.only_state:
+            return self.state_decoder(feat),None
+        else:
+            return self.state_decoder(feat),self.image_decoder(feat)
     
     def sample_with_prior(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None):
         assert latent.ndim==act.ndim==2
@@ -219,12 +231,17 @@ class DepthStateModel(nn.Module):
     def flatten(self,categorical_sample:Tensor):
         return categorical_sample.view(*categorical_sample.shape[:-2],-1)
 
-    def sample_with_post(self,state:Tensor,depth_image:Tensor,hidden:Optional[Tensor]=None):
+    def sample_with_post(self,state:Tensor,depth_image:Tensor=None,hidden:Optional[Tensor]=None):
         if hidden==None:
             hidden = torch.zeros(state.shape[0],self.cfg.hidden_dim,device=state.device)
-        state_feat = self.state_encoder(state)
-        depth_feat = self.image_encoder(depth_image)
-        feat = torch.cat([state_feat,depth_feat],dim=-1)
+        
+        if depth_image!=None:
+            state_feat = self.state_encoder(state)
+            depth_feat = self.image_encoder(depth_image)
+            feat = torch.cat([state_feat,depth_feat],dim=-1)
+        else:
+            feat = self.state_encoder(state)
+        
         post_logits = self.inp_proj(torch.cat([feat,hidden],dim=-1))
         post_logits = post_logits.view(*post_logits.shape[:-1],self.categoricals,-1) # b l d -> b l c k
         if self.use_simnorm:
@@ -259,7 +276,10 @@ class DepthStateModel(nn.Module):
         rec_images = []
 
         for i in range(l):
-            post_sample,post_logit = self.sample_with_post(states[:,i],depth_images[:,i],hidden)
+            if depth_images!=None:
+                post_sample,post_logit = self.sample_with_post(states[:,i],depth_images[:,i],hidden)
+            else:
+                post_sample,post_logit = self.sample_with_post(states[:,i],None,hidden)
             flattend_post_sample = self.flatten(post_sample)
             rec_state,rec_image = self.decode(flattend_post_sample,hidden)
             action = actions[:,i]
@@ -276,7 +296,8 @@ class DepthStateModel(nn.Module):
             end_logits.append(end_logit)
 
         rec_states = torch.stack(rec_states,dim=1)
-        rec_images = torch.stack(rec_images,dim=1)
+        if rec_image!=None:
+            rec_images = torch.stack(rec_images,dim=1)
         post_logits = torch.stack(post_logits,dim=1)
         prior_logits = torch.stack(prior_logits,dim=1)
         reward_logits = torch.stack(reward_logits,dim=1)
@@ -286,7 +307,10 @@ class DepthStateModel(nn.Module):
         dyn_loss,_ = self.kl_loss(post_logits[:,1:].detach(),prior_logits[:,:-1])
         rew_loss = self.symlogtwohotloss(reward_logits,rewards)
         end_loss = self.endloss(end_logits,terminations)
-        rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()+self.mse_loss(rec_images,depth_images)
+        if depth_images!=None:
+            rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()+self.mse_loss(rec_images,depth_images)
+        else:
+            rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss
         return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss
 

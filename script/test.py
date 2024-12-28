@@ -131,6 +131,8 @@ def main(cfg: DictConfig):
     cfg.dynamics = ckpt_cfg.dynamics
     if cfg.algo.name != 'world':
         cfg.network = ckpt_cfg.network
+    else:
+        cfg.algo.common.is_test = True
     
     if cfg.seed != -1:
         random.seed(cfg.seed)

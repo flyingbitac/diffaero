@@ -6,7 +6,8 @@ common:
   use_checkpoint: False
   use_symlog: True
   total_timesteps: 200_000_000
-  checkpoint_path:
+  checkpoint_path: /home/zxh/ws/wrqws/quaddif/outputs/2024-12-27/22-18-41/checkpoints
+  is_test: False
   
 world_state_env:
   _target_: algo.dreamerv3.wmenv.DepthStateEnvConfig
@@ -25,7 +26,7 @@ replaybuffer:
   warmup_length: 5000
   store_on_gpu: True
   device: "cuda:1"
-  use_perception: False
+  use_perception: True
 
 state_predictor:
   state_model:
@@ -38,6 +39,7 @@ state_predictor:
     categoricals: 32
     num_classes: 255
     use_simnorm: False
+    only_state: False
 
   training:
     max_grad_norm: 100.0

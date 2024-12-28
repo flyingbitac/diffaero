@@ -33,7 +33,7 @@ class ReplayBuffer():
         self.last_pointer = -1
         self.max_length = cfg.max_length
         self.warmup_length = cfg.warmup_length
-        self.use_perception = True
+        self.use_perception = cfg.use_perception
 
     def ready(self):
         return self.length * self.num_envs > self.warmup_length and self.length > 64
@@ -60,6 +60,8 @@ class ReplayBuffer():
             termination = torch.cat(termination, dim=0)
             if self.use_perception:
                 perception = torch.cat(perception, dim=0)
+            else:
+                perception = None
         else:
             raise ValueError("Only support gpu!!!")
 
