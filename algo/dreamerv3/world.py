@@ -79,19 +79,19 @@ class World_Agent:
         world_agent_cfg = getattr(cfg,"algo")
         world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
         world_agent_cfg.replaybuffer.num_envs = cfg.n_envs
-        world_agent_cfg.replaybuffer.state_dim = 13
+        world_agent_cfg.replaybuffer.state_dim = 10
         world_agent_cfg.actor_critic.model.device = f"cuda:{device_idx}"
         world_agent_cfg.common.device = f"cuda:{device_idx}"
         self.cfg = cfg
         self.world_agent_cfg = world_agent_cfg
         
         statemodelcfg = getattr(world_agent_cfg,"state_predictor").state_model
-        statemodelcfg.state_dim = 13
+        statemodelcfg.state_dim = 10
         actorcriticcfg = getattr(world_agent_cfg,"actor_critic").model
         actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
         buffercfg = getattr(world_agent_cfg,"replaybuffer")
-        buffercfg.state_dim = 13
+        buffercfg.state_dim = 10
         worldcfg = getattr(world_agent_cfg,"world_state_env")
         training_hyper = getattr(world_agent_cfg,"state_predictor").training
         self.training_hyper = training_hyper

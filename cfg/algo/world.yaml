@@ -34,10 +34,10 @@ state_predictor:
     _target_: algo.dreamerv3.models.state_predictor.DepthStateModelCfg
     state_dim: 13 
     image_width: 16
-    hidden_dim: 512
+    hidden_dim: 256
     action_dim: 3
-    latent_dim: 1024
-    categoricals: 32
+    latent_dim: 256
+    categoricals: 16
     num_classes: 255
     use_simnorm: False
     only_state: False
@@ -57,9 +57,9 @@ state_predictor:
 actor_critic:
   model:
     __target__: algo.dreamerv3.models.agent.ActorCriticConfig
-    feat_dim: 1536 # hidden + latent
+    feat_dim: 512 # hidden + latent
     num_layers: 2
-    hidden_dim: 512
+    hidden_dim: 256
     action_dim: 3
     gamma: 0.985
     lambd: 0.95
