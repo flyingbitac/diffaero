@@ -118,7 +118,23 @@ def point_mass_quat(a: Tensor, orientation: Tensor) -> Tensor:
     quat_pitch_roll_xyz = quat_axis * torch.sin(0.5 * quat_angle).unsqueeze(-1)
     quat_pitch_roll_w = torch.cos(0.5 * quat_angle).unsqueeze(-1)
     quat_pitch_roll = T.standardize_quaternion(torch.cat([quat_pitch_roll_w, quat_pitch_roll_xyz], dim=-1))
-    yaw_2 = yaw.unsqueeze(-1) / 2
-    quat_yaw = torch.concat([torch.cos(yaw_2), torch.sin(yaw_2) * z], dim=-1) # T.matrix_to_quaternion(mat_yaw)
+    yaw_half = yaw.unsqueeze(-1) / 2
+    quat_yaw = torch.concat([torch.cos(yaw_half), torch.sin(yaw_half) * z], dim=-1) # T.matrix_to_quaternion(mat_yaw)
     quat_wxyz = T.quaternion_multiply(quat_yaw, quat_pitch_roll)
-    return quat_wxyz.roll(-1, dims=-1)
+    quat_xyzw = quat_wxyz.roll(-1, dims=-1)
+    
+    # ori = torch.stack([orientation[:, 0], orientation[:, 1], torch.zeros_like(orientation[:, 2])], dim=-1)
+    # print(F.normalize(quaternion_apply(quaternion_invert(quat_yaw), ori), dim=-1)[:, 0]) # 1
+    # assert torch.max(torch.abs(quaternion_apply(quat_wxyz, z) - up)) < 1e-6
+    # assert torch.max(torch.abs(quaternion_apply(quaternion_invert(quat_wxyz), up) - z)) < 1e-6
+    # assert torch.max(torch.abs(quaternion_apply(quat_pitch_roll, z) - new_up)) < 1e-6
+    
+    # mat = T.quaternion_to_matrix(quat_wxyz)
+    # print(((mat @ z.unsqueeze(-1)).squeeze(-1) - up).norm(dim=-1).max())
+    
+    # euler = quaternion_to_euler(quat_xyzw)
+    # mat_roll, mat_pitch, mat_yaw = axis_rotmat("X", euler[:, 0]), axis_rotmat("Y", euler[:, 1]), axis_rotmat("Z", euler[:, 2])
+    # mat_rot = mat_roll @ mat_pitch @ mat_yaw
+    # print((mat_rot @ z.unsqueeze(-1)).squeeze(-1) - up)
+    
+    return quat_xyzw

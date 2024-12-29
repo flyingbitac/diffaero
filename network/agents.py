@@ -1,4 +1,5 @@
 from typing import Tuple, Dict, Union, Optional, List
+from copy import deepcopy
 import os
 
 from omegaconf import DictConfig, OmegaConf
@@ -10,8 +11,9 @@ from tensordict import TensorDict
 from quaddif.network import build_network
 
 class AgentBase(nn.Module):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig, state_dim: Union[int, Tuple[int, Tuple[int, int]]]):
         super().__init__()
+        self.state_dim = state_dim
         self.is_rnn_based = cfg.name.lower() == "rnn" or cfg.name.lower() == "rcnn"
 
 class DeterministicActor(AgentBase):
@@ -21,10 +23,10 @@ class DeterministicActor(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.actor = build_network(cfg, state_dim, action_dim, output_act=nn.Tanh())
         
-    def forward(self, obs: Union[Tensor, TensorDict], hidden: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+    def forward(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], hidden: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         return self.actor(obs, hidden=hidden)
     
     def save(self, path: str):
@@ -47,12 +49,12 @@ class StochasticActor(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.actor_mean = build_network(cfg, state_dim, action_dim)
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
 
     def forward(self, obs, sample=None, test=False, hidden=None):
-        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Tensor, Tensor, Tensor]
         action_mean = self.actor_mean(obs, hidden=hidden)
         LOG_STD_MAX = 2
         LOG_STD_MIN = -5
@@ -93,10 +95,10 @@ class CriticV(AgentBase):
         cfg: DictConfig,
         state_dim: Union[int, Tuple[int, Tuple[int, int]]]
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.critic = build_network(cfg, state_dim, 1)
     
-    def forward(self, obs: Union[Tensor, TensorDict], hidden: Optional[Tensor] = None) -> Tensor:
+    def forward(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, hidden=hidden).squeeze(-1)
     
     def save(self, path: str):
@@ -119,14 +121,14 @@ class CriticQ(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         if not isinstance(state_dim, int):
             state_dim = (state_dim[0] + action_dim, state_dim[1])
         else:
             state_dim = state_dim + action_dim
         self.critic = build_network(cfg, state_dim, 1)
     
-    def forward(self, obs: Union[Tensor, TensorDict], action: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
+    def forward(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], action: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, action, hidden=hidden).squeeze(-1)
     
     def save(self, path: str):
@@ -149,19 +151,19 @@ class StochasticActorCriticV(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.critic = CriticV(cfg, state_dim)
         self.actor = StochasticActor(cfg, state_dim, action_dim)
 
-    def get_value(self, obs: Union[Tensor, TensorDict], hidden: Optional[Tensor] = None) -> Tensor:
+    def get_value(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, hidden=hidden)
 
     def get_action(self, obs, sample=None, test=False, hidden=None):
-        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Tensor, Tensor, Tensor]
         return self.actor(obs, sample, test, hidden=hidden)
 
     def get_action_and_value(self, obs, sample=None, test=False):
-        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
         return *self.get_action(obs, sample=sample, test=test), self.get_value(obs)
     
     def save(self, path: str):
@@ -188,19 +190,19 @@ class StochasticActorCriticQ(AgentBase):
         state_dim: Union[int, Tuple[int, Tuple[int, int]]],
         action_dim: int
     ):
-        super().__init__(cfg)
+        super().__init__(cfg, state_dim)
         self.critic = CriticQ(cfg, state_dim, action_dim)
         self.actor = StochasticActor(cfg, state_dim, action_dim)
 
-    def get_value(self, obs: Union[Tensor, TensorDict], action: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
+    def get_value(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], action: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, action, hidden=hidden)
 
     def get_action(self, obs, sample=None, test=False, hidden=None):
-        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Tensor, Tensor, Tensor]
         return self.actor(obs, sample, test, hidden=hidden)
 
     def get_action_and_value(self, obs, sample=None, test=False):
-        # type: (Union[Tensor, TensorDict], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
         action, sample, logprob, entropy = self.get_action(obs, sample=sample, test=test)
         value = self.get_value(obs, action)
         return action, sample, logprob, entropy, value
@@ -249,21 +251,18 @@ class RPLActorCritic(StochasticActorCriticV):
         self.anchor_state_dim = anchor_state_dim
         self.rpl_action = rpl_action
     
-    def rpl_obs(self, obs: TensorDict, hidden: Optional[Tensor] = None) -> Tuple[TensorDict, Tensor]:
+    def rpl_obs(self, obs: Tuple[Tensor, Tensor], hidden: Optional[Tensor] = None) -> Tuple[Tuple[Tensor, Tensor], Tensor]:
         with torch.no_grad():
             anchor_action, _, _, _ = self.anchor_agent.get_action(
                 obs["state"], test=True, hidden=hidden)
-        rpl_obs = TensorDict({
-            "state": torch.cat([obs["state"], anchor_action], dim=-1),
-            "perception": obs["perception"]
-        }, batch_size=obs.batch_size)
+        rpl_obs = (torch.cat([obs[0], anchor_action], dim=-1), obs[1])
         return rpl_obs, anchor_action
 
-    def get_value(self, obs: TensorDict, hidden: Optional[Tensor] = None) -> Tensor:
+    def get_value(self, obs: Tuple[Tensor, Tensor], hidden: Optional[Tensor] = None) -> Tensor:
         return super().get_value(self.rpl_obs(obs)[0], hidden=hidden)
 
     def get_action_and_value(self, obs, sample=None, test=False):
-        # type: (TensorDict, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        # type: (Tuple[Tensor, Tensor], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
         rpl_obs, anchor_action = self.rpl_obs(obs)
         action, sample, logprob, entropy = super().get_action(rpl_obs, sample, test)
         if self.rpl_action:
@@ -292,3 +291,59 @@ class RPLActorCritic(StochasticActorCriticV):
         self.actor.detach()
         self.critic.detach()
         self.anchor_agent.detach()
+
+def tensordict2tuple(state: Union[Tensor, TensorDict]):
+    if isinstance(state, TensorDict):
+        return (state["state"], state["perception"])
+    else:
+        return state
+
+from quaddif.dynamics.pointmass import point_mass_quat
+
+class PolicyExporter(nn.Module):
+    def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
+        super().__init__()
+        self.is_stochastic = isinstance(actor, StochasticActor)
+        self.is_rnn_based = actor.is_rnn_based
+        self.actor = deepcopy(actor.actor_mean if self.is_stochastic else actor.actor).cpu()
+        
+        if self.is_rnn_based:
+            self.register_buffer("hidden_state", torch.zeros(self.actor.n_layers, 1, self.actor.rnn_hidden_dim))
+            self.hidden_state: Tensor = self.get_buffer("hidden_state")
+    
+    @torch.no_grad()
+    def forward(self, x):
+        # type: (Tensor) -> Tensor
+        if self.is_rnn_based:
+            action, hidden = self.actor.forward_pure(x.unsqueeze(0), hidden=self.hidden_state)
+            self.hidden_state[:] = hidden
+        else:
+            action = self.actor(x.unsqueeze(0))
+        action = action.tanh() if self.is_stochastic else action
+        return action
+    
+    @torch.jit.export
+    def post_process(self, acc, orientation):
+        # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor]
+        quat_xyzw = point_mass_quat(acc, orientation)
+        acc_norm = acc.norm(p=2, dim=-1)
+        return quat_xyzw, acc_norm
+    
+    @torch.jit.export
+    def reset(self):
+        if self.is_rnn_based:
+            self.hidden_state.zero_()
+    
+    @torch.jit.export
+    def rescale(self, raw_action, min_action, max_action):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
+        return (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
+    
+    def export(self, path: str, verbose=False):
+        traced_script_module = torch.jit.script(self)
+        if verbose:
+            print(traced_script_module.code)
+            print(traced_script_module.post_process.code)
+            print(traced_script_module.reset.code)
+            print(traced_script_module.rescale.code)
+        traced_script_module.save(path)

@@ -134,6 +134,7 @@ class ObstacleAvoidance(BaseEnv):
     
     def loss_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
+        virtual_radius = 0.2
         # calculating the closest point on each sphere to the quadrotor
         sphere_relpos = self.obstacle_manager.p_spheres - self.p.unsqueeze(1) # [n_envs, n_spheres, 3]
         dist2surface_sphere = (sphere_relpos.norm(dim=-1) - self.obstacle_manager.r_spheres).clamp(min=0) # [n_envs, n_spheres]
@@ -144,6 +145,7 @@ class ObstacleAvoidance(BaseEnv):
         # concatenate the relative direction and distance to the surface of both type of obstacles
         obstacle_reldirection = F.normalize(torch.cat([sphere_relpos, cube_relpos], dim=1), dim=-1) # [n_envs, n_obstacles, 3]
         dist2surface = torch.cat([dist2surface_sphere, dist2surface_cube], dim=1) # [n_envs, n_obstacles]
+        dist2surface = (dist2surface - self.r_drone - virtual_radius).clamp(min=0)
         # calculate the obstacle avoidance loss
         approaching_vel = torch.sum(obstacle_reldirection * self._v.unsqueeze(1), dim=-1) # [n_envs, n_obstacles]
         approaching = approaching_vel > 0
@@ -151,7 +153,7 @@ class ObstacleAvoidance(BaseEnv):
         approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dist2surface.neg().exp()).max(dim=-1) # [n_envs]
         avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dist2surface.neg().exp() # [n_envs, n_obstacles]
         avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
-        oa_loss = 1.5 * approaching_penalty - 0.5 * avoiding_reward
+        oa_loss = approaching_penalty - 0.5 * avoiding_reward
         
         collision_loss = self.collision().float() * 100.
         
@@ -163,7 +165,7 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 3 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = vel_loss + 4 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),

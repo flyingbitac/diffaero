@@ -8,8 +8,13 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.network.agents import StochasticActorCriticV, RPLActorCritic, StochasticActorCriticQ
 from quaddif.algo.buffer import RolloutBufferSHAC, RolloutBufferSHACQ, RNNStateBuffer
+from quaddif.network.agents import (
+    tensordict2tuple,
+    StochasticActorCriticV,
+    RPLActorCritic,
+    StochasticActorCriticQ,
+    PolicyExporter)
 
 class SHAC:
     def __init__(
@@ -52,7 +57,7 @@ class SHAC:
         # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
-        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
+        action, sample, logprob, entropy, value = self.agent.get_action_and_value(tensordict2tuple(state), test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
     def value_target(self, state):
@@ -106,7 +111,7 @@ class SHAC:
         self.cumulated_loss = self.cumulated_loss + self.rollout_gamma * loss
         cumulated_loss = self.cumulated_loss[reset].sum()
         # add terminal value if rollout ends or truncated
-        next_value = self.value_target(env_info["next_state_before_reset"])
+        next_value = self.value_target(tensordict2tuple(env_info["next_state_before_reset"]))
         terminal_value = (self.rollout_gamma * self.discount * next_value)[truncated].sum()
         assert terminal_value.requires_grad == True
         # add up the discounted cumulated loss, the terminal value and the entropy loss
@@ -146,9 +151,10 @@ class SHAC:
             end = start + mb_size
             mb_indices = batch_indices[start:end]
             if self.agent.is_rnn_based:
-                values = self.agent.get_value(states[mb_indices], critic_hidden_state[mb_indices].permute(1, 0, 2))
+                values = self.agent.get_value(tensordict2tuple(states[mb_indices]),
+                                              critic_hidden_state[mb_indices].permute(1, 0, 2))
             else:
-                values = self.agent.get_value(states[mb_indices])
+                values = self.agent.get_value(tensordict2tuple(states[mb_indices]))
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()
@@ -213,6 +219,9 @@ class SHAC:
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
+    
+    def export(self, path: str, verbose: bool = False):
+        PolicyExporter(self.agent.actor).export(path, verbose=verbose)
 
 
 class SHAC_RPL(SHAC):
@@ -295,18 +304,18 @@ class SHAC_Q:
         # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
-        action, sample, logprob, entropy, value = self.agent.get_action_and_value(state, test=test)
+        action, sample, logprob, entropy, value = self.agent.get_action_and_value(tensordict2tuple(state), test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
     
     def value_target(self, state, action):
         # type: (Union[Tensor, TensorDict], Tensor) -> Tensor
-        return self.agent_target.get_value(state, action)
+        return self.agent_target.get_value(tensordict2tuple(state), action)
 
     def record_loss(self, loss, policy_info, env_info, terminated):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor], Tensor) -> Tensor
         self.one_step_loss = self.one_step_loss + loss
         next_state = env_info["next_state_before_reset"].detach()
-        next_values = self.agent.get_action_and_value(next_state)[-1] * (1. - terminated.float())
+        next_values = self.agent.get_action_and_value(tensordict2tuple(next_state))[-1] * (1. - terminated.float())
         self.next_values = self.next_values + next_values
         self.entropy_loss = self.entropy_loss - policy_info["entropy"]
 
@@ -341,7 +350,7 @@ class SHAC_Q:
         if self.agent.is_rnn_based:
             critic_hidden_state = self.rnn_state_buffer.critic_rnn_state.flatten(0, 1)
         with torch.no_grad():
-            next_values = self.agent_target.get_action_and_value(next_states)[-1]
+            next_values = self.agent_target.get_action_and_value(tensordict2tuple(next_states))[-1]
             target_values = rewards + (1 - terminated) * self.discount * next_values
         
         for start in range(0, T*N, mb_size):
@@ -349,11 +358,13 @@ class SHAC_Q:
             mb_indices = batch_indices[start:end]
             if self.agent.is_rnn_based:
                 values = self.agent.get_value(
-                    states[mb_indices],
+                    tensordict2tuple(states[mb_indices]),
                     actions[mb_indices],
                     critic_hidden_state[mb_indices].permute(1, 0, 2))
             else:
-                values = self.agent.get_value(states[mb_indices], actions[mb_indices])
+                values = self.agent.get_value(
+                    tensordict2tuple(states[mb_indices]),
+                    actions[mb_indices])
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()
@@ -417,3 +428,6 @@ class SHAC_Q:
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
+    
+    def export(self, path: str, verbose: bool = False):
+        PolicyExporter(self.agent.actor).export(path, verbose=verbose)

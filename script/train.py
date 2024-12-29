@@ -71,7 +71,7 @@ def learn(
         if (i+1) % 10 == 0:
             logger.log_scalars(log_info, i+1)
         
-        if success_rate > max_success_rate:
+        if success_rate >= max_success_rate:
             max_success_rate = success_rate
             agent.save(os.path.join(logger.logdir, "best"))
 
@@ -110,6 +110,10 @@ def main(cfg: DictConfig):
         ckpt_path = os.path.join(logger.logdir, "checkpoints")
         agent.save(ckpt_path)
         print(f"The checkpoint is saved to {ckpt_path}.")
+        if cfg.export:
+            export_path = os.path.join(ckpt_path, "exported_actor.pt2")
+            agent.export(export_path, verbose=False)
+            print(f"The checkpoint is jitted and exported to {export_path}.")
     
     if env.renderer is not None:
         env.renderer.close()

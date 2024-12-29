@@ -4,8 +4,13 @@ import os
 from omegaconf import DictConfig
 import torch
 from torch import Tensor
+from tensordict import TensorDict
 
-from quaddif.network.agents import DeterministicActor, StochasticActor
+from quaddif.network.agents import (
+    tensordict2tuple,
+    DeterministicActor,
+    StochasticActor,
+    PolicyExporter)
 
 class APG:
     def __init__(
@@ -24,8 +29,8 @@ class APG:
         self.device = device
     
     def act(self, state, test=False):
-        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
-        return self.actor(state), {}
+        # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        return self.actor(tensordict2tuple(state)), {}
     
     def record_loss(self, loss, policy_info, env_info):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor]) -> None
@@ -85,6 +90,9 @@ class APG:
             action_dim=env.action_dim,
             l_rollout=cfg.l_rollout,
             device=device)
+    
+    def export(self, path: str, verbose: bool = False):
+        PolicyExporter(self.actor).export(path, verbose=verbose)
 
 
 class APG_stochastic(APG):
@@ -105,7 +113,7 @@ class APG_stochastic(APG):
 
     def act(self, state, test=False):
         # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
-        action, sample, logprob, entropy = self.actor(state, test=test)
+        action, sample, logprob, entropy = self.actor(tensordict2tuple(state), test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy}
     
     def record_loss(self, loss, policy_info, env_info):

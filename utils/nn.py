@@ -31,22 +31,26 @@ def zero_(params):
     for p in params:
         p.data.fill_(0)
 
-class NormedLinear(nn.Linear):
+class NormedLinear(nn.Module):
     """
     Linear layer with LayerNorm, activation.
     """
-    def __init__(self, *args, act=nn.Mish(inplace=True), **kwargs):
-        super().__init__(*args, **kwargs)
-        self.ln = nn.LayerNorm(self.out_features)
+    def __init__(self, in_features, out_features, act=nn.Mish(inplace=True)):
+        super().__init__()
+        self.linear = nn.Linear(in_features, out_features)
+        self.ln = nn.LayerNorm(self.linear.out_features)
         self.act = act
     def forward(self, x):
-        x = super().forward(x)
+        x = self.linear(x)
         return self.act(self.ln(x))
     def __repr__(self):
-        return f"NormedLinear(in_features={self.in_features}, "\
-            f"out_features={self.out_features}, "\
-            f"bias={self.bias is not None}, "\
+        return f"NormedLinear(in_features={self.linear.in_features}, "\
+            f"out_features={self.linear.out_features}, "\
+            f"bias={self.linear.bias is not None}, "\
             f"act={self.act.__class__.__name__})"
+    def apply(self, fn):
+        self.linear.apply(fn)
+        return self
 
 def mlp(
     in_dim: int,
@@ -63,7 +67,7 @@ def mlp(
     dims = [in_dim] + mlp_dims + [out_dim]
     mlp = nn.ModuleList()
     for i in range(len(dims) - 2):
-        mlp.append(layer_init(NormedLinear(dims[i], dims[i+1], act=hidden_act)))
+        mlp.append(NormedLinear(dims[i], dims[i+1], act=hidden_act).apply(layer_init))
     mlp.append(layer_init(nn.Linear(dims[-2], dims[-1]), std=0.01))
     if output_act is not None:
         mlp.append(output_act)
