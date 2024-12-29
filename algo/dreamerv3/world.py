@@ -1,16 +1,18 @@
 import os
 from copy import deepcopy
+import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel
+from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel,onehotsample
 from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
 from quaddif.algo.dreamerv3.models.blocks import symlog
 from quaddif.algo.dreamerv3.wmenv.world_state_env import DepthStateEnv
 from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
 from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
-
+from quaddif.dynamics.pointmass import point_mass_quat
 
 @torch.no_grad()
 def collect_imagine_trj(env:DepthStateEnv,agent:ActorCriticAgent,cfg):
@@ -118,9 +120,9 @@ class World_Agent:
             state,perception = obs,None
         if self.world_agent_cfg.common.use_symlog:
             state = symlog(state)   
-        latent = self.state_model.sample_with_post(state,perception,self.hidden)[0].flatten(1)
+        latent = self.state_model.sample_with_post(state,perception,self.hidden,True)[0].flatten(1)
         action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1),test)[0]
-        self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
+        self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden,True)[2]
         return action,None
 
     def step(self,cfg,env,obs,on_step_cb=None):
@@ -170,3 +172,67 @@ class World_Agent:
     @staticmethod
     def build(cfg,env,device):
         return World_Agent(cfg,env,device)
+
+class WorldExporter(nn.Module):
+    def __init__(self,agent:World_Agent):
+        super().__init__()
+        self.state_encoder = deepcopy(agent.state_model.state_encoder)
+        self.inp_proj = deepcopy(agent.state_model.inp_proj)
+        self.seq_model = deepcopy(agent.state_model.seq_model)
+        self.act_state_proj = deepcopy(agent.state_model.act_state_proj)
+        self.actor = deepcopy(agent.agent.actor_mean)
+        
+        self.register_buffer("hidden_state",torch.zeros(1,agent.state_model.cfg.hidden_dim))
+        self.hidden_state = self.get_buffer("hidden_state")
+    
+    def sample_for_deploy(self,logits):
+        probs = F.softmax(logits,dim=-1)
+        return onehotsample(probs)
+    
+    def sample_with_post(self,state):
+        feat = self.state_encoder(state)
+        
+        post_logits = self.inp_proj(torch.cat([feat,self.hidden_state],dim=-1))
+        b,d = post_logits.shape
+        post_logits = post_logits.reshape(b,int(math.sqrt(d)),-1) # b l d -> b l c k
+        
+        post_sample = self.sample_for_deploy(post_logits)
+        return post_sample
+    
+    def sample_with_prior(self,latent,act):
+        assert latent.ndim==act.ndim==2
+        state_act = self.act_state_proj(torch.cat([latent,act],dim=-1))
+        self.hidden_state = self.seq_model(state_act,self.hidden_state)
+
+    def forward(self,state):
+        with torch.no_grad():
+            state = torch.sign(state) * torch.log(1 + torch.abs(state))
+            latent = self.sample_with_post(state).flatten(1)
+            action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            action = torch.tanh(action)
+            self.sample_with_prior(latent,action)
+        return action
+    
+    @torch.jit.export
+    def post_process(self,acc,orientation):
+        quat_xyzw = point_mass_quat(acc, orientation)
+        acc_norm = acc.norm(p=2, dim=-1)
+        return quat_xyzw, acc_norm
+    
+    @torch.jit.export
+    def reset(self):
+        self.hidden_state.zero_()
+    
+    @torch.jit.export
+    def rescale(self,raw_action,min_action,max_action):
+        return (raw_action*0.5+0.5)*(max_action-min_action)+min_action
+    
+    def export(self,path:str,verbose=False):
+        traced_script_module = torch.jit.script(self)
+        if verbose:
+            print(traced_script_module.code)
+            print(traced_script_module.post_process.code)
+            print(traced_script_module.reset.code)
+            print(traced_script_module.rescale.code)
+        save_path = os.path.join(path,"exportckpt.pt")
+        traced_script_module.save(save_path)

@@ -80,6 +80,21 @@ class ImageDecoder(nn.Module):
         feat = self.backbone(feat)
         return feat
 
+def onehotsample(probs:torch.Tensor):
+    B,K,C = probs.shape
+    
+    flatten_probs = probs.view(-1,C)
+    
+    sample_indices = torch.multinomial(flatten_probs,1).squeeze()
+    
+    one_hot_samples = torch.zeros(B*K,C,device=probs.device)
+    
+    one_hot_samples.scatter_(1,sample_indices.unsqueeze(1),1)
+    
+    one_hot_samples = one_hot_samples.view(B,K,C)
+    
+    return one_hot_samples
+
 class CategoricalKLDivLossWithFreeBits(nn.Module):
     def __init__(self, free_bits) -> None:
         super().__init__()
@@ -203,6 +218,10 @@ class DepthStateModel(nn.Module):
         sample = dist.sample()
         sample_with_gradient = sample + probs - probs.detach()
         return sample_with_gradient
+    
+    def sample_for_deploy(self,logits:Tensor):
+        probs = F.softmax(logits,dim=-1)
+        return onehotsample(probs)
 
     def decode(self,latent:Tensor,hidden:Optional[Tensor]=None):
         if hidden==None:
@@ -213,7 +232,7 @@ class DepthStateModel(nn.Module):
         else:
             return self.state_decoder(feat),self.image_decoder(feat)
     
-    def sample_with_prior(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None):
+    def sample_with_prior(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None,is_for_deploy:bool=False):
         assert latent.ndim==act.ndim==2
         state_act = self.act_state_proj(torch.cat([latent,act],dim=-1))
         if hidden==None:
@@ -221,6 +240,11 @@ class DepthStateModel(nn.Module):
         hidden = self.seq_model(state_act,hidden)
         prior_logits = self.prior_proj(hidden)
         prior_logits = prior_logits.view(*prior_logits.shape[:-1],self.categoricals,-1)
+        
+        if is_for_deploy:
+            prior_sample = self.sample_for_deploy(prior_logits)
+            return prior_sample,prior_logits,hidden
+
         if self.use_simnorm:
             prior_probs = prior_logits.softmax(dim=-1)
             return prior_probs,prior_logits,hidden
@@ -231,7 +255,7 @@ class DepthStateModel(nn.Module):
     def flatten(self,categorical_sample:Tensor):
         return categorical_sample.view(*categorical_sample.shape[:-2],-1)
 
-    def sample_with_post(self,state:Tensor,depth_image:Tensor=None,hidden:Optional[Tensor]=None):
+    def sample_with_post(self,state:Tensor,depth_image:Tensor=None,hidden:Optional[Tensor]=None,is_for_deploy:bool=False):
         if hidden==None:
             hidden = torch.zeros(state.shape[0],self.cfg.hidden_dim,device=state.device)
         
@@ -244,6 +268,11 @@ class DepthStateModel(nn.Module):
         
         post_logits = self.inp_proj(torch.cat([feat,hidden],dim=-1))
         post_logits = post_logits.view(*post_logits.shape[:-1],self.categoricals,-1) # b l d -> b l c k
+        
+        if is_for_deploy:
+            post_sample = self.sample_for_deploy(post_logits)
+            return post_sample,post_logits
+        
         if self.use_simnorm:
             post_probs = post_logits.softmax(dim=-1)
             return post_probs,post_logits

@@ -18,6 +18,7 @@ from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
 from quaddif.utils.logger import RecordEpisodeStatistics, Logger
 from quaddif.utils.device import idle_device
+from quaddif.algo.dreamerv3.world import WorldExporter
 
 def display_image(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
@@ -147,8 +148,16 @@ def main(cfg: DictConfig):
     agent = agent_class.build(cfg, env, device)
     agent.load(cfg.checkpoint)
     
+    
     logger = Logger(cfg, run_name=cfg.runname)
     # test(cfg, agent, env, logger, on_step_cb=display_image)
+    
+    export_path = os.path.join(logger.logdir,"exportckpt")
+    if not os.path.exists(export_path):
+        os.makedirs(export_path)
+    exporter = WorldExporter(agent)
+    exporter.export(export_path)
+    
     test(cfg, agent, env, logger)
     
     if env.renderer is not None:

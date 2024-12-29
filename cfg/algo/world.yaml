@@ -6,7 +6,8 @@ common:
   use_checkpoint: False
   use_symlog: True
   total_timesteps: 200_000_000
-  checkpoint_path: /home/zxh/ws/wrqws/quaddif/outputs/2024-12-27/22-18-41/checkpoints
+  # checkpoint_path: /home/zxh/ws/wrqws/quaddif/outputs/2024-12-27/22-18-41/checkpoints
+  checkpoint_path:
   is_test: False
   
 world_state_env:
