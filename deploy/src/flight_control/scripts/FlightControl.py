@@ -1,6 +1,5 @@
 #! /home/zxh/miniconda3/envs/ros1/bin/python 
 # coding:utf-8
-from typing import Optional, overload
 
 import rospy
 from nav_msgs.msg import Odometry

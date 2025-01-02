@@ -38,15 +38,27 @@ class AccelControlNode(FlightControlNode):
             if not (self.set_mode("OFFBOARD") and self.arm()):
                 rospy.logfatal("Failed to switch to OFFBOARD mode and arm the vehicle.")
                 exit(1)
+        
+        t = self.offboard_setpoint_counter / self.freq
         # self.target = Point(
-        #     x=5 * math.sin(0.6 * self.offboard_setpoint_counter / self.freq),
-        #     y=5 * math.cos(0.6 * self.offboard_setpoint_counter / self.freq),
+        #     x=2 * math.sin(1.4 * t),
+        #     y=2 * math.cos(1.4 * t),
         #     z=10)
-        if self.offboard_setpoint_counter <= 20*self.freq:
+        L = 7
+        if (int(t) - 20) % 20 <= 5:
+            self.target = Point(-L, L, 10)
+        elif (int(t) - 20) % 20 <= 10:
+            self.target = Point(L, L, 10)
+        elif (int(t) - 20) % 20 <= 15:
+            self.target = Point(L, -L, 10)
+        elif (int(t) - 20) % 20 <= 20:
+            self.target = Point(-L, -L, 10)
+        
+        if t < 20:
             self.set_pos(self.home)
-        elif self.offboard_setpoint_counter <= 60*self.freq:
+        elif t < 60:
             self.set_pose(quat=self.pose_cmd, thrust=self.thrust_cmd)
-        elif self.offboard_setpoint_counter <= 70*self.freq:
+        elif t < 70:
             self.set_pos(self.home)
         else:
             self.terminated = True
@@ -152,9 +164,9 @@ class Logger:
 
 hover_thrust = 0.707 # XXX replace this with actual hover thrust
 thrust_factor = hover_thrust / 9.81
-max_acc = 6. # XXX
+max_acc = 15. # XXX
 control_freq = 50 # Hz
-path = "/home/zxh/ws/quaddif/outputs/2024-12-25/14-15-56"
+path = "/home/zxh/ws/quaddif/outputs/2024-12-27/13-24-11"
 
 checkpoint_path = os.path.join(path, "checkpoints", "exported_actor.pt2")
 cfg_path = os.path.join(path, ".hydra", "config.yaml")
@@ -182,7 +194,7 @@ def main_export():
     vel_ema = torch.zeros(1, 3)
     while not rospy.is_shutdown():
         target_vel, quat_xyzw, vel, acc = node.get_state()
-        vel_ema.lerp_(vel.unsqueeze(0), 0.1)
+        vel_ema.lerp_(vel.unsqueeze(0), 0.2)
         state = torch.cat([target_vel, quat_xyzw, vel], dim=-1)
         raw_action: torch.Tensor = actor(state)
         action = actor.rescale(raw_action, min_action, max_action)
