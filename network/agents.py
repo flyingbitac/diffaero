@@ -8,7 +8,7 @@ from torch import Tensor
 import torch.nn as nn
 from tensordict import TensorDict
 
-from quaddif.network import build_network
+from quaddif.network import build_network, MLP, CNN, RNN, RCNN
 
 class AgentBase(nn.Module):
     def __init__(self, cfg: DictConfig, state_dim: Union[int, Tuple[int, Tuple[int, int]]]):
@@ -144,7 +144,7 @@ class CriticQ(AgentBase):
         self.critic.detach()
         
 
-class StochasticActorCriticV(AgentBase):
+class StochasticActorCriticV:
     def __init__(
         self,
         cfg: DictConfig,
@@ -183,7 +183,7 @@ class StochasticActorCriticV(AgentBase):
         self.critic.detach()
 
 
-class StochasticActorCriticQ(AgentBase):
+class StochasticActorCriticQ:
     def __init__(
         self,
         cfg: DictConfig,
@@ -300,27 +300,19 @@ def tensordict2tuple(state: Union[Tensor, TensorDict]):
 
 from quaddif.dynamics.pointmass import point_mass_quat
 
-class PolicyExporter(nn.Module):
+class PolicyExporterBase(nn.Module):
     def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
         super().__init__()
         self.is_stochastic = isinstance(actor, StochasticActor)
         self.is_rnn_based = actor.is_rnn_based
-        self.actor = deepcopy(actor.actor_mean if self.is_stochastic else actor.actor).cpu()
-        
+        actor_net = actor.actor_mean if self.is_stochastic else actor.actor
         if self.is_rnn_based:
-            self.register_buffer("hidden_state", torch.zeros(self.actor.n_layers, 1, self.actor.rnn_hidden_dim))
-            self.hidden_state: Tensor = self.get_buffer("hidden_state")
-    
-    @torch.no_grad()
-    def forward(self, x):
-        # type: (Tensor) -> Tensor
-        if self.is_rnn_based:
-            action, hidden = self.actor.forward_pure(x.unsqueeze(0), hidden=self.hidden_state)
-            self.hidden_state[:] = hidden
-        else:
-            action = self.actor(x.unsqueeze(0))
-        action = action.tanh() if self.is_stochastic else action
-        return action
+            actor_net.hidden_state = torch.empty(0)
+        self.actor = deepcopy(actor_net).cpu()
+        self.register_buffer(
+            "hidden_state",
+            torch.zeros(self.actor.n_layers, 1, self.actor.rnn_hidden_dim) if self.is_rnn_based else torch.empty(0))
+        self.hidden_state: Tensor = self.get_buffer("hidden_state")
     
     @torch.jit.export
     def post_process(self, acc, orientation):
@@ -331,8 +323,7 @@ class PolicyExporter(nn.Module):
     
     @torch.jit.export
     def reset(self):
-        if self.is_rnn_based:
-            self.hidden_state.zero_()
+        self.hidden_state.zero_()
     
     @torch.jit.export
     def rescale(self, raw_action, min_action, max_action):
@@ -347,3 +338,32 @@ class PolicyExporter(nn.Module):
             print(traced_script_module.reset.code)
             print(traced_script_module.rescale.code)
         traced_script_module.save(path)
+
+
+# Extreamely ugly impletation of policy exportation
+class PCPolicyExporter(PolicyExporterBase):
+    def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
+        super().__init__(actor)
+    
+    @torch.no_grad()
+    def forward(self, x):
+        # type: (Tensor) -> Tensor
+        action, hidden = self.actor.forward_export(x, hidden=self.hidden_state)
+        if self.is_rnn_based:
+            self.hidden_state[:] = hidden
+        action = action.tanh() if self.is_stochastic else action
+        return action
+
+
+class OAPolicyExporter(PolicyExporterBase):
+    def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
+        super().__init__(actor)
+    
+    @torch.no_grad()
+    def forward(self, x):
+        # type: (Tuple[Tensor, Tensor]) -> Tensor
+        action, hidden = self.actor.forward_export(x, hidden=self.hidden_state)
+        if self.is_rnn_based:
+            self.hidden_state[:] = hidden
+        action = action.tanh() if self.is_stochastic else action
+        return action

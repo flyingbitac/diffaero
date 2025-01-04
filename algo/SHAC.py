@@ -13,8 +13,7 @@ from quaddif.network.agents import (
     tensordict2tuple,
     StochasticActorCriticV,
     RPLActorCritic,
-    StochasticActorCriticQ,
-    PolicyExporter)
+    StochasticActorCriticQ)
 
 class SHAC:
     def __init__(
@@ -220,8 +219,9 @@ class SHAC:
             l_rollout=cfg.l_rollout,
             device=device)
     
-    def export(self, path: str, verbose: bool = False):
-        PolicyExporter(self.agent.actor).export(path, verbose=verbose)
+    @property
+    def policy_net(self):
+        return self.agent.actor
 
 
 class SHAC_RPL(SHAC):
@@ -429,5 +429,6 @@ class SHAC_Q:
             l_rollout=cfg.l_rollout,
             device=device)
     
-    def export(self, path: str, verbose: bool = False):
-        PolicyExporter(self.agent.actor).export(path, verbose=verbose)
+    @property
+    def policy_net(self):
+        return self.agent.actor

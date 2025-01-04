@@ -15,6 +15,7 @@ import cv2
 
 from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
+from quaddif.network.agents import PCPolicyExporter, OAPolicyExporter
 from quaddif.utils.device import idle_device
 from quaddif.utils.logger import RecordEpisodeStatistics, Logger
 
@@ -112,7 +113,10 @@ def main(cfg: DictConfig):
         print(f"The checkpoint is saved to {ckpt_path}.")
         if cfg.export:
             export_path = os.path.join(ckpt_path, "exported_actor.pt2")
-            agent.export(export_path, verbose=False)
+            if cfg.env.name == "position_control":
+                PCPolicyExporter(agent.policy_net).export(path=export_path, verbose=False)
+            elif cfg.env.name == "obstacle_avoidance":
+                OAPolicyExporter(agent.policy_net).export(path=export_path, verbose=False)
             print(f"The checkpoint is jitted and exported to {export_path}.")
     
     if env.renderer is not None:
