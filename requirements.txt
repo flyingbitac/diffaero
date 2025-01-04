@@ -5,6 +5,8 @@ hydra-core
 welford_torch
 line_profiler
 tensorboard==2.12.0
+tensorboardX
+wandb
 gpustat
 opencv-python
 pytorch3d

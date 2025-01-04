@@ -14,6 +14,8 @@ setup(
         'line_profiler',
         'tqdm',
         'tensorboard==2.12.0',
+        'tensorboardX',
+        'wandb',
         'opencv-python',
         'isaacgym',
         'welford_torch',
