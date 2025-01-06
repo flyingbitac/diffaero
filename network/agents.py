@@ -144,7 +144,7 @@ class CriticQ(AgentBase):
         self.critic.detach()
         
 
-class StochasticActorCriticV:
+class StochasticActorCriticV(AgentBase):
     def __init__(
         self,
         cfg: DictConfig,
@@ -183,7 +183,7 @@ class StochasticActorCriticV:
         self.critic.detach()
 
 
-class StochasticActorCriticQ:
+class StochasticActorCriticQ(AgentBase):
     def __init__(
         self,
         cfg: DictConfig,
