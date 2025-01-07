@@ -348,7 +348,7 @@ class PCPolicyExporter(PolicyExporterBase):
     @torch.no_grad()
     def forward(self, x):
         # type: (Tensor) -> Tensor
-        action, hidden = self.actor.forward_export(x, hidden=self.hidden_state)
+        action, hidden = self.actor.forward_export(x.unsqueeze(0), hidden=self.hidden_state)
         if self.is_rnn_based:
             self.hidden_state[:] = hidden
         action = action.tanh() if self.is_stochastic else action
@@ -362,7 +362,7 @@ class OAPolicyExporter(PolicyExporterBase):
     @torch.no_grad()
     def forward(self, x):
         # type: (Tuple[Tensor, Tensor]) -> Tensor
-        action, hidden = self.actor.forward_export(x, hidden=self.hidden_state)
+        action, hidden = self.actor.forward_export((x[0].unsqueeze(0), x[1].unsqueeze(0)), hidden=self.hidden_state)
         if self.is_rnn_based:
             self.hidden_state[:] = hidden
         action = action.tanh() if self.is_stochastic else action
