@@ -178,6 +178,7 @@ class World_Agent:
 class WorldExporter(nn.Module):
     def __init__(self,agent:World_Agent):
         super().__init__()
+        self.use_symlog = agent.world_agent_cfg.common.use_symlog
         self.state_encoder = deepcopy(agent.state_model.state_encoder)
         self.inp_proj = deepcopy(agent.state_model.inp_proj)
         self.seq_model = deepcopy(agent.state_model.seq_model)
@@ -208,7 +209,8 @@ class WorldExporter(nn.Module):
 
     def forward(self,state):
         with torch.no_grad():
-            state = torch.sign(state) * torch.log(1 + torch.abs(state))
+            if self.use_symlog:
+                state = torch.sign(state) * torch.log(1 + torch.abs(state))
             latent = self.sample_with_post(state.unsqueeze(0)).flatten(1)
             action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
             action = torch.tanh(action)
