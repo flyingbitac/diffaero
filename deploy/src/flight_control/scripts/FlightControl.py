@@ -1,6 +1,8 @@
 #! /home/zxh/miniconda3/envs/ros1/bin/python 
 # coding:utf-8
 
+import numpy as np
+
 import rospy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import (
@@ -19,6 +21,7 @@ class FlightControlNode:
         self.vel = Vector3()
         self.acc = Vector3()
         self.quat_xyzw = Quaternion()
+        self.euler = np.zeros(3)
         
         self.current_state = State()
         
@@ -52,6 +55,11 @@ class FlightControlNode:
         self.pos = msg.pose.pose.position
         self.vel = msg.twist.twist.linear
         self.quat_xyzw = msg.pose.pose.orientation
+        x, y, z, w = self.quat_xyzw.x, self.quat_xyzw.y, self.quat_xyzw.z, self.quat_xyzw.w
+        roll = np.arctan2(2.0 * (w * x - y * z), 1.0 - 2.0 * (x**2 + y**2))
+        pitch = np.arcsin(2.0 * (w * y + x * z))
+        yaw = np.arctan2(2.0 * (w * z - x * y), 1.0 - 2.0 * (y**2 + z**2))
+        self.euler = np.array([roll, pitch, yaw])
     
     def acc_cb(self, msg: Imu):
         self.acc = msg.linear_acceleration
@@ -115,7 +123,7 @@ def main():
         rate.sleep()
     
     for _ in range(100):
-        node.set_pos(0.0, 0.0, 2.0)
+        node.set_pos(Point(0.0, 0.0, 2.0))
         rate.sleep()
     
     last_request = rospy.Time.now()
@@ -129,7 +137,7 @@ def main():
                 node.arm()
                 last_request = rospy.Time.now()
         
-        node.set_pos(0.0, 0.0, 4.0)
+        node.set_pos(Point(0.0, 0.0, 4.0))
         print(node.pos.z)
         
         rate.sleep()

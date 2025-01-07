@@ -101,6 +101,7 @@ class Logger:
         self.acc = []
         self.acc_cmd = []
         self.thrusts = []
+        self.euler = []
     
     def log(self, node: AccelControlNode):
         self.ts.append(node.offboard_setpoint_counter/node.freq)
@@ -109,6 +110,7 @@ class Logger:
         self.acc.append((node.acc.x, node.acc.y, node.acc.z))
         self.acc_cmd.append((node.acc_cmd.x, node.acc_cmd.y, node.acc_cmd.z))
         self.thrusts.append(node.thrust_cmd)
+        self.euler.append(node.euler)
     
     def save_and_plot(self, path: str):
         time = np.array(self.ts)
@@ -117,11 +119,13 @@ class Logger:
         acc = np.array(self.acc)
         acc_cmd = np.array(self.acc_cmd)
         thrusts = np.array(self.thrusts)
+        euler = np.array(self.euler) * 180 / math.pi
         df = pd.DataFrame({"time": self.ts,
             "pos_x": pos[:, 0], "pos_y": pos[:, 1], "pos_z": pos[:, 2],
             "vel_x": vel[:, 0], "vel_y": vel[:, 1], "vel_z": vel[:, 2],
             "acc_x": acc[:, 0], "acc_y": acc[:, 1], "acc_z": acc[:, 2],
             "acc_cmd_x": acc_cmd[:, 0], "acc_cmd_y": acc_cmd[:, 1], "acc_cmd_z": acc_cmd[:, 2],
+            "roll": euler[:, 0], "pitch": euler[:, 1], "yaw": euler[:, 2],
             "thrust": thrusts
         })
         
@@ -131,8 +135,8 @@ class Logger:
         df.to_csv(os.path.join(path, "data.csv"), index=False)
         
         for (data, name) in zip(
-            [pos, vel, acc, acc_cmd],
-            ["pos", "vel", "acc_imu", "acc_cmd"]
+            [pos, vel, acc, acc_cmd, euler],
+            ["pos", "vel", "acc_imu", "acc_cmd", "euler"]
         ):
             fig = plt.figure(dpi=200)
             plt.suptitle(name)
@@ -140,7 +144,10 @@ class Logger:
                 plt.subplot(3, 1, i+1)
                 plt.plot(time, data[:, i])
                 plt.xlabel("time(s)")
-                plt.ylabel("xyz"[i]+" axis")
+                if name == "euler":
+                    plt.ylabel(["roll", "pitch", "yaw"][i] + "(deg)")
+                else:
+                    plt.ylabel("xyz"[i]+" axis")
                 plt.grid()
             plt.tight_layout()
             plt.savefig(os.path.join(path, name+".png"))
@@ -164,10 +171,9 @@ class Logger:
 
 hover_thrust = 0.707 # XXX replace this with actual hover thrust
 thrust_factor = hover_thrust / 9.81
-max_acc = 15. # XXX
+max_acc = 6. # XXX
 control_freq = 50 # Hz
-path = "/home/zxh/ws/quaddif/outputs/2024-12-27/13-24-11"
-
+path = "/home/zxh/ws/quaddif/outputs/2025-01-07/15-55-03"
 checkpoint_path = os.path.join(path, "checkpoints", "exported_actor.pt2")
 cfg_path = os.path.join(path, ".hydra", "config.yaml")
 cfg = OmegaConf.load(cfg_path)
@@ -199,8 +205,9 @@ def main_export():
         raw_action: torch.Tensor = actor(state)
         action = actor.rescale(raw_action, min_action, max_action)
         node.acc_cmd = Point(x=action[0, 0].item(), y=action[0, 1].item(), z=action[0, 2].item())
-        # orientation = F.normalize(vel_ema, dim=-1)
-        orientation = F.normalize(vel_ema, dim=-1).lerp(torch.tensor([[1., 0., 0.]]), target_vel.norm(dim=-1).neg().exp().item()) # soft yaw switch
+        # XXX
+        orientation = F.normalize(vel_ema, dim=-1)
+        # orientation = F.normalize(vel_ema, dim=-1).lerp(torch.tensor([[1., 0., 0.]]), target_vel.norm(dim=-1).neg().exp().item()) # soft yaw switch
         # orientation = vel_ema if target_vel.norm(dim=-1).item() > 1.5 else torch.tensor([[1., 0., 0.]]) # hard yaw switch
         quat_xyzw_cmd, acc_norm = actor.post_process(action, orientation)
         thrust = acc_norm.mul(thrust_factor).clamp(0, 1).item()
