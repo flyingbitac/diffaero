@@ -79,19 +79,19 @@ class World_Agent:
         world_agent_cfg = getattr(cfg,"algo")
         world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
         world_agent_cfg.replaybuffer.num_envs = cfg.n_envs
-        world_agent_cfg.replaybuffer.state_dim = 10
+        world_agent_cfg.replaybuffer.state_dim = 13
         world_agent_cfg.actor_critic.model.device = f"cuda:{device_idx}"
         world_agent_cfg.common.device = f"cuda:{device_idx}"
         self.cfg = cfg
         self.world_agent_cfg = world_agent_cfg
         
         statemodelcfg = getattr(world_agent_cfg,"state_predictor").state_model
-        statemodelcfg.state_dim = 10
+        statemodelcfg.state_dim = 13
         actorcriticcfg = getattr(world_agent_cfg,"actor_critic").model
         actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
         buffercfg = getattr(world_agent_cfg,"replaybuffer")
-        buffercfg.state_dim = 10
+        buffercfg.state_dim = 13
         worldcfg = getattr(world_agent_cfg,"world_state_env")
         training_hyper = getattr(world_agent_cfg,"state_predictor").training
         self.training_hyper = training_hyper
@@ -99,6 +99,8 @@ class World_Agent:
         if cfg.env.name=='position_control':
             statemodelcfg.only_state = True
             buffercfg.use_perception = False
+            statemodelcfg.state_dim = 10
+            world_agent_cfg.replaybuffer.state_dim = 10
         
         self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
         self.state_model = DepthStateModel(statemodelcfg).to(device)
@@ -134,7 +136,7 @@ class World_Agent:
                 state,perception = obs,None
             if self.world_agent_cfg.common.use_symlog:
                 state = symlog(state)
-            if self.replaybuffer.ready() or self.world_agent_cfg.common.use_checkpoint:
+            if self.replaybuffer.ready() or self.world_agent_cfg.common.checkpoint_path!=None:
                 latent = self.state_model.sample_with_post(state,perception,self.hidden)[0].flatten(1)
                 action = self.agent.sample(torch.cat([latent,self.hidden],dim=-1))[0]
                 self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
@@ -207,7 +209,7 @@ class WorldExporter(nn.Module):
     def forward(self,state):
         with torch.no_grad():
             state = torch.sign(state) * torch.log(1 + torch.abs(state))
-            latent = self.sample_with_post(state).flatten(1)
+            latent = self.sample_with_post(state.unsqueeze(0)).flatten(1)
             action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
             action = torch.tanh(action)
             self.sample_with_prior(latent,action)
@@ -234,5 +236,5 @@ class WorldExporter(nn.Module):
             print(traced_script_module.post_process.code)
             print(traced_script_module.reset.code)
             print(traced_script_module.rescale.code)
-        save_path = os.path.join(path,"exportckpt.pt")
+        save_path = os.path.join(path,"Policy.pt")
         traced_script_module.save(save_path)
