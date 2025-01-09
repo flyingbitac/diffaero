@@ -3,7 +3,7 @@ name: pointmass
 m: 1.0                  # total mass
 g: 9.81                 # gravity
 D: [0.6, 0.6, 0.6]      # drag
-lmbda: 3              # acc exp smoothing
+lmbda: 1.5              # acc exp smoothing
 aligh_yaw_with_vel_ema: True
 vel_ema_factor: 0.1
 
