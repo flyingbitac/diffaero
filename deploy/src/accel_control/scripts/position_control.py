@@ -190,14 +190,14 @@ def main():
     actor.reset()
     rospy.loginfo("Actor warmed up.")
     
-    node = AccelControlNode(freq=control_freq, device=torch.device("cpu"))
+    node = AccelControlNode(freq=control_freq)
     rate = rospy.Rate(control_freq)
     
     @profiler
     def step():
         tic = time.time()
         target_vel, quat_xyzw, vel = node.get_state()
-        vel_ema.lerp_(vel.unsqueeze(0), 0.2)
+        vel_ema.lerp_(vel.to(device).unsqueeze(0), 0.2)
         state = torch.cat([target_vel, quat_xyzw, vel], dim=-1).to(device)
         raw_action: torch.Tensor = actor(state)
         action = actor.rescale(raw_action, min_action, max_action)
