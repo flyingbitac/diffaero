@@ -3,14 +3,15 @@
 import os
 import sys
 import datetime
+import time
 import math
 
 import torch
 import torch.nn.functional as F
-from omegaconf import DictConfig, OmegaConf
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from line_profiler import LineProfiler
 
 import rospy
 from geometry_msgs.msg import Point, Quaternion
@@ -19,7 +20,7 @@ sys.path.insert(0, os.path.abspath(".") + "/src/flight_control/scripts")
 from FlightControl import FlightControlNode
 
 class AccelControlNode(FlightControlNode):
-    def __init__(self, freq):
+    def __init__(self, freq: int):
         super(AccelControlNode, self).__init__()
         self.offboard_setpoint_counter = 0
         self.freq = freq
@@ -86,12 +87,7 @@ class AccelControlNode(FlightControlNode):
             self.vel.y,
             self.vel.z
         ])
-        acc = torch.tensor([
-            self.acc.x,
-            self.acc.y,
-            self.acc.z
-        ])
-        return target_vel, quat_xyzw, vel, acc
+        return target_vel, quat_xyzw, vel
 
 class Logger:
     def __init__(self):
@@ -129,14 +125,11 @@ class Logger:
             "thrust": thrusts
         })
         
-        now = datetime.datetime.now()
-        path = os.path.join(path, now.strftime('%Y-%m-%d'), now.strftime('%H-%M-%S'))
-        os.makedirs(path, exist_ok=True)
         df.to_csv(os.path.join(path, "data.csv"), index=False)
         
         for (data, name) in zip(
             [pos, vel, acc, acc_cmd, euler],
-            ["pos", "vel", "acc_imu", "acc_cmd", "euler"]
+            ["pos", "vel", "acc_imu", "acc_cmd", "euler angles"]
         ):
             fig = plt.figure(dpi=200)
             plt.suptitle(name)
@@ -173,35 +166,39 @@ hover_thrust = 0.707 # XXX replace this with actual hover thrust
 thrust_factor = hover_thrust / 9.81
 max_acc = 6. # XXX
 control_freq = 50 # Hz
+device = torch.device('cpu')
 path = "/home/zxh/ws/quaddif/outputs/2025-01-07/15-55-03"
 checkpoint_path = os.path.join(path, "checkpoints", "exported_actor.pt2")
 cfg_path = os.path.join(path, ".hydra", "config.yaml")
-cfg = OmegaConf.load(cfg_path)
-min_action = torch.tensor([[-max_acc, -max_acc, 0]])
-max_action = torch.tensor([[max_acc, max_acc, 40]])
+min_action = torch.tensor([[-max_acc, -max_acc, 0]], device=device)
+max_action = torch.tensor([[max_acc, max_acc, 40]], device=device)
 
 @torch.no_grad()
-def main_export():
+def main():
     rospy.init_node('accel_ctrl', anonymous=True)
-    node = AccelControlNode(freq=control_freq)
+    profiler = LineProfiler()
     logger = Logger()
-    rate = rospy.Rate(control_freq)
-
+    vel_ema = torch.zeros(1, 3, device=device)
+    
     rospy.loginfo("Loading actor...")
-    actor = torch.jit.load(checkpoint_path, map_location=torch.device('cpu'))
+    actor = torch.jit.load(checkpoint_path, map_location=device)
     rospy.loginfo("Actor loaded, warming up...")
     actor.eval()
-    fake_input = torch.rand(10)
+    fake_input = torch.rand(10, device=device)
     for _ in range(10):
         actor(fake_input)
     actor.reset()
     rospy.loginfo("Actor warmed up.")
     
-    vel_ema = torch.zeros(1, 3)
-    while not rospy.is_shutdown():
-        target_vel, quat_xyzw, vel, acc = node.get_state()
+    node = AccelControlNode(freq=control_freq, device=torch.device("cpu"))
+    rate = rospy.Rate(control_freq)
+    
+    @profiler
+    def step():
+        tic = time.time()
+        target_vel, quat_xyzw, vel = node.get_state()
         vel_ema.lerp_(vel.unsqueeze(0), 0.2)
-        state = torch.cat([target_vel, quat_xyzw, vel], dim=-1)
+        state = torch.cat([target_vel, quat_xyzw, vel], dim=-1).to(device)
         raw_action: torch.Tensor = actor(state)
         action = actor.rescale(raw_action, min_action, max_action)
         node.acc_cmd = Point(x=action[0, 0].item(), y=action[0, 1].item(), z=action[0, 2].item())
@@ -214,17 +211,31 @@ def main_export():
         x, y, z, w = list(map(lambda x: x.item(), quat_xyzw_cmd[0].unbind(dim=-1)))
         terminated = node.command_pose(Quaternion(x=x, y=y, z=z, w=w), thrust)
         logger.log(node)
+        return time.time() - tic, terminated, action, thrust
+    
+    while not rospy.is_shutdown():
+        inference_time, terminated, action, thrust = step()
         if node.offboard_setpoint_counter % (node.freq//5) == 0:
-            print(f"|time= {node.offboard_setpoint_counter / node.freq:6.2f}", end=" |")
-            print("pos= " + " ".join(map(lambda x: f"{x:5.2f}", [node.pos.x, node.pos.y, node.pos.z])), end=" |")
-            print("vel= " + " ".join(map(lambda x: f"{x:5.2f}", [node.vel.x, node.vel.y, node.vel.z])), end=" |")
-            print("acc= " + " ".join(map(lambda x: f"{x:5.2f}", [node.acc.x, node.acc.y, node.acc.z])), end=" |")
-            print("action= " + " ".join(map(lambda x: f"{x.item():5.2f}", action.unbind(dim=-1))), end=" |")
-            print("thrust= " + f"{thrust:.2f} |")
+            log_str = (
+                f"|time= {node.offboard_setpoint_counter / node.freq:6.2f} |" +
+                "pos= " + " ".join(map(lambda x: f"{x:5.2f}", [node.pos.x, node.pos.y, node.pos.z])) + " |" +
+                "vel= " + " ".join(map(lambda x: f"{x:5.2f}", [node.vel.x, node.vel.y, node.vel.z])) + " |" +
+                # "acc= " + " ".join(map(lambda x: f"{x:5.2f}", [node.acc.x, node.acc.y, node.acc.z])) + " |" +
+                "action= " + " ".join(map(lambda x: f"{x.item():5.2f}", action.unbind(dim=-1))) + " |" +
+                f"thrust= {thrust:.2f} |inference_time= {inference_time*1000:6.2f}.ms |"
+            )
+            rospy.loginfo(log_str)
+            if inference_time > 1/control_freq:
+                rospy.logwarn("Inference time exceeds control period.")
         if terminated:
-            logger.save_and_plot("./outputs/")
+            now = datetime.datetime.now()
+            path = os.path.join("./outputs/", now.strftime('%Y-%m-%d'), now.strftime('%H-%M-%S'))
+            os.makedirs(path, exist_ok=True)
+            logger.save_and_plot(path)
+            with open(os.path.join(path, "runtime_profile.txt"), "w", encoding="utf-8") as f:
+                profiler.print_stats(stream=f, output_unit=1e-3)
             break
         rate.sleep()
 
 if __name__ == "__main__":
-    main_export()
+    main()
