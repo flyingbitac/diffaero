@@ -137,7 +137,7 @@ class Logger:
                 plt.subplot(3, 1, i+1)
                 plt.plot(time, data[:, i])
                 plt.xlabel("time(s)")
-                if name == "euler":
+                if name == "euler angles":
                     plt.ylabel(["roll", "pitch", "yaw"][i] + "(deg)")
                 else:
                     plt.ylabel("xyz"[i]+" axis")
