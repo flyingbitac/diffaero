@@ -22,7 +22,9 @@ setup(
         'opencv-python',
         'moviepy',
         'imageio',
-        'imageio-ffmpeg'
+        'imageio-ffmpeg',
+        'onnx',
+        'ncnn'
     ],
     author='Xinhong Zhang',
     author_email='zxh0916@126.com',
