@@ -38,9 +38,9 @@ class MLP(BaseNetwork):
     
     def forward(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_state] or ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
-        hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
+        hidden: Optional[Tensor] = None
     ) -> Tensor:
         return self.head(state_action_concat(obs, action))
     
@@ -48,9 +48,8 @@ class MLP(BaseNetwork):
         self,
         obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
         action: Optional[Tensor] = None, # [N, D_action]
-        hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
-    ) -> Tuple[Tensor, Tensor]:
-        return self.forward(obs=obs, action=action, hidden=None), torch.empty(0)
+    ) -> Tensor:
+        return self.forward(obs=obs, action=action)
 
 
 class CNNBackbone(nn.Sequential):
@@ -82,9 +81,9 @@ class CNN(BaseNetwork):
     
     def forward(
         self,
-        obs: Tuple[Tensor, Tensor], # [N, D_obs]
+        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
-        hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
+        hidden: Optional[Tensor] = None
     ) -> Tensor:
         perception = obs[1]
         if perception.ndim == 3:
@@ -94,11 +93,10 @@ class CNN(BaseNetwork):
     
     def forward_export(
         self,
-        obs: Tuple[Tensor, Tensor], # [N, D_obs]
+        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
-        hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
-    ) -> Tuple[Tensor, Tensor]:
-        return self.forward(obs=obs, action=action, hidden=None), torch.empty(0)
+    ) -> Tensor:
+        return self.forward(obs=obs, action=action)
 
 
 class RNN(BaseNetwork):
@@ -130,7 +128,7 @@ class RNN(BaseNetwork):
     
     def forward(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_state] or ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
         hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
     ) -> Tensor:
@@ -151,7 +149,7 @@ class RNN(BaseNetwork):
     
     def forward_export(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_state] or ([N, D_state], [N, H, W])
         hidden: Tensor, # [n_layers, N, D_hidden]
         action: Optional[Tensor] = None, # [N, D_action]
     ) -> Tuple[Tensor, Tensor]:
@@ -193,7 +191,7 @@ class RCNN(BaseNetwork):
     
     def forward(
         self,
-        obs: Tuple[Tensor, Tensor], # [N, D_obs]
+        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
         hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
     ) -> Tensor:
@@ -218,7 +216,7 @@ class RCNN(BaseNetwork):
     
     def forward_export(
         self,
-        obs: Tuple[Tensor, Tensor], # [N, D_obs]
+        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
         hidden: Tensor, # [n_layers, N, D_hidden]
         action: Optional[Tensor] = None, # [N, D_action]
     ) -> Tuple[Tensor, Tensor]:

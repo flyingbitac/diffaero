@@ -8,7 +8,7 @@ from torch import Tensor
 import torch.nn as nn
 from tensordict import TensorDict
 
-from quaddif.network import build_network, MLP, CNN, RNN, RCNN
+from quaddif.network import build_network
 
 class AgentBase(nn.Module):
     def __init__(self, cfg: DictConfig, state_dim: Union[int, Tuple[int, Tuple[int, int]]]):
@@ -297,73 +297,3 @@ def tensordict2tuple(state: Union[Tensor, TensorDict]):
         return (state["state"], state["perception"])
     else:
         return state
-
-from quaddif.dynamics.pointmass import point_mass_quat
-
-class PolicyExporterBase(nn.Module):
-    def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
-        super().__init__()
-        self.is_stochastic = isinstance(actor, StochasticActor)
-        self.is_rnn_based = actor.is_rnn_based
-        actor_net = actor.actor_mean if self.is_stochastic else actor.actor
-        if self.is_rnn_based:
-            actor_net.hidden_state = torch.empty(0)
-        self.actor = deepcopy(actor_net).cpu()
-        self.register_buffer(
-            "hidden_state",
-            torch.zeros(self.actor.n_layers, 1, self.actor.rnn_hidden_dim) if self.is_rnn_based else torch.empty(0))
-        self.hidden_state: Tensor = self.get_buffer("hidden_state")
-    
-    @torch.jit.export
-    def post_process(self, acc, orientation):
-        # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor]
-        quat_xyzw = point_mass_quat(acc, orientation)
-        acc_norm = acc.norm(p=2, dim=-1)
-        return quat_xyzw, acc_norm
-    
-    @torch.jit.export
-    def reset(self):
-        self.hidden_state.zero_()
-    
-    @torch.jit.export
-    def rescale(self, raw_action, min_action, max_action):
-        # type: (Tensor, Tensor, Tensor) -> Tensor
-        return (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
-    
-    def export(self, path: str, verbose=False):
-        traced_script_module = torch.jit.script(self)
-        if verbose:
-            print(traced_script_module.code)
-            print(traced_script_module.post_process.code)
-            print(traced_script_module.reset.code)
-            print(traced_script_module.rescale.code)
-        traced_script_module.save(path)
-
-
-# Extreamely ugly impletation of policy exportation
-class PCPolicyExporter(PolicyExporterBase):
-    def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
-        super().__init__(actor)
-    
-    @torch.no_grad()
-    def forward(self, x):
-        # type: (Tensor) -> Tensor
-        action, hidden = self.actor.forward_export(x.unsqueeze(0), hidden=self.hidden_state)
-        if self.is_rnn_based:
-            self.hidden_state[:] = hidden
-        action = action.tanh() if self.is_stochastic else action
-        return action
-
-
-class OAPolicyExporter(PolicyExporterBase):
-    def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
-        super().__init__(actor)
-    
-    @torch.no_grad()
-    def forward(self, x):
-        # type: (Tuple[Tensor, Tensor]) -> Tensor
-        action, hidden = self.actor.forward_export((x[0].unsqueeze(0), x[1].unsqueeze(0)), hidden=self.hidden_state)
-        if self.is_rnn_based:
-            self.hidden_state[:] = hidden
-        action = action.tanh() if self.is_stochastic else action
-        return action
