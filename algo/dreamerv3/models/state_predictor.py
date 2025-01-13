@@ -166,13 +166,18 @@ class DepthStateModel(nn.Module):
         self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
         self.endloss = nn.BCEWithLogitsLoss()
 
+        
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         if not cfg.only_state:
             self.image_encoder = ImageEncoder(in_channels=1, stem_channels=16, image_width=cfg.image_width)
             self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
                                             last_channels=self.image_encoder.last_channels,final_image_width=4)
-        self.state_encoder = nn.Sequential(nn.Linear(cfg.state_dim,64,bias=False),
-                                           nn.LayerNorm(64),nn.SiLU())
+            state_emb_dim = 64
+            self.state_encoder = nn.Sequential(nn.Linear(cfg.state_dim,64,bias=False),
+                                            nn.LayerNorm(64),nn.SiLU())
+        else:
+            self.state_encoder = nn.Identity()
+            state_emb_dim = 10
 
         depth_flatten_dim = cfg.image_width*cfg.image_width*4
         origin_width = cfg.image_width
@@ -182,7 +187,7 @@ class DepthStateModel(nn.Module):
         if cfg.only_state:
             depth_flatten_dim = 0
         self.inp_proj = nn.Sequential(
-            nn.Linear(64 + depth_flatten_dim + cfg.hidden_dim,cfg.latent_dim),
+            nn.Linear(state_emb_dim + depth_flatten_dim + cfg.hidden_dim,cfg.latent_dim),
             nn.LayerNorm(cfg.latent_dim),
             nn.SiLU(),
             nn.Linear(cfg.latent_dim,cfg.latent_dim)
