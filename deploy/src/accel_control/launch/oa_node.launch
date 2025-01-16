@@ -1,0 +1,20 @@
+<launch>
+    <node pkg="accel_control" type="obstacle_avoidance.py" name="obstacle_avoidance" output="screen">
+        <param name="path" type="string" value="/home/zxh/ws/quaddif/outputs/2025-01-15/17-08-55"/>
+        <param name="device" type="string" value="cuda:0"/>
+        <param name="max_acc" type="double" value="10."/>
+        <param name="max_vel" type="double" value="5."/>
+        <param name="hover_thrust" type="double" value="0.707"/>
+        <param name="control_freq" type="int" value="30"/>
+        <!-- home and target -->
+        <param name="home_x" type="double" value="0"/>
+        <param name="home_y" type="double" value="0"/>
+        <param name="target_x" type="double" value="54"/>
+        <param name="target_y" type="double" value="54"/>
+        <param name="height" type="double" value="3"/>
+        <!-- camera parameters -->
+        <param name="max_dist" type="double" value="10."/>
+        <param name="img_height" type="int" value="9"/>
+        <param name="img_width" type="int" value="16"/>
+    </node>
+</launch>

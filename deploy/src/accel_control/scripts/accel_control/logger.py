@@ -3,6 +3,8 @@ import os
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+from matplotlib.collections import LineCollection
 import pandas as pd
 
 class Logger:
@@ -70,6 +72,20 @@ class Logger:
         plt.tight_layout()
         plt.savefig(os.path.join(path, "thrust.png"))
         
+        for (data, name) in zip(
+            [np.linalg.norm(vel, axis=1),
+             np.linalg.norm(acc, axis=1),
+             np.linalg.norm(acc_cmd, axis=1)],
+            ["vel_norm", "acc_norm", "acc_cmd_norm"]
+        ):
+            fig = plt.figure(dpi=200)
+            plt.title(name)
+            plt.plot(time, data)
+            plt.xlabel("time(s)")
+            plt.grid()
+            plt.tight_layout()
+            plt.savefig(os.path.join(path, name+".png"))
+        
         fig = plt.figure(dpi=200)
         ax = fig.add_subplot(111, projection='3d')
         plt.title("3d trajectory")
@@ -77,3 +93,31 @@ class Logger:
         plt.grid()
         plt.tight_layout()
         plt.savefig(os.path.join(path, "3d_trajectory.png"))
+    
+    def plot_2d_trajectory(self, path: str):
+        vel = np.linalg.norm(np.array(self.vel), axis=1)
+        pos = np.array(self.pos)
+        x, y = pos[:, 0], pos[:, 1]
+        with open(os.path.join(os.path.dirname(__file__), "../../launch/cylinder_positions.txt"), "r", encoding="utf-8") as f:
+            obstacles = list(map(lambda x: tuple(map(float, x.strip().split(","))), f.readlines()))
+        
+        fig = plt.figure(dpi=200)
+        _, ax = plt.subplots()
+        ax.set_aspect('equal')
+        # draw the obstacles
+        for obst_x, obst_y, obst_r in obstacles:
+            circle = Circle((obst_x, obst_y), obst_r, fill=True)
+            ax.add_patch(circle)
+        # draw the trajectory
+        points = np.array([x, y]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        lc = LineCollection(segments, cmap='plasma', norm=plt.Normalize(vel.min(), vel.max()))
+        lc.set_array(vel)
+        line = ax.add_collection(lc)
+        
+        plt.title("xy trajectory")
+        plt.xlim((x.min() - 1, x.max() + 1))
+        plt.ylim((y.min() - 1, y.max() + 1))
+        fig.colorbar(line, ax=ax)
+        plt.tight_layout()
+        plt.savefig(os.path.join(path, "xy_trajectory.png"))
