@@ -43,9 +43,9 @@ class PolicyExporter(nn.Module):
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
         return action, quat_xyzw, acc_norm
     
-    def forward_CNN(self, state, orientation, min_action, max_action):
-        # type: (Tuple[Tensor, Tensor], Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
-        raw_action = self.actor.forward_export(state)
+    def forward_CNN(self, state, perception, orientation, min_action, max_action):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
+        raw_action = self.actor.forward_export(state=state, perception=perception)
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
         return action, quat_xyzw, acc_norm
     
@@ -55,15 +55,16 @@ class PolicyExporter(nn.Module):
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
         return action, quat_xyzw, acc_norm, hidden
     
-    def forward_RCNN(self, state, orientation, min_action, max_action, hidden):
-        # type: (Tuple[Tensor, Tensor], Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
-        raw_action, hidden = self.actor.forward_export(state, hidden=hidden)
+    def forward_RCNN(self, state, perception, orientation, min_action, max_action, hidden):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        raw_action, hidden = self.actor.forward_export(state=state, perception=perception, hidden=hidden)
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
         return action, quat_xyzw, acc_norm, hidden
     
-    def export(self, path: str, verbose=False, export_pnnx=False):
+    def export(self, path: str, verbose=False, export_onnx=False, export_pnnx=False):
         self.export_jit(path, verbose)
-        self.export_onnx(path, export_pnnx=export_pnnx)
+        if export_onnx:
+            self.export_onnx(path, export_pnnx=export_pnnx)
     
     def export_jit(self, path: str, verbose=False):
         traced_script_module = torch.jit.script(self)
@@ -74,15 +75,18 @@ class PolicyExporter(nn.Module):
         print(f"The checkpoint is compiled and exported to {export_path}.")
     
     def export_onnx(self, path: str, export_pnnx: bool = True):
-        example_input = (
-            torch.rand(1, 10),
+        example_input = [
             torch.rand(1, 3),
             torch.rand(1, 3),
-            torch.rand(1, 3))
+            torch.rand(1, 3)]
+        if isinstance(self.actor, (CNN, RCNN)):
+            example_input = [torch.rand(1, 10), torch.rand(1, 9, 16)] + example_input
+        else:
+            example_input.insert(0, torch.rand(1, 10))
         if self.is_recurrent:
-            example_input = (*example_input, torch.rand(self.hidden_shape))
+            example_input.append(torch.rand(self.hidden_shape))
         export_path = os.path.join(path, "exported_actor.onnx")
-        torch.onnx.export(self, example_input, export_path)
+        torch.onnx.export(self, tuple(example_input), export_path)
         print(f"The checkpoint is compiled and exported to {export_path}.")
         
         if export_pnnx:

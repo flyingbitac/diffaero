@@ -93,10 +93,14 @@ class CNN(BaseNetwork):
     
     def forward_export(
         self,
-        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
+        state: Tensor, # [N, D_state]
+        perception: Tensor, # [N, H, W]
         action: Optional[Tensor] = None, # [N, D_action]
     ) -> Tensor:
-        return self.forward(obs=obs, action=action)
+        if perception.ndim == 3:
+            perception = perception.unsqueeze(1)
+        input = [state, self.cnn(perception)] + ([] if action is None else [action])
+        return self.head(torch.cat(input, dim=-1))
 
 
 class RNN(BaseNetwork):
@@ -216,14 +220,14 @@ class RCNN(BaseNetwork):
     
     def forward_export(
         self,
-        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
+        state: Tensor, # [N, D_state]
+        perception: Tensor, # [N, H, W]
         hidden: Tensor, # [n_layers, N, D_hidden]
         action: Optional[Tensor] = None, # [N, D_action]
     ) -> Tuple[Tensor, Tensor]:
-        perception = obs[1]
         if perception.ndim == 3:
             perception = perception.unsqueeze(1)
-        rnn_input = torch.cat([obs[0], self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
+        rnn_input = torch.cat([state, self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
         rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
         return self.head(rnn_out.squeeze(1)), hidden
 
