@@ -165,6 +165,7 @@ target_link_libraries(accel_control_sim
 catkin_install_python(PROGRAMS
   scripts/position_control.py
   scripts/obstacle_avoidance.py
+  scripts/test.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
