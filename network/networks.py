@@ -62,10 +62,12 @@ class CNNBackbone(nn.Sequential):
             nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
             nn.Conv2d(8, 8, kernel_size=3, stride=2, padding=1),
+            nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(start_dim=-3)
         )
         D, (H, W) = input_dim
-        self.out_dim = D + 8 * (H // 4) * (W // 4)
+        # self.out_dim = D + 8 * (H // 4) * (W // 4)
+        self.out_dim = D + 8 * 4 * 4
 
 class CNN(BaseNetwork):
     def __init__(
