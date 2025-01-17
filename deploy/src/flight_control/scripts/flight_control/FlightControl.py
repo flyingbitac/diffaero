@@ -1,6 +1,7 @@
 #! /home/zxh/miniconda3/envs/ros1/bin/python 
 # coding:utf-8
-from typing import Optional, overload
+
+import numpy as np
 
 import rospy
 from nav_msgs.msg import Odometry
@@ -11,7 +12,7 @@ from geometry_msgs.msg import (
     PoseStamped
 )
 from mavros_msgs.srv import CommandBool, CommandBoolRequest, SetMode, SetModeRequest
-from mavros_msgs.msg import State, PositionTarget, Thrust, AttitudeTarget
+from mavros_msgs.msg import State, AttitudeTarget
 from sensor_msgs.msg import Imu
 
 class FlightControlNode:
@@ -20,6 +21,7 @@ class FlightControlNode:
         self.vel = Vector3()
         self.acc = Vector3()
         self.quat_xyzw = Quaternion()
+        self.euler = np.zeros(3)
         
         self.current_state = State()
         
@@ -53,6 +55,11 @@ class FlightControlNode:
         self.pos = msg.pose.pose.position
         self.vel = msg.twist.twist.linear
         self.quat_xyzw = msg.pose.pose.orientation
+        x, y, z, w = self.quat_xyzw.x, self.quat_xyzw.y, self.quat_xyzw.z, self.quat_xyzw.w
+        roll = np.arctan2(2.0 * (w * x - y * z), 1.0 - 2.0 * (x**2 + y**2))
+        pitch = np.arcsin(2.0 * (w * y + x * z))
+        yaw = np.arctan2(2.0 * (w * z - x * y), 1.0 - 2.0 * (y**2 + z**2))
+        self.euler = np.array([roll, pitch, yaw])
     
     def acc_cb(self, msg: Imu):
         self.acc = msg.linear_acceleration
@@ -106,34 +113,3 @@ class FlightControlNode:
         except rospy.ServiceException as e:
             rospy.logerr("Set mode service call failed: %s", e)
             return False
-
-def main():
-    rospy.init_node('offb_node', anonymous=True)
-    node = FlightControlNode()
-    
-    rate = rospy.Rate(20)
-    while not rospy.is_shutdown() and not node.current_state.connected:
-        rate.sleep()
-    
-    for _ in range(100):
-        node.set_pos(0.0, 0.0, 2.0)
-        rate.sleep()
-    
-    last_request = rospy.Time.now()
-    
-    while not rospy.is_shutdown():
-        if node.current_state.mode != "OFFBOARD" and (rospy.Time.now() - last_request > rospy.Duration(5.0)):
-            node.set_mode()
-            last_request = rospy.Time.now()
-        else:
-            if not node.current_state.armed and (rospy.Time.now() - last_request > rospy.Duration(5.0)):
-                node.arm()
-                last_request = rospy.Time.now()
-        
-        node.set_pos(0.0, 0.0, 4.0)
-        print(node.pos.z)
-        
-        rate.sleep()
-
-if __name__ == '__main__':
-    main()

@@ -38,11 +38,18 @@ class MLP(BaseNetwork):
     
     def forward(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_state] or ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
-        hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
+        hidden: Optional[Tensor] = None
     ) -> Tensor:
         return self.head(state_action_concat(obs, action))
+    
+    def forward_export(
+        self,
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        action: Optional[Tensor] = None, # [N, D_action]
+    ) -> Tensor:
+        return self.forward(obs=obs, action=action)
 
 
 class CNNBackbone(nn.Sequential):
@@ -55,10 +62,12 @@ class CNNBackbone(nn.Sequential):
             nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
             nn.Conv2d(8, 8, kernel_size=3, stride=2, padding=1),
+            nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(start_dim=-3)
         )
         D, (H, W) = input_dim
-        self.out_dim = D + 8 * (H // 4) * (W // 4)
+        # self.out_dim = D + 8 * (H // 4) * (W // 4)
+        self.out_dim = D + 8 * 4 * 4
 
 class CNN(BaseNetwork):
     def __init__(
@@ -74,14 +83,25 @@ class CNN(BaseNetwork):
     
     def forward(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
-        hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
+        hidden: Optional[Tensor] = None
     ) -> Tensor:
         perception = obs[1]
         if perception.ndim == 3:
             perception = perception.unsqueeze(1)
         input = [obs[0], self.cnn(perception)] + ([] if action is None else [action])
+        return self.head(torch.cat(input, dim=-1))
+    
+    def forward_export(
+        self,
+        state: Tensor, # [N, D_state]
+        perception: Tensor, # [N, H, W]
+        action: Optional[Tensor] = None, # [N, D_action]
+    ) -> Tensor:
+        if perception.ndim == 3:
+            perception = perception.unsqueeze(1)
+        input = [state, self.cnn(perception)] + ([] if action is None else [action])
         return self.head(torch.cat(input, dim=-1))
 
 
@@ -114,7 +134,7 @@ class RNN(BaseNetwork):
     
     def forward(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_state] or ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
         hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
     ) -> Tensor:
@@ -124,19 +144,18 @@ class RNN(BaseNetwork):
         use_own_hidden = hidden is None
         if use_own_hidden:
             if self.hidden_state is None:
-                self.hidden_state = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
-            hidden = self.hidden_state
-        # else:
-        #     assert hidden.size(1) == rnn_input.size(0)
+                hidden = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
+            else:
+                hidden = self.hidden_state
         
         rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
         if use_own_hidden:
             self.hidden_state = hidden
         return self.head(rnn_out.squeeze(1))
     
-    def forward_pure(
+    def forward_export(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_state] or ([N, D_state], [N, H, W])
         hidden: Tensor, # [n_layers, N, D_hidden]
         action: Optional[Tensor] = None, # [N, D_action]
     ) -> Tuple[Tensor, Tensor]:
@@ -174,11 +193,11 @@ class RCNN(BaseNetwork):
             dtype=torch.float
         )
         self.head = mlp(self.rnn_hidden_dim, cfg.hidden_dim, output_dim, output_act=output_act)
-        self.hidden_state: Optional[Tensor] = None
+        self.hidden_state: Tensor = None
     
     def forward(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
         action: Optional[Tensor] = None, # [N, D_action]
         hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
     ) -> Tensor:
@@ -192,26 +211,25 @@ class RCNN(BaseNetwork):
         use_own_hidden = hidden is None
         if use_own_hidden:
             if self.hidden_state is None:
-                self.hidden_state = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
-            hidden = self.hidden_state
-        # else:
-        #     assert hidden.size(1) == rnn_input.size(0)
+                hidden = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
+            else:
+                hidden = self.hidden_state
         
-        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden.contiguous())
+        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
         if use_own_hidden:
             self.hidden_state = hidden
         return self.head(rnn_out.squeeze(1))
     
-    def forward_pure(
+    def forward_export(
         self,
-        obs: Union[Tensor, Tuple[Tensor, Tensor]], # [N, D_obs]
+        state: Tensor, # [N, D_state]
+        perception: Tensor, # [N, H, W]
         hidden: Tensor, # [n_layers, N, D_hidden]
         action: Optional[Tensor] = None, # [N, D_action]
     ) -> Tuple[Tensor, Tensor]:
-        perception = obs[1]
         if perception.ndim == 3:
             perception = perception.unsqueeze(1)
-        rnn_input = torch.cat([obs[0], self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
+        rnn_input = torch.cat([state, self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
         rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
         return self.head(rnn_out.squeeze(1)), hidden
 

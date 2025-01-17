@@ -15,6 +15,7 @@ import cv2
 
 from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
+from quaddif.utils.exporter import PolicyExporter
 from quaddif.utils.device import idle_device
 from quaddif.utils.logger import RecordEpisodeStatistics, Logger
 
@@ -111,9 +112,7 @@ def main(cfg: DictConfig):
         agent.save(ckpt_path)
         print(f"The checkpoint is saved to {ckpt_path}.")
         if cfg.export:
-            export_path = os.path.join(ckpt_path, "exported_actor.pt2")
-            agent.export(export_path, verbose=False)
-            print(f"The checkpoint is jitted and exported to {export_path}.")
+            PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
     
     if env.renderer is not None:
         env.renderer.close()

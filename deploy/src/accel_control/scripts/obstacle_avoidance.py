@@ -9,12 +9,12 @@ from line_profiler import LineProfiler
 import rospy
 
 from accel_control.logger import Logger
-from accel_control.position_control_node import PositionControlNode
+from accel_control.obstacle_avoidance_node import ObstacleAvoidanceNode
 
 def main():
-    rospy.init_node('position_control_node', anonymous=True)
+    rospy.init_node('obstacle_avoidance_node', anonymous=True)
     profiler = LineProfiler()
-    profiler.add_function(PositionControlNode.step)
+    profiler.add_function(ObstacleAvoidanceNode.step)
     logger = Logger()
 
     control_freq = rospy.get_param("~control_freq") # Hz
@@ -22,7 +22,7 @@ def main():
     path = rospy.get_param("~path") # XXX
     checkpoint_path = os.path.join(path, "checkpoints", "exported_actor.pt2")
     
-    node = PositionControlNode(
+    node = ObstacleAvoidanceNode(
         freq=control_freq,
         model_path=checkpoint_path,
         home_x=rospy.get_param("~home_x"),
@@ -32,6 +32,9 @@ def main():
         height=rospy.get_param("~height"),
         max_acc=rospy.get_param("~max_acc"),
         max_vel=rospy.get_param("~max_vel"),
+        max_dist=rospy.get_param("~max_dist"),
+        img_height=rospy.get_param("~img_height"),
+        img_width=rospy.get_param("~img_width"),
         hover_thrust=rospy.get_param("~hover_thrust"),
         device=device)
     node.load_actor()
@@ -54,6 +57,7 @@ def main():
             path = os.path.join("./outputs/", now.strftime('%Y-%m-%d'), now.strftime('%H-%M-%S'))
             os.makedirs(path, exist_ok=True)
             logger.save_and_plot(path)
+            logger.plot_2d_trajectory(path)
             with open(os.path.join(path, "runtime_profile.txt"), "w", encoding="utf-8") as f:
                 profiler.print_stats(stream=f, output_unit=1e-3)
             break

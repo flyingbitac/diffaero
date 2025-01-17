@@ -10,6 +10,7 @@
     - [Install the Nvidia Isaac Gym](#install-the-nvidia-isaac-gym)
     - [Install the Quaddif](#install-the-quaddif)
   - [Usage](#usage)
+  - [Deploy](#deploy)
 
 ## Introduction
 
@@ -108,3 +109,7 @@ python script/test.py env=[pc,oa] checkpoint=/absolute/path/to/checkpoints/direc
 ```
 
 to test the model and create a GUI viewer to visualize the environment and the learned policy.
+
+## Deploy
+
+If you want to test your trained policy in a SITL simulation experiment, please refer to [this tutorial](deploy/README.md).

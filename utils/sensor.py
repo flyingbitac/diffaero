@@ -30,7 +30,7 @@ def raydist3d_sphere(
 
     Returns:
         torch.Tensor: The distance of the ray to the nearest obstacle's surface.
-    """    
+    """
     rel_pos = obst_pos.unsqueeze(1) - start.unsqueeze(2) # [n_envs, n_rays, n_spheres, 3]
     rel_dist = torch.norm(rel_pos, dim=-1) # [n_envs, n_agents, n_spheres]
     costheta = torch.cosine_similarity(rel_pos, direction.unsqueeze(2), dim=-1) # [n_envs, n_rays, n_spheres]

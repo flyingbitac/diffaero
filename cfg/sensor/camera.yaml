@@ -2,10 +2,12 @@ name: camera
 
 type: "raydist" # "isaacgym" or "raydist"
 
+# Intel Realsense D435
 width: 16
-height: 16
-horizontal_fov: 90.0
-max_dist: 20.0
+height: 9
+horizontal_fov: 86.0
+max_dist: 10.0
+
 onboard_position: [0.2, 0., 0.05]
 
 # for isaacgym camera

@@ -34,7 +34,7 @@ class ObstacleAvoidance(BaseEnv):
             # relative position of obstacles as additional observation
             H, W = self.n_obstacles, 3
         
-        self.state_dim = (13, (H, W)) # flattened depth image as additional observation
+        self.state_dim = (10, (H, W)) # flattened depth image as additional observation
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
         use_isaacgym_camera = self.sensor_type == "camera" and self.camera_type == "isaacgym"
@@ -54,9 +54,9 @@ class ObstacleAvoidance(BaseEnv):
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":
-            state = torch.cat([self.target_vel, self.q, self._v, self._a], dim=-1)
+            state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
         else:
-            state = torch.cat([self.target_vel, self._q, self._v, self._w], dim=-1)
+            state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         state = TensorDict({
             "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
         state = state if with_grad else state.detach()

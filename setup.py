@@ -14,13 +14,17 @@ setup(
         'line_profiler',
         'tqdm',
         'tensorboard==2.12.0',
+        'tensorboardX',
+        'wandb',
         'opencv-python',
         'isaacgym',
         'welford_torch',
         'opencv-python',
         'moviepy',
         'imageio',
-        'imageio-ffmpeg'
+        'imageio-ffmpeg',
+        'onnx',
+        'ncnn'
     ],
     author='Xinhong Zhang',
     author_email='zxh0916@126.com',
