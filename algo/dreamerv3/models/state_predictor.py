@@ -14,6 +14,7 @@ from .blocks import SymLogTwoHotLoss
 class DepthStateModelCfg:
     state_dim: int
     image_width: int
+    image_height: int
     hidden_dim: int
     action_dim: int
     latent_dim: int
@@ -32,25 +33,31 @@ class Batch:
     drone_state:torch.FloatTensor
     obstacle_relpos:torch.FloatTensor
 
+def cal_image_width(image_width:int,kernel_size:int,stride:int,padding:int):
+    return (image_width-kernel_size+2*padding)//stride + 1
+
 class ImageEncoder(nn.Module):
-    def __init__(self, in_channels:int, stem_channels:int, image_width:int):
+    def __init__(self, in_channels:int, stem_channels:int, image_width:int, image_height:int):
         super().__init__()
         backbone = []
         
         backbone.append(nn.Conv2d(in_channels, stem_channels, kernel_size=4,stride=2,padding=1,bias=False))
         backbone.append(nn.BatchNorm2d(stem_channels))
         backbone.append(nn.ReLU(inplace=True))
-        image_width //=2
+        image_width  = cal_image_width(image_width,4,2,1)
+        image_height = cal_image_width(image_height,4,2,1)
         
         while image_width>4:
             backbone.append(nn.Conv2d(stem_channels, 2*stem_channels, kernel_size=4,stride=2,padding=1,bias=False))
             backbone.append(nn.BatchNorm2d(2*stem_channels))
             backbone.append(nn.ReLU(inplace=True))
             stem_channels*=2
-            image_width //=2
+            image_width = cal_image_width(image_width,4,2,1)
+            image_height = cal_image_width(image_height,4,2,1)
         
         self.backbone = nn.Sequential(*backbone)
         self.last_channels = stem_channels
+        self.flatten_dim = stem_channels*image_width*image_height
         
     def forward(self, depth_image:Tensor):
         depth_image = self.backbone(depth_image)
@@ -79,6 +86,24 @@ class ImageDecoder(nn.Module):
     def forward(self, feat:Tensor):
         feat = self.backbone(feat)
         return feat
+
+class ImageDecoderMLP(nn.Module):
+    def __init__(self, feat_dim:int, hidden_dim:int, image_width:int, image_height:int):
+        super().__init__()
+        self.backbone = nn.Sequential(nn.Linear(feat_dim, hidden_dim, bias=False),
+                                 nn.LayerNorm(hidden_dim),
+                                 nn.SiLU(inplace=True),
+                                 nn.Linear(hidden_dim,hidden_dim),
+                                 nn.LayerNorm(hidden_dim),
+                                 nn.SiLU(inplace=True))
+        self.head = nn.Linear(hidden_dim,image_height*image_width)
+        self.image_height = image_height
+
+    def forward(self,feat:torch.Tensor):
+        flatten_image = self.head(self.backbone(feat))
+        rec_image = rearrange(flatten_image,'B (H W) -> B H W',H=self.image_height)
+        return rec_image
+        
 
 def onehotsample(probs:torch.Tensor):
     B,K,C = probs.shape
@@ -166,26 +191,24 @@ class DepthStateModel(nn.Module):
         self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
         self.endloss = nn.BCEWithLogitsLoss()
 
-        
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         if not cfg.only_state:
-            self.image_encoder = ImageEncoder(in_channels=1, stem_channels=16, image_width=cfg.image_width)
-            self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
-                                            last_channels=self.image_encoder.last_channels,final_image_width=4)
+            self.image_encoder = ImageEncoder(in_channels=1, stem_channels=16, image_width=cfg.image_width,
+                                              image_height=cfg.image_height)
+            # self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
+            #                                 last_channels=self.image_encoder.last_channels,final_image_width=4)
+            self.image_decoder = ImageDecoderMLP(feat_dim=cfg.latent_dim+cfg.hidden_dim,hidden_dim=cfg.hidden_dim,
+                                                image_width=cfg.image_width,image_height=cfg.image_height)
             state_emb_dim = 64
             self.state_encoder = nn.Sequential(nn.Linear(cfg.state_dim,64,bias=False),
                                             nn.LayerNorm(64),nn.SiLU())
+            depth_flatten_dim = self.image_encoder.flatten_dim
         else:
             self.state_encoder = nn.Identity()
             state_emb_dim = 10
-
-        depth_flatten_dim = cfg.image_width*cfg.image_width*4
-        origin_width = cfg.image_width
-        if origin_width>4:
-            depth_flatten_dim//=2
-            origin_width//=2
-        if cfg.only_state:
             depth_flatten_dim = 0
+
+
         self.inp_proj = nn.Sequential(
             nn.Linear(state_emb_dim + depth_flatten_dim + cfg.hidden_dim,cfg.latent_dim),
             nn.LayerNorm(cfg.latent_dim),
@@ -290,12 +313,11 @@ class DepthStateModel(nn.Module):
         assert latent.ndim==act.ndim==2
         prior_sample,_,hidden = self.sample_with_prior(latent,act,hidden)
         flattend_prior_sample = self.flatten(prior_sample)
-        next_state,next_perception = self.decode(flattend_prior_sample,hidden)
         reward_logit = self.reward_predictor(flattend_prior_sample,hidden)
         end_logit = self.end_predictor(flattend_prior_sample,hidden)
         pred_reward = self.symlogtwohotloss.decode(reward_logit)
         pred_end = end_logit>0
-        return next_state,prior_sample,pred_reward,pred_end,hidden
+        return prior_sample,pred_reward,pred_end,hidden
 
     def compute_loss(self,states:Tensor, depth_images:Tensor, actions:Tensor, rewards:Tensor, terminations:Tensor):
         b,l,d = states.shape
@@ -331,7 +353,7 @@ class DepthStateModel(nn.Module):
 
         rec_states = torch.stack(rec_states,dim=1)
         if rec_image!=None:
-            rec_images = torch.stack(rec_images,dim=1)
+            rec_images = torch.stack(rec_images,dim=1).unsqueeze(2)
         post_logits = torch.stack(post_logits,dim=1)
         prior_logits = torch.stack(prior_logits,dim=1)
         reward_logits = torch.stack(reward_logits,dim=1)

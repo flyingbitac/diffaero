@@ -16,33 +16,31 @@ from quaddif.dynamics.pointmass import point_mass_quat
 
 @torch.no_grad()
 def collect_imagine_trj(env:DepthStateEnv,agent:ActorCriticAgent,cfg):
-    feats,rewards,ends,actions,states,org_samples = [],[],[],[],[],[]
+    feats,rewards,ends,actions,org_samples = [],[],[],[],[]
     imagine_length = cfg.imagine_length
-    latent,hidden,state = env.make_generator_init()
+    latent,hidden = env.make_generator_init()
     for i in range(imagine_length):
         feat = torch.cat([latent,hidden],dim=-1)
         feats.append(feat)
-        states.append(state)
         action,org_sample = agent.sample(feat)
-        _,latent,reward,end,hidden = env.step(action)
+        latent,reward,end,hidden = env.step(action)
         rewards.append(reward)
         actions.append(action)
         org_samples.append(org_sample)
         ends.append(end)
     feat = torch.cat([latent,hidden],dim=-1)
     feats.append(feat)
-    states.append(state)
     feats = torch.stack(feats,dim=1)
     actions = torch.stack(actions,dim=1)
     org_samples = torch.stack(org_samples,dim=1)
     rewards = torch.stack(rewards,dim=1)
     ends = torch.stack(ends,dim=1)
 
-    return feats,actions,rewards,ends,states,org_samples
+    return feats,actions,rewards,ends,org_samples
 
 def train_agents(agent:ActorCriticAgent,state_env:DepthStateEnv,cfg):
     trainingcfg = getattr(cfg,"actor_critic").training
-    feats,_,rewards,ends,_,org_samples = collect_imagine_trj(state_env,agent,trainingcfg)
+    feats,_,rewards,ends,org_samples = collect_imagine_trj(state_env,agent,trainingcfg)
     agent_info = agent.update(feats,org_samples,rewards,ends)
     reward_sum = rewards.sum(dim=-1).mean()
     agent_info['reward_sum'] = reward_sum.item()
@@ -79,19 +77,19 @@ class World_Agent:
         world_agent_cfg = getattr(cfg,"algo")
         world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
         world_agent_cfg.replaybuffer.num_envs = cfg.n_envs
-        world_agent_cfg.replaybuffer.state_dim = 13
+        world_agent_cfg.replaybuffer.state_dim = 10
         world_agent_cfg.actor_critic.model.device = f"cuda:{device_idx}"
         world_agent_cfg.common.device = f"cuda:{device_idx}"
         self.cfg = cfg
         self.world_agent_cfg = world_agent_cfg
         
         statemodelcfg = getattr(world_agent_cfg,"state_predictor").state_model
-        statemodelcfg.state_dim = 13
+        statemodelcfg.state_dim = 10
         actorcriticcfg = getattr(world_agent_cfg,"actor_critic").model
         actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
         buffercfg = getattr(world_agent_cfg,"replaybuffer")
-        buffercfg.state_dim = 13
+        buffercfg.state_dim = 10
         worldcfg = getattr(world_agent_cfg,"world_state_env")
         training_hyper = getattr(world_agent_cfg,"state_predictor").training
         self.training_hyper = training_hyper
@@ -127,7 +125,7 @@ class World_Agent:
         self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden,True)[2]
         return action,None
 
-    def step(self,cfg,env,obs,on_step_cb=None):
+    def step(self,cfg,env,obs,logger):
         policy_info = {}
         with torch.no_grad():
             if type(obs)!=torch.Tensor:

@@ -56,18 +56,15 @@ class DepthStateEnv:
         latent = self.state_model.flatten(latent)
         self.latent = latent
         self.hidden = hidden
-        self.drone_state,self.drone_perception = self.state_model.decode(latent,hidden)
-        
-        return latent,hidden,self.drone_state
+        return latent,hidden
         
     @torch.no_grad()
     def step(self,action:Tensor):
         assert action.ndim==2
-        next_state,prior_sample,pred_reward,pred_end,hidden=self.state_model.predict_next(latent=self.latent,
+        prior_sample,pred_reward,pred_end,hidden=self.state_model.predict_next(latent=self.latent,
                                                                                           act=action,
                                                                                           hidden=self.hidden)
         flattened_sample = prior_sample.view(*prior_sample.shape[:-2],-1)
         self.latent = flattened_sample
-        self.drone_state = next_state
         self.hidden = hidden
-        return next_state,flattened_sample,pred_reward,pred_end,hidden
+        return flattened_sample,pred_reward,pred_end,hidden

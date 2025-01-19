@@ -5,7 +5,8 @@ import torch
 
 @dataclass
 class buffercfg:
-    perception_dim: int
+    perception_width: int
+    perception_height: int
     state_dim: int
     action_dim: int
     num_envs: int
@@ -21,7 +22,7 @@ class ReplayBuffer():
         device = torch.device(cfg.device)
         if cfg.store_on_gpu:
             self.state_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.state_dim), dtype=torch.float32, device=device, requires_grad=False)
-            self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_dim, cfg.perception_dim), dtype=torch.float32, device=device, requires_grad=False)
+            self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_height, cfg.perception_width), dtype=torch.float32, device=device, requires_grad=False)
             self.action_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs,cfg.action_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)

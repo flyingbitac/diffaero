@@ -48,7 +48,10 @@ def learn(
     for i in pbar:
         t1 = pbar._time()
         env.detach()
-        state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
+        if cfg.algo.name != 'world':
+            state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
+        else:
+            state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, logger)
         l_episode = (env_info["stats"]["l"] - 1) * env.dt
         success_rate = env_info["stats"]["success_rate"]
         arrive_time = env_info["stats"]["arrive_time"]
