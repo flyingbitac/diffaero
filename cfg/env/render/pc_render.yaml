@@ -2,8 +2,11 @@ name: position_control_renderer
 
 headless: ${headless}
 n_envs: ${env.n_envs}
-env_spacing: 1
+dt: ${env.dt}
+render_n_envs: 256
+env_spacing: 2
 physics_engine: "physx"
+ground_plane: True
 
 sim:
   dt: ${env.dt}

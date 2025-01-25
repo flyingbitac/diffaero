@@ -4,7 +4,6 @@ import random
 import sys
 sys.path.append('..')
 
-import isaacgym
 import torch
 import torchvision
 import numpy as np

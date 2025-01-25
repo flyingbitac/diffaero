@@ -6,6 +6,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         'torch>=2.0.0',
+        'taichi',
         'numpy',
         'gym',
         'matplotlib',
@@ -17,7 +18,6 @@ setup(
         'tensorboardX',
         'wandb',
         'opencv-python',
-        'isaacgym',
         'welford_torch',
         'opencv-python',
         'moviepy',

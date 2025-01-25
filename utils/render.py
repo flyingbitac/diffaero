@@ -1,487 +1,386 @@
-from typing import Optional, Tuple, List
-import sys
-import os
-from collections import defaultdict
+from typing import Optional, Tuple
 
 import torch
-from isaacgym import gymapi, gymtorch
+from torch import Tensor
+from pytorch3d import transforms as T
+import taichi as ti
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from quaddif import QUADDIF_ROOT_DIR
-from quaddif.utils.assets import ObstacleManager, create_ball, create_cube
+from quaddif.utils.assets import ObstacleManager
+
+@torch.jit.script
+def torch2ti(tensor_from_torch: Tensor):
+    # assert tensor_from_torch.size(-1) == 3
+    x, y, z = tensor_from_torch.unbind(dim=-1)
+    return torch.stack([x, z, -y], dim=-1)
+
+@torch.jit.script
+def ti2torch(tensor_from_ti: Tensor):
+    # assert tensor_from_ti.size(-1) == 3
+    x, y, z = tensor_from_ti.unbind(dim=-1)
+    return torch.stack([x, -z, y], dim=-1)
+
+faces = torch.tensor([
+    [0, 1, 2, 3],  # front
+    [4, 5, 6, 7],  # back
+    [0, 1, 5, 4],  # bottom
+    [2, 3, 7, 6],  # top
+    [1, 2, 6, 5],  # right
+    [0, 3, 7, 4],  # left
+], dtype = torch.int32)
+
+INDICES_TORCH = torch.stack([
+    faces[:, [0, 1, 2]],
+    faces[:, [2, 3, 0]],
+], dim=-2).flatten()
+
+def add_box(xyz: Tensor, lwh: Tensor, rpy: Tensor, color: Tensor):
+    # type: (Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
+    l, w, h = lwh.unbind(dim=-1)
+    n_boxes = torch.cumprod(torch.tensor(xyz.shape[:-1]), dim=0)[-1].item()
+    n_boxes = xyz[..., 0].numel()
+    centered_vertices_tensor = torch.stack([
+        torch.stack([-l/2, -w/2, -h/2], dim=-1),
+        torch.stack([+l/2, -w/2, -h/2], dim=-1),
+        torch.stack([+l/2, +w/2, -h/2], dim=-1),
+        torch.stack([-l/2, +w/2, -h/2], dim=-1),
+        torch.stack([-l/2, -w/2, +h/2], dim=-1),
+        torch.stack([+l/2, -w/2, +h/2], dim=-1),
+        torch.stack([+l/2, +w/2, +h/2], dim=-1),
+        torch.stack([-l/2, +w/2, +h/2], dim=-1),
+    ], dim=-2)
+    rotation_matrix = T.euler_angles_to_matrix(rpy, "XYZ")
+    rotated_centered_vertices_tensor = torch.matmul(centered_vertices_tensor, rotation_matrix.transpose(-2, -1))
+    rotated_vertices_tensor = rotated_centered_vertices_tensor + xyz.unsqueeze(-2)
+    indices_torch = INDICES_TORCH.unsqueeze(0).expand(n_boxes, -1)
+    indices_torch = indices_torch + torch.arange(0, 8 * n_boxes, 8, dtype=torch.int32).unsqueeze(-1)
+    while color.dim() < rotated_vertices_tensor.dim() - 1:
+        color = color.unsqueeze(0)
+    color = color.unsqueeze(-2).expand_as(rotated_vertices_tensor)
+    return rotated_vertices_tensor, indices_torch, color
 
 class BaseRenderer:
-    def __init__(self, cfg: DictConfig, device):
-        """Initialize the simulation."""
-        self.cfg = cfg
-        self.gym = gymapi.acquire_gym()
-        # create gymapi.simParams struct and fill its attributes
-        self.sim_params = get_sim_params(cfg.sim)
-        self.dt = self.sim_params.dt
-        
-        physics_engines = {'physx': gymapi.SIM_PHYSX, 'flex': gymapi.SIM_FLEX}
-        assert cfg.physics_engine.lower() in physics_engines.keys(), "Invalid physics engine"
-        self.physics_engine = physics_engines[cfg.physics_engine.lower()]
-        
-        self.headless = cfg.headless
-        self.n_envs = cfg.n_envs
-
-        self.sim_device_id = device
-        # graphics device for rendering viewer and cameras, -1 for no rendering
-        enable_camera_sensors = 'camera' in dict(cfg).keys()
-        if self.headless and not enable_camera_sensors:
-            self.graphics_device_id = -1
+    def __init__(self, cfg: DictConfig, device: torch.device, z_ground_plane: Optional[float] = None):
+        # ti.init(arch=ti.vulkan)
+        if "cpu" in str(device):
+            print("Using CPU to render the GUI.")
+            ti.init(arch=ti.cpu)
         else:
-            self.graphics_device_id = device
-        self.device = torch.device(f"cuda:{device}")
+            print("Using GPU to render the GUI.")
+            ti.init(arch=ti.gpu)
+        self.n_envs: int = min(cfg.n_envs, cfg.render_n_envs)
+        self.L: int = cfg.env_spacing
+        self.ground_plane: bool = cfg.ground_plane
+        self.dt = cfg.dt
+        self.enable_rendering: bool = True
+        self.device = device
         
-        # create simulation handle
-        self.actor_handles = []
-        self.env_handles = []
-        self.sim = self.gym.create_sim(
-            self.sim_device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
+        N = torch.ceil(torch.sqrt(torch.tensor(self.n_envs, device=self.device))).int()
+        assert N * N >= self.n_envs
+        x = y = torch.arange(N, device=self.device, dtype=torch.float32) * self.L
+        xy = torch.stack(torch.meshgrid(x, y, indexing="ij"), dim=-1).reshape(-1, 2)
+        xy -= (N-1) * self.L / 2
+        xyz = torch.cat([xy, torch.zeros_like(xy[:, :1])], dim=-1)
+        self.env_origin = xyz[:self.n_envs]
         
-        # create simulation environment
-        self.create_envs()
+        n_boxes_per_drone = 4 # use 4 boxes to represent a drone simply
+        self.drone_mesh_dict = {
+            "vertices":         ti.Vector.field(3, ti.f32, shape=(self.n_envs *  8*n_boxes_per_drone)),
+            "indices":                 ti.field(   ti.i32, shape=(self.n_envs * 36*n_boxes_per_drone)),
+            "per_vertex_color": ti.Vector.field(3, ti.f32, shape=(self.n_envs *  8*n_boxes_per_drone))
+        }
+        self.drone_vertices_tensor = torch.empty(self.n_envs, 32, 3, device=self.device)
+        self._init_drone_model()
         
-        # prepare simulation handle ready to run
-        self.gym.prepare_sim(self.sim)
-
-        # allocate buffers        
-        self._root_tensor = self.gym.acquire_actor_root_state_tensor(self.sim)
-        self.root_states = gymtorch.wrap_tensor(self._root_tensor).view(self.n_envs, -1, 13)
-        self.drone_states = self.root_states[:, 0]
-        self.env_assets_states = self.root_states[:, 1:]
-
-        self.drone_positions = self.drone_states[...,  0: 3]
-        self.drone_quats     = self.drone_states[...,  3: 7]
-        self.drone_linvels   = self.drone_states[...,  7:10]
-        self.drone_angvels   = self.drone_states[..., 10:13]
+        if self.ground_plane:
+            self.ground_plane_size: float = N.item() * self.L
+            n_ground_faces = self.ground_plane_size * self.ground_plane_size
+            n_ground_vertices = n_ground_faces * 4
+            n_ground_indices = n_ground_faces * 6
+            self.ground_plane_mesh_dict = {
+                "vertices":         ti.Vector.field(3, ti.f32, shape=n_ground_vertices),
+                "indices":                 ti.field(   ti.i32, shape=n_ground_indices),
+                "per_vertex_color": ti.Vector.field(3, ti.f32, shape=n_ground_vertices)
+            }
+            z_ground_plane = -self.L - 0.1 if z_ground_plane is None else z_ground_plane
+            self._init_ground_plane(z_ground_plane=z_ground_plane)
         
-        self._contact_force_tensor = self.gym.acquire_net_contact_force_tensor(self.sim)
-        self.contact_forces: torch.Tensor = gymtorch.wrap_tensor(self._contact_force_tensor).view(self.n_envs, -1, 3)
-        # self.drone_contact_forces = self.contact_forces[:, :self.robot_num_bodies].sum(dim=1)
-
-        self.gym.refresh_actor_root_state_tensor(self.sim)
-        self.gym.refresh_net_contact_force_tensor(self.sim)
-        
-        robot_body_property = self.gym.get_actor_rigid_body_properties(self.env_handles[0], self.actor_handles[0])
-        # calculate mass and inertia
-        robot_mass = sum([prop.mass for prop in robot_body_property])
-        # ignore the four propellers when calculating inertia matrix
-        self.mass_inertia = torch.tensor([
-            robot_mass,
-            robot_body_property[0].inertia.x.x,
-            robot_body_property[0].inertia.y.y,
-            robot_body_property[0].inertia.z.z
-        ], device=self.device)
-        print("Total robot mass: ", robot_mass, "kg")
-        print("Inertia matrix: diag", self.mass_inertia[1:].cpu().numpy())
-        print("Successfully created environment.")
-
-        self.enable_viewer_sync = not self.headless
-        self.viewer = None
-
-        # create viewer
-        # if running with a viewer, set up keyboard shortcuts and camera
-        if self.headless == False:
-            # subscribe to keyboard events
-            self.viewer = self.gym.create_viewer(
-                self.sim, gymapi.CameraProperties())
-            cam_pos_x, cam_pos_y, cam_pos_z = self.cfg.viewer.pos
-            cam_target_x, cam_target_y, cam_target_z = self.cfg.viewer.lookat
-            cam_pos = gymapi.Vec3(cam_pos_x, cam_pos_y, cam_pos_z)
-            cam_target = gymapi.Vec3(cam_target_x, cam_target_y, cam_target_z)
-            self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
-            
-            self.gym.subscribe_viewer_keyboard_event(
-                self.viewer, gymapi.KEY_ESCAPE, "exit")
-            self.gym.subscribe_viewer_keyboard_event(
-                self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
-            self.gym.subscribe_viewer_keyboard_event(
-                self.viewer, gymapi.KEY_R, "reset_all")
-
-        # optimization flags for pytorch JIT
-        torch._C._jit_set_profiling_mode(False)
-        torch._C._jit_set_profiling_executor(False)
+        self.gui_states = {
+            "reset_all": False,
+            "enable_lightsource": True,
+            "brightness": 1.0,
+            "display_basis": False,
+            "display_groundplane": True,
+        }
+        self._init_viewer()
     
-    def create_envs(self):
-        """Override this function to create simulation environment."""
-        raise NotImplementedError
+    def _init_viewer(self):
+        end_points = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        self.axis_lines = [(ti.Vector.field(3, ti.f32, shape=2), tuple(end_points[i])) for i in range(3)]
+        for i, end_point in enumerate(end_points):
+            self.axis_lines[i][0].from_torch(torch2ti(torch.tensor([
+                [0, 0, 0],
+                end_point
+            ], dtype=torch.float32, device=self.device)))
+        
+        self.gui_window = ti.ui.Window(name='Renderer Running at', res=(1280, 900), fps_limit=2*int(1/self.dt), pos=(150, 150))
+        self.gui_handle = self.gui_window.get_gui()
+        self.gui_scene = self.gui_window.get_scene()
+        self.gui_camera = ti.ui.make_camera()
+        env_bound = self.env_origin.min().item()
+        self.gui_camera.position(env_bound-3*self.L, 5*self.L, env_bound-5*self.L)  # x, y, z
+        self.gui_camera.lookat(0, -2*self.L, 0)
+        self.gui_camera.up(0, 1, 0)
+        self.gui_camera.projection_mode(ti.ui.ProjectionMode.Perspective)
+    
+    def _init_ground_plane(self, z_ground_plane: float):
+        for i, j in ti.ndrange(self.ground_plane_size, self.ground_plane_size):
+            self.ground_plane_size = self.ground_plane_size
+            idx = (i * self.ground_plane_size + j)
+            vertex_base = idx * 4  # 4 vertices per face
 
-    def create_ground_plane(self, height=0.):
-        plane_params = gymapi.PlaneParams()
-        plane_params.distance = height
-        plane_params.dynamic_friction = 1.
-        plane_params.static_friction = 1.
-        plane_params.restitution = 0.8
-        plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
-        self.gym.add_ground(self.sim, plane_params)
+            x0 = i - self.ground_plane_size / 2
+            z0 = j - self.ground_plane_size / 2
+            x1 = x0 + 1
+            z1 = z0 + 1
 
-    def reset_idx(self, env_ids: torch.Tensor):
-        """Reset selected environments"""
+            # coordinates of the 4 vertices of the face
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 0] = ti.Vector([x0, z_ground_plane, z0])
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 1] = ti.Vector([x1, z_ground_plane, z0])
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 2] = ti.Vector([x0, z_ground_plane, z1])
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 3] = ti.Vector([x1, z_ground_plane, z1])
+
+            # assign color to the vertices of the face
+            color = 0.8 if (i + j) % 2 == 0 else 0.2
+            for k in range(4):
+                self.ground_plane_mesh_dict["per_vertex_color"][vertex_base + k] = ti.Vector([color, color, color])
+
+            # vertex indices of the two triangles of the face
+            index_base = idx * 6
+            self.ground_plane_mesh_dict["indices"][index_base + 0] = vertex_base + 0
+            self.ground_plane_mesh_dict["indices"][index_base + 1] = vertex_base + 1
+            self.ground_plane_mesh_dict["indices"][index_base + 2] = vertex_base + 2
+            self.ground_plane_mesh_dict["indices"][index_base + 3] = vertex_base + 1
+            self.ground_plane_mesh_dict["indices"][index_base + 4] = vertex_base + 3
+            self.ground_plane_mesh_dict["indices"][index_base + 5] = vertex_base + 2
+    
+    def _create_envs(self):
         raise NotImplementedError
     
-    def step(self, state: torch.Tensor):
+    def _init_drone_model(self):
+        l, L = 0.05, 0.2
+        D = (L + l) / 2 / 2**0.5
+        vertices_tensor, indices_tensor, color_tensor = add_box(
+            xyz=torch.tensor([
+                [ D,  D, 0],
+                [-D,  D, 0],
+                [ D, -D, 0],
+                [-D, -D, 0]], device=self.device
+            ).unsqueeze(0).expand(self.n_envs, -1, -1),
+            lwh=torch.tensor([
+                [L, l, l],
+                [l, L, l],
+                [l, L, l],
+                [L, l, l]], device=self.device
+            ).unsqueeze(0).expand(self.n_envs, -1, -1),
+            rpy=torch.tensor([
+                [0, 0, torch.pi/4]
+            ], device=self.device).unsqueeze(0).expand(self.n_envs, 4, -1),
+            color=torch.tensor([
+                [0.8867, 0.9219, 0.1641],
+                [0.5156, 0.1016, 0.5391],
+                [0.8867, 0.9219, 0.1641],
+                [0.5156, 0.1016, 0.5391]], device=self.device
+            ).unsqueeze(0).expand(self.n_envs, -1, -1)
+        )
+        self.drone_vertices_tensor.copy_(vertices_tensor.reshape(self.n_envs, -1, 3))
+        self.drone_mesh_dict["vertices"].from_torch(torch2ti(self.drone_vertices_tensor.flatten(end_dim=-2)))
+        self.drone_mesh_dict["indices"].from_torch(indices_tensor.flatten())
+        self.drone_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
+    
+    def _update_drone_model(
+        self,
+        pos: Tensor,      # [n_envs, 3]
+        quat_xyzw: Tensor # [n_envs, 4]
+    ):
+        rotation_matrix = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
+        drone_vertices_tensor = torch.bmm(self.drone_vertices_tensor, rotation_matrix.transpose(-2, -1))
+        drone_vertices_tensor = drone_vertices_tensor + pos.unsqueeze(-2) + self.env_origin.unsqueeze(-2)
+        self.drone_mesh_dict["vertices"].from_torch(torch2ti(drone_vertices_tensor.flatten(end_dim=-2)))
+    
+    def step(self, state: Tensor):
         return NotImplementedError
     
-    def simulation_step(self):
-        self.gym.simulate(self.sim)
-        # NOTE: as per the isaacgym docs, self.gym.fetch_results must be called after self.gym.simulate,
-        # but not having it here seems to work fine it is called in the render function.
-        # Fetch results
-        self.gym.fetch_results(self.sim, True)
-        # Copy the state tensors from physics engine to buffers in vram
-        self.gym.refresh_actor_root_state_tensor(self.sim)
-        self.gym.refresh_net_contact_force_tensor(self.sim)
-
-    def render(self, sync_frame_time=True):
-        # self.gym.fetch_results(self.sim, True) # use only when device is not "cpu"
-        # Step graphics. Skipping this causes the onboard robot camera tensors to not be updated
-        self.gym.step_graphics(self.sim)
-        reset_all = False
-        if self.headless: return reset_all
+    def _render_subwindow(self):
+        self.gui_states["reset_all"] = False
+        with self.gui_handle.sub_window("Simulation Settings", x=0.02, y=0.02, height=0.1, width=0.25) as sub_window:
+            self.gui_states["reset_all"] = sub_window.button("Reset All")
+            if sub_window.button("Exit"): raise KeyboardInterrupt
         
-        # if viewer exists update it based on requirement
-        if self.viewer:
-            # check for window closed
-            if self.gym.query_viewer_has_closed(self.viewer):
-                self.gym.destroy_viewer(self.viewer)
-                self.gym.destroy_sim(self.sim)
-                sys.exit()
-
-            # check for keyboard events
-            for evt in self.gym.query_viewer_action_events(self.viewer):
-                if evt.action == "exit" and evt.value > 0:
-                    self.gym.destroy_viewer(self.viewer)
-                    self.gym.destroy_sim(self.sim)
-                    sys.exit()
-                elif evt.action == "toggle_viewer_sync" and evt.value > 0:
-                    self.enable_viewer_sync = not self.enable_viewer_sync
-                elif evt.action == "reset_all" and evt.value > 0:
-                    reset_all = True
-
-            # update viewer based on requirement
-            if self.enable_viewer_sync:
-                self.gym.draw_viewer(self.viewer, self.sim, True)
-                if sync_frame_time:
-                    self.gym.sync_frame_time(self.sim)
-            else:
-                self.gym.poll_viewer_events(self.viewer)
-        return reset_all
+        color = (0, 0, 1)
+        with self.gui_handle.sub_window("Render Settings", x=0.02, y=0.14, height=0.25, width=0.25) as sub_window:
+            if sub_window.button("Pause Rendering"):
+                self.enable_rendering = False
+                sub_window.text("Rendering paused. Press \"V\" to resume.")
+                tqdm.write("Rendering paused. Press \"V\" to resume.")
+            self.gui_states["enable_lightsource"] = sub_window.checkbox("Enable Light Source", self.gui_states["enable_lightsource"])
+            if self.gui_states["enable_lightsource"]:
+                self.gui_states["brightness"] = sub_window.slider_float("Brightness", self.gui_states["brightness"], minimum=0, maximum=1)
+            self.gui_states["display_basis"] = sub_window.checkbox("Display Axis Basis", self.gui_states["display_basis"])
+            if self.ground_plane:
+                self.gui_states["display_groundplane"] = sub_window.checkbox("Display Ground Plane", self.gui_states["display_groundplane"])
+            # color = sub_window.color_edit_3("name2", color)
     
-    def close(self):
-        self.gym.destroy_viewer(self.viewer)
-        self.gym.destroy_sim(self.sim)
+    def render(self):
+        if self.enable_rendering:
+            
+            self.gui_camera.track_user_inputs(
+                self.gui_window,
+                movement_speed=0.1,
+                pitch_speed=4,
+                yaw_speed=4,
+                hold_key=ti.ui.RMB)
+            
+            self._render_subwindow()
+        
+            # render ground plane
+            if self.ground_plane and self.gui_states["display_groundplane"]:
+                self.gui_scene.mesh(**self.ground_plane_mesh_dict)
+            
+            # render drones
+            self.gui_scene.mesh(**self.drone_mesh_dict)
+            
+            # render external obstacles
+            self._render_obstacles()
+            
+            # render lines
+            self._render_lines()
+            
+            # set illumination
+            if self.gui_states["enable_lightsource"]:
+                self.gui_scene.point_light(pos=(0, 50, 0), color=(self.gui_states["brightness"] for _ in range(3)))
+            # self.gui_scene.ambient_light(color=(self.gui_states["brightness"]*0.5 for _ in range(3)))
+            self.gui_scene.ambient_light(color=(0.5, 0.5, 0.5))
+            
+            self.gui_scene.set_camera(self.gui_camera)
+            canvas = self.gui_window.get_canvas()
+            canvas.scene(self.gui_scene)
+            self.gui_window.show()
+        
+        if self.gui_window.get_event(ti.ui.PRESS):
+            if self.gui_window.event.key == 'v':
+                self.enable_rendering = not self.enable_rendering
+                if not self.enable_rendering:
+                    tqdm.write("Rendering paused. Press \"V\" to resume.")
+            if self.gui_window.event.key == 'r':
+                self.gui_states["reset_all"] = True
+        if self.gui_window.is_pressed(ti.ui.ESCAPE):
+            raise KeyboardInterrupt
+    
+    def _render_lines(self):
+        if self.gui_states["display_basis"]:
+            for line, color in self.axis_lines:
+                self.gui_scene.lines(line, color=color, width=5.0)
+    
+    def _render_obstacles(self):
+        pass
 
 
 class PositionControlRenderer(BaseRenderer):
-    def __init__(self, cfg: DictConfig, device):
-        self.env_spacing = cfg.env_spacing
+    def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
-        self.target_positions = torch.zeros_like(self.drone_positions)
-        self.total_dists = torch.zeros_like(self.drone_positions[..., 0])
-        self.dist2target = torch.zeros(self.n_envs, device=self.device)
     
-    def create_envs(self):
-        print("Creating environment...")
-        asset_path = os.path.join(QUADDIF_ROOT_DIR, self.cfg.robot_asset.file)
-        drone_asset_path = os.path.join(QUADDIF_ROOT_DIR, self.cfg.robot_asset.file)
-        print("Loading asset:", drone_asset_path)
-        drone_asset_root = os.path.dirname(drone_asset_path)
-        drone_asset_file = os.path.basename(drone_asset_path)
-
-        drone_asset_options = get_asset_options(self.cfg.robot_asset)
-
-        robot_asset = self.gym.load_asset(
-            self.sim, drone_asset_root, drone_asset_file, drone_asset_options)
-
-        start_pose = gymapi.Transform()
-        pos = torch.tensor([0, 0, 0], device=self.device)
-        start_pose.p = gymapi.Vec3(*pos)
-        
-        env_lower = gymapi.Vec3(
-            -self.env_spacing,
-            -self.env_spacing,
-            -self.env_spacing)
-        env_upper = gymapi.Vec3(
-            self.env_spacing,
-            self.env_spacing,
-            self.env_spacing)
-        
-        pbar = tqdm(range(self.n_envs), unit="env")
-        for i in pbar:
-            pbar.set_description(f"Creating env {i+1}")
-            
-            # create env instance
-            env_handle = self.gym.create_env(
-                self.sim, env_lower, env_upper, int(self.n_envs ** 0.5))
-            self.env_handles.append(env_handle)
-            
-            # create drone instance
-            actor_handle = self.gym.create_actor(
-                env_handle, # env
-                robot_asset, # asset
-                start_pose, # pose
-                self.cfg.robot_asset.name, # name
-                i, # group
-                self.cfg.robot_asset.collision_mask, # filter
-                0 # segmentation ID
-            )
-            self.actor_handles.append(actor_handle)
-            
-    def step(self, drone_state: torch.Tensor):
-        if self.enable_viewer_sync:
-            self.drone_states.copy_(drone_state)
-            self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
-            self.simulation_step()
-
+    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor):
+        if self.enable_rendering:
+            self._update_drone_model(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
     def __init__(
         self,
         cfg: DictConfig,
-        device: int,
+        device: torch.device,
         obstacle_manager: ObstacleManager,
-        z_ground_plane: Optional[float] = None,
-        enable_camera: bool = False
+        z_ground_plane: float
     ):
-        self.env_spacing = cfg.env_spacing
-        self.enable_camera = enable_camera
-        if self.enable_camera:
-            self.camera_cfg = cfg.camera
-            self.camera_handles = []
-            self.camera_tensor_list = []
-        self.record_video = cfg.record_video
-        if self.record_video:
-            self.rgb_camera_cfg = cfg.rgb_camera
-            self.rgb_camera_handles = []
-            self.rgb_camera_tensor_list = []
-        self.env_asset_handles = defaultdict(list)
-        self.n_obstacles = cfg.env_asset.n_assets
-        self.z_ground_plane = z_ground_plane
+        super().__init__(cfg, device, z_ground_plane=z_ground_plane)
         self.obstacle_manager = obstacle_manager
-        super().__init__(cfg, device)
-        self.target_pos = torch.zeros_like(self.drone_positions)
-        self.asset_positions = torch.empty(self.n_envs, self.n_obstacles, 3, device=self.device)
-        self.asset_quats = torch.empty(self.n_envs, self.n_obstacles, 4, device=self.device)
+        self.cube_color = [0.8, 0.3, 0.1]
+        self.sphere_color = [0.8, 0.1, 0.3]
         
-    @staticmethod
-    def generate_env_assets(r_spheres, lwh_cubes):
-        # type: (torch.Tensor, torch.Tensor) -> List[str]
-        Ls, Ws, Hs = lwh_cubes.unbind(dim=-1)
-        selected_files = [create_ball(r.item()) for r in r_spheres] + \
-                         [create_cube(l.item(), w.item(), h.item()) for l, w, h in zip(Ls, Ws, Hs)]
-        return selected_files
-    
-    def create_envs(self):
-        print("Creating environment...")
-        if self.z_ground_plane is not None:
-            self.create_ground_plane(-self.z_ground_plane)
-            
-        drone_asset_path = os.path.join(QUADDIF_ROOT_DIR, self.cfg.robot_asset.file)
-        print("Loading asset:", drone_asset_path)
-        drone_asset_root = os.path.dirname(drone_asset_path)
-        drone_asset_file = os.path.basename(drone_asset_path)
-        drone_asset_options = get_asset_options(self.cfg.robot_asset)
-        robot_asset = self.gym.load_asset(
-            self.sim, drone_asset_root, drone_asset_file, drone_asset_options)
-        self.robot_num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
-        self.bodies_per_env = self.robot_num_bodies
+        self.n_cubes = self.obstacle_manager.n_cubes
+        self.cube_mesh_dict = {
+            "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_cubes *  8)),
+            "indices":                  ti.field(   ti.i32, shape=(self.n_envs * self.n_cubes * 36)),
+            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_cubes *  8))
+        }
+        self.cube_vertices_tensor = torch.empty(self.n_envs, self.n_cubes, 8, 3, device=self.device)
         
-        env_asset_options = get_asset_options(self.cfg.env_asset)
-
-        start_pose = gymapi.Transform()
-        pos = torch.tensor([0, 0, 0], device=self.device)
-        start_pose.p = gymapi.Vec3(*pos)
+        self.n_spheres = self.obstacle_manager.n_spheres
+        self.sphere_mesh_dict = {
+            "centers":           ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_spheres)),
+            "per_vertex_radius":        ti.field(   ti.f32, shape=(self.n_envs * self.n_spheres)),
+            "radius": 0.,
+            "color": tuple(self.sphere_color)
+        }
+        self.sphere_center_tensor = torch.empty(self.n_envs, self.n_spheres, 3, device=self.device)
         
-        env_lower = gymapi.Vec3(
-            -self.env_spacing,
-            -self.env_spacing,
-            -self.env_spacing)
-        env_upper = gymapi.Vec3(
-            self.env_spacing,
-            self.env_spacing,
-            self.env_spacing)
+        self._init_obstacles()
         
-        if self.enable_camera:
-            camera_props, local_transform = get_camera_properties(self.camera_cfg)
-        if self.record_video:
-            rgb_camera_props, rgb_local_transform = get_camera_properties(self.rgb_camera_cfg)
+        self.target_line_vertices = ti.Vector.field(3, ti.f32, shape=(self.n_envs * 2))
+        self.target_line_colors   = ti.Vector.field(3, ti.f32, shape=(self.n_envs * 2))
+        self.target_line_color_tensor = torch.empty(self.n_envs, 3, device=self.device)
+    
+    def _init_obstacles(self):
+        vertices_tensor, indices_tensor, color_tensor = add_box(
+            xyz=torch.zeros(self.n_envs, self.n_cubes, 3, device=self.device),
+            lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
+            rpy=torch.zeros(self.n_envs, self.n_cubes, 3, device=self.device),
+            color=torch.tensor([[self.cube_color]], device=self.device).expand(self.n_envs, self.n_cubes, -1)
+        )
+        self.cube_vertices_tensor.copy_(vertices_tensor)
+        self.cube_mesh_dict["vertices"].from_torch(torch2ti(self.cube_vertices_tensor.flatten(end_dim=-2)))
+        self.cube_mesh_dict["indices"].from_torch(indices_tensor.flatten())
+        self.cube_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
         
-        pbar = tqdm(range(self.n_envs), unit="env")
-        for i in pbar:
-            pbar.set_description(f"Creating env {i+1}")
-            
-            # create env instance
-            env_handle = self.gym.create_env(
-                self.sim, env_lower, env_upper, int(self.n_envs ** 0.5))
-            self.env_handles.append(env_handle)
-            
-            # create drone instance
-            actor_handle = self.gym.create_actor(
-                env_handle, # env
-                robot_asset, # asset
-                start_pose, # pose
-                self.cfg.robot_asset.name, # name
-                i, # group
-                self.cfg.robot_asset.collision_mask, # filter
-                0 # segmentation ID
-            )
-            self.actor_handles.append(actor_handle)
-            
-            if self.enable_camera:
-                # create camera
-                cam_handle = self.gym.create_camera_sensor(env_handle, camera_props)
-                self.gym.attach_camera_to_body(cam_handle, env_handle, actor_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
-                self.camera_handles.append(cam_handle)
-                cam_type = gymapi.IMAGE_DEPTH # gymapi.IMAGE_DEPTH or gymapi.IMAGE_COLOR
-                _camera_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_handle, cam_handle, cam_type)
-                camera_tensor: torch.Tensor = gymtorch.wrap_tensor(_camera_tensor)
-                if camera_tensor.ndim < 3:
-                    camera_tensor = camera_tensor.unsqueeze(0)
-                self.camera_tensor_list.append(camera_tensor)
-            
-            if self.record_video:
-                # create camera
-                rgb_cam_handle = self.gym.create_camera_sensor(env_handle, rgb_camera_props)
-                self.gym.attach_camera_to_body(rgb_cam_handle, env_handle, actor_handle, rgb_local_transform, gymapi.FOLLOW_TRANSFORM)
-                self.rgb_camera_handles.append(rgb_cam_handle)
-                cam_type = gymapi.IMAGE_COLOR # gymapi.IMAGE_DEPTH or gymapi.IMAGE_COLOR
-                _rgb_camera_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_handle, rgb_cam_handle, cam_type)
-                rgb_camera_tensor: torch.Tensor = gymtorch.wrap_tensor(_rgb_camera_tensor)
-                self.rgb_camera_tensor_list.append(rgb_camera_tensor)
-            
-            # create environment assets
-            env_asset_list = self.generate_env_assets(
-                r_spheres=self.obstacle_manager.r_spheres[i],
-                lwh_cubes=self.obstacle_manager.lwh_cubes[i])
-            for j, path in enumerate(env_asset_list):
-                env_asset_root = os.path.dirname(path)
-                env_asset_file = os.path.basename(path)
-                env_asset = self.gym.load_asset(self.sim, env_asset_root, env_asset_file, env_asset_options)
-                if i == 0:
-                    self.bodies_per_env += self.gym.get_asset_rigid_body_count(env_asset)
-                env_asset_handle = self.gym.create_actor(
-                    env_handle,
-                    env_asset,
-                    start_pose, 
-                    "env_asset_"+str(i*self.n_obstacles+j),
-                    i,
-                    self.cfg.env_asset.collision_mask,
-                    self.cfg.env_asset.segmentation_id
-                )
-                self.env_asset_handles[i].append(env_asset_handle)
-                color = [1.0, 0.35, 0.35] if j < self.n_obstacles else [0.5] * 3
-                self.gym.set_rigid_body_color(env_handle, env_asset_handle, 0, gymapi.MESH_VISUAL,
-                    gymapi.Vec3(*color))
+        self.sphere_center_tensor.copy_(self.obstacle_manager.p_spheres[:self.n_envs])
+        self.sphere_mesh_dict["centers"].from_torch(torch2ti(self.sphere_center_tensor.flatten(end_dim=-2)))
+        self.sphere_mesh_dict["per_vertex_radius"].from_torch(self.obstacle_manager.r_spheres[:self.n_envs].flatten())
     
-    def check_collisions(self):
-        return self.contact_forces[:, :self.robot_num_bodies].abs().sum(dim=-1).norm(dim=-1) > 0.1
+    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
+        if self.enable_rendering:
+            self._update_drone_model(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_obstacles()
+            self._update_lines(drone_pos[:self.n_envs], target_pos[:self.n_envs])
     
-    def step(self, state: torch.Tensor, target_pos: torch.Tensor):
-        if self.enable_viewer_sync or self.enable_camera or self.record_video:
-            self.root_states.copy_(state)
-            self.gym.set_actor_root_state_tensor(self.sim, self._root_tensor)
-            self.target_pos.copy_(target_pos)
-            self.simulation_step()
+    def _update_lines(self, drone_pos: Tensor, target_pos: Tensor):
+        target_line_vertices_tensor = torch.stack([drone_pos, target_pos], dim=-2) + self.env_origin.unsqueeze(-2)
+        self.target_line_vertices.from_torch(torch2ti(target_line_vertices_tensor.flatten(end_dim=-2)))
+        factory_kwargs = {"dtype": torch.float32, "device": self.device}
+        white = torch.tensor([[1., 1., 1.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        red = torch.tensor([[1., 0., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        yellow = torch.tensor([[0.7, 0.7, 0.2]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        green = torch.tensor([[0., 1., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        near_target = (drone_pos-target_pos).norm(dim=-1).lt(0.5).unsqueeze(-1).expand(-1, 3)
+        self.target_line_color_tensor = torch.where(near_target, green, white)
+        target_line_color_tensor = self.target_line_color_tensor.unsqueeze(-2).expand(-1, 2, -1)
+        self.target_line_colors.from_torch(target_line_color_tensor.flatten(end_dim=-2))
     
-    def render_camera(self) -> torch.Tensor:
-        if not self.enable_camera:
-            raise ValueError("Camera is not initialized")
-        self.gym.render_all_camera_sensors(self.sim)
-        self.gym.start_access_image_tensors(self.sim)
-        new_camera = 1 - (-torch.concat(self.camera_tensor_list, dim=0) / self.camera_cfg.far_plane).clamp(0, 1)
-        # new_camera = torch.stack(self.camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255 # for rgb camera
-        self.gym.end_access_image_tensors(self.sim)
-        return new_camera
+    def _update_obstacles(self):
+        cube_vertices_tensor = (
+            self.cube_vertices_tensor + 
+            self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
+            self.env_origin.unsqueeze(-2).unsqueeze(-2))
+        self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
+        
+        self.sphere_center_tensor.copy_(self.obstacle_manager.p_spheres[:self.n_envs])
+        sphere_center_tensor = self.sphere_center_tensor + self.env_origin.unsqueeze(-2)
+        self.sphere_mesh_dict["centers"].from_torch(torch2ti(sphere_center_tensor.flatten(end_dim=-2)))
     
-    def render_rgb_camera(self) -> torch.Tensor:
-        if not self.record_video:
-            raise ValueError("Camera is not initialized")
-        self.gym.render_all_camera_sensors(self.sim)
-        self.gym.start_access_image_tensors(self.sim)
-        # new_camera = torch.stack(self.rgb_camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2).float() / 255 # for rgb camera
-        new_camera = torch.stack(self.rgb_camera_tensor_list, dim=0)[..., :3].permute(0, 3, 1, 2) # for rgb camera
-        self.gym.end_access_image_tensors(self.sim)
-        return new_camera
+    def _render_obstacles(self):
+        self.gui_scene.mesh(**self.cube_mesh_dict)
+        self.gui_scene.particles(**self.sphere_mesh_dict)
     
-    def render(self, add_lines=True, sync_frame_time=True):
-        add_lines = add_lines and self.viewer is not None
-        if add_lines:
-            vel = torch.zeros(self.n_envs, 3, device=self.device)
-            vel[:, 0] = 1
-            # vel = self.drone_positions + T.quaternion_apply(self.drone_quats.roll(1, dims=-1), vel)
-            vel = self.drone_positions + self.drone_linvels
-            vel = torch.concat([self.drone_positions, vel], dim=-1).cpu().numpy()
-            lines = torch.concat(
-                [self.drone_positions, self.target_pos], dim=-1).cpu().numpy()
-            factory_kwargs = {"dtype": torch.float32, "device": self.device}
-            colors = torch.zeros(self.n_envs, 3, **factory_kwargs)
-            white = torch.tensor([[1., 1., 1.]], **factory_kwargs)
-            red = torch.tensor([[1., 0., 0.]], **factory_kwargs)
-            yellow = torch.tensor([[0.7, 0.7, 0.2]], **factory_kwargs)
-            green = torch.tensor([[0., 1., 0.]], **factory_kwargs)
-            colors[:] = white
-            colors[(self.drone_positions-self.target_pos).norm(dim=-1)<0.5] = green
-            for i, env in enumerate(self.env_handles):
-                self.gym.add_lines(self.viewer, env, 1, lines[i:i+1].T, colors[i:i+1].T.cpu().numpy())
-                self.gym.add_lines(self.viewer, env, 1, vel[i:i+1].T, yellow.T.cpu().numpy())
-        reset_all = super().render(sync_frame_time=sync_frame_time)
-        if add_lines:
-            self.gym.clear_lines(self.viewer)
-        return reset_all
-
-
-def get_sim_params(sim_cfg):
-    sim_params = gymapi.SimParams()
-    sim_params.substeps = sim_cfg.substeps
-    up_axises = {0: gymapi.UP_AXIS_Y, 1: gymapi.UP_AXIS_Z}
-    sim_params.up_axis = up_axises[sim_cfg.up_axis]
-    sim_params.gravity = gymapi.Vec3(
-        sim_cfg.gravity[0],
-        sim_cfg.gravity[1],
-        sim_cfg.gravity[2]
-    )
-    sim_params.use_gpu_pipeline = sim_cfg.use_gpu_pipeline
-    
-    exclude_keys = []
-    
-    physx_param = sim_cfg.physx
-    for k, v in dict(physx_param).items():
-        if hasattr(sim_params.physx, k) and v is not None:
-            setattr(sim_params.physx, k, v)
-        elif k not in exclude_keys:
-            print(f'\033[31mWarning: {k} is not a valid physx param.\033[0m')
-    return sim_params
-
-def get_asset_options(asset_cfg):
-    asset_options = gymapi.AssetOptions()
-    exclude_keys = [
-        'file', 'name', 'base_link_name', 'foot_name', 'penalize_contacts_on',
-        'terminate_after_contacts_on', 'collision_mask', 'assets_per_env', 'segmentation_id',
-        'walls', 'ground_plane', 'n_assets']
-    for k, v in dict(asset_cfg).items():
-        if hasattr(asset_options, k) and v is not None:
-            setattr(asset_options, k, v)
-        elif k not in exclude_keys:
-            print(f'\033[31mWarning: {k} is not a valid asset param.\033[0m')
-    return asset_options
-
-def get_camera_properties(camera_cfg):
-    # Set Camera Properties
-    camera_props = gymapi.CameraProperties()
-    exclude_keys = ['max_dist', 'type', 'name', 'onboard_position', 'onboard_attitude']
-    for k, v in dict(camera_cfg).items():
-        if hasattr(camera_props, k) and v is not None:
-            setattr(camera_props, k, v)
-        elif k not in exclude_keys:
-            print(f'\033[31mWarning: {k} is not a valid asset param.\033[0m')
-    # local camera transform
-    local_transform = gymapi.Transform()
-    # position of the camera relative to the body
-    local_transform.p = gymapi.Vec3(*camera_cfg.onboard_position)
-    # orientation of the camera relative to the body
-    local_transform.r = gymapi.Quat(*camera_cfg.onboard_attitude)
-    return camera_props, local_transform
+    def _render_lines(self):
+        super()._render_lines()
+        self.gui_scene.lines(self.target_line_vertices, per_vertex_color=self.target_line_colors, width=3.0)

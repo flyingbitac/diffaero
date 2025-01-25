@@ -1,5 +1,6 @@
 torch>=2.4.0
 tensordict
+taichi
 tqdm
 hydra-core
 welford_torch
