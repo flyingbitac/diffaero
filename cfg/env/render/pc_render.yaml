@@ -4,7 +4,7 @@ headless: ${headless}
 n_envs: ${env.n_envs}
 dt: ${env.dt}
 render_n_envs: 256
-env_spacing: 2
+env_spacing: 1
 physics_engine: "physx"
 ground_plane: True
 

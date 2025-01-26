@@ -94,8 +94,10 @@ class BaseRenderer:
         self._init_drone_model()
         
         if self.ground_plane:
-            self.ground_plane_size: float = N.item() * self.L
-            n_ground_faces = self.ground_plane_size * self.ground_plane_size
+            ground_plane_size = int(N.item() * self.L + self.L)
+            edge_length = 5
+            self.n_plane: int = torch.ceil(torch.tensor(ground_plane_size / edge_length)).int().item()
+            n_ground_faces = self.n_plane * self.n_plane
             n_ground_vertices = n_ground_faces * 4
             n_ground_indices = n_ground_faces * 6
             self.ground_plane_mesh_dict = {
@@ -104,7 +106,7 @@ class BaseRenderer:
                 "per_vertex_color": ti.Vector.field(3, ti.f32, shape=n_ground_vertices)
             }
             z_ground_plane = -self.L - 0.1 if z_ground_plane is None else z_ground_plane
-            self._init_ground_plane(z_ground_plane=z_ground_plane)
+            self._init_ground_plane(z_ground_plane=z_ground_plane, edge_length=edge_length)
         
         self.gui_states = {
             "reset_all": False,
@@ -128,35 +130,36 @@ class BaseRenderer:
         self.gui_handle = self.gui_window.get_gui()
         self.gui_scene = self.gui_window.get_scene()
         self.gui_camera = ti.ui.make_camera()
-        env_bound = self.env_origin.min().item()
-        self.gui_camera.position(env_bound-3*self.L, 5*self.L, env_bound-5*self.L)  # x, y, z
-        self.gui_camera.lookat(0, -2*self.L, 0)
+        env_bound = self.env_origin.max().item()
+        self.gui_camera.position(-1.5*env_bound, 0.5*env_bound, -1.8*env_bound)  # x, y, z
+        self.gui_camera.lookat(0, -0.1*env_bound, 0)
         self.gui_camera.up(0, 1, 0)
         self.gui_camera.projection_mode(ti.ui.ProjectionMode.Perspective)
     
-    def _init_ground_plane(self, z_ground_plane: float):
-        for i, j in ti.ndrange(self.ground_plane_size, self.ground_plane_size):
-            self.ground_plane_size = self.ground_plane_size
-            idx = (i * self.ground_plane_size + j)
+    def _init_ground_plane(self, z_ground_plane: float, edge_length: float = 1):
+        # Initialize the ground plane mesh by creating a grid of quadrilateral faces
+        for i, j in ti.ndrange(self.n_plane, self.n_plane):
+            idx = (i * self.n_plane + j)
             vertex_base = idx * 4  # 4 vertices per face
 
-            x0 = i - self.ground_plane_size / 2
-            z0 = j - self.ground_plane_size / 2
-            x1 = x0 + 1
-            z1 = z0 + 1
+            # Calculate the coordinates for the current face
+            x0 = (i - self.n_plane / 2) * edge_length
+            y0 = (j - self.n_plane / 2) * edge_length
+            x1 = x0 + edge_length
+            y1 = y0 + edge_length
 
-            # coordinates of the 4 vertices of the face
-            self.ground_plane_mesh_dict["vertices"][vertex_base + 0] = ti.Vector([x0, z_ground_plane, z0])
-            self.ground_plane_mesh_dict["vertices"][vertex_base + 1] = ti.Vector([x1, z_ground_plane, z0])
-            self.ground_plane_mesh_dict["vertices"][vertex_base + 2] = ti.Vector([x0, z_ground_plane, z1])
-            self.ground_plane_mesh_dict["vertices"][vertex_base + 3] = ti.Vector([x1, z_ground_plane, z1])
+            # Define the 4 vertices of the face
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 0] = ti.Vector([x0, z_ground_plane, y0])
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 1] = ti.Vector([x1, z_ground_plane, y0])
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 2] = ti.Vector([x0, z_ground_plane, y1])
+            self.ground_plane_mesh_dict["vertices"][vertex_base + 3] = ti.Vector([x1, z_ground_plane, y1])
 
-            # assign color to the vertices of the face
+            # Assign color to the vertices of the face, alternating colors for a checkerboard pattern
             color = 0.8 if (i + j) % 2 == 0 else 0.2
             for k in range(4):
                 self.ground_plane_mesh_dict["per_vertex_color"][vertex_base + k] = ti.Vector([color, color, color])
 
-            # vertex indices of the two triangles of the face
+            # Define the two triangles that make up the face by specifying vertex indices
             index_base = idx * 6
             self.ground_plane_mesh_dict["indices"][index_base + 0] = vertex_base + 0
             self.ground_plane_mesh_dict["indices"][index_base + 1] = vertex_base + 1
@@ -169,7 +172,7 @@ class BaseRenderer:
         raise NotImplementedError
     
     def _init_drone_model(self):
-        l, L = 0.05, 0.2
+        l, L = 0.02, 0.1
         D = (L + l) / 2 / 2**0.5
         vertices_tensor, indices_tensor, color_tensor = add_box(
             xyz=torch.tensor([
@@ -303,27 +306,27 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         obstacle_manager: ObstacleManager,
         z_ground_plane: float
     ):
+        cfg.env_spacing = cfg.env_spacing + 3
         super().__init__(cfg, device, z_ground_plane=z_ground_plane)
         self.obstacle_manager = obstacle_manager
         self.cube_color = [0.8, 0.3, 0.1]
         self.sphere_color = [0.8, 0.1, 0.3]
         
-        self.n_cubes = self.obstacle_manager.n_cubes
+        n_cubes = self.obstacle_manager.n_cubes
         self.cube_mesh_dict = {
-            "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_cubes *  8)),
-            "indices":                  ti.field(   ti.i32, shape=(self.n_envs * self.n_cubes * 36)),
-            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_cubes *  8))
+            "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_cubes *  8)),
+            "indices":                  ti.field(   ti.i32, shape=(self.n_envs * n_cubes * 36)),
+            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_cubes *  8))
         }
-        self.cube_vertices_tensor = torch.empty(self.n_envs, self.n_cubes, 8, 3, device=self.device)
+        self.cube_vertices_tensor = torch.empty(self.n_envs, n_cubes, 8, 3, device=self.device)
         
-        self.n_spheres = self.obstacle_manager.n_spheres
+        n_spheres = self.obstacle_manager.n_spheres
         self.sphere_mesh_dict = {
-            "centers":           ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_spheres)),
-            "per_vertex_radius":        ti.field(   ti.f32, shape=(self.n_envs * self.n_spheres)),
+            "centers":           ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres)),
+            "per_vertex_radius":        ti.field(   ti.f32, shape=(self.n_envs * n_spheres)),
             "radius": 0.,
             "color": tuple(self.sphere_color)
         }
-        self.sphere_center_tensor = torch.empty(self.n_envs, self.n_spheres, 3, device=self.device)
         
         self._init_obstacles()
         
@@ -332,19 +335,20 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.target_line_color_tensor = torch.empty(self.n_envs, 3, device=self.device)
     
     def _init_obstacles(self):
+        lwh = self.obstacle_manager.lwh_cubes[:self.n_envs]
+        xyz = rpy = torch.zeros_like(lwh)
         vertices_tensor, indices_tensor, color_tensor = add_box(
-            xyz=torch.zeros(self.n_envs, self.n_cubes, 3, device=self.device),
+            xyz=xyz,
             lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
-            rpy=torch.zeros(self.n_envs, self.n_cubes, 3, device=self.device),
-            color=torch.tensor([[self.cube_color]], device=self.device).expand(self.n_envs, self.n_cubes, -1)
+            rpy=rpy,
+            color=torch.tensor([[self.cube_color]], device=self.device).expand_as(lwh)
         )
         self.cube_vertices_tensor.copy_(vertices_tensor)
         self.cube_mesh_dict["vertices"].from_torch(torch2ti(self.cube_vertices_tensor.flatten(end_dim=-2)))
         self.cube_mesh_dict["indices"].from_torch(indices_tensor.flatten())
         self.cube_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
         
-        self.sphere_center_tensor.copy_(self.obstacle_manager.p_spheres[:self.n_envs])
-        self.sphere_mesh_dict["centers"].from_torch(torch2ti(self.sphere_center_tensor.flatten(end_dim=-2)))
+        self.sphere_mesh_dict["centers"].from_torch(torch2ti(self.obstacle_manager.p_spheres[:self.n_envs].flatten(end_dim=-2)))
         self.sphere_mesh_dict["per_vertex_radius"].from_torch(self.obstacle_manager.r_spheres[:self.n_envs].flatten())
     
     def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
@@ -358,8 +362,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.target_line_vertices.from_torch(torch2ti(target_line_vertices_tensor.flatten(end_dim=-2)))
         factory_kwargs = {"dtype": torch.float32, "device": self.device}
         white = torch.tensor([[1., 1., 1.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
-        red = torch.tensor([[1., 0., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
-        yellow = torch.tensor([[0.7, 0.7, 0.2]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        # red = torch.tensor([[1., 0., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        # yellow = torch.tensor([[0.7, 0.7, 0.2]], **factory_kwargs).expand_as(self.target_line_color_tensor)
         green = torch.tensor([[0., 1., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
         near_target = (drone_pos-target_pos).norm(dim=-1).lt(0.5).unsqueeze(-1).expand(-1, 3)
         self.target_line_color_tensor = torch.where(near_target, green, white)
@@ -373,8 +377,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self.env_origin.unsqueeze(-2).unsqueeze(-2))
         self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
         
-        self.sphere_center_tensor.copy_(self.obstacle_manager.p_spheres[:self.n_envs])
-        sphere_center_tensor = self.sphere_center_tensor + self.env_origin.unsqueeze(-2)
+        sphere_center_tensor = self.obstacle_manager.p_spheres[:self.n_envs] + self.env_origin.unsqueeze(-2)
         self.sphere_mesh_dict["centers"].from_torch(torch2ti(sphere_center_tensor.flatten(end_dim=-2)))
     
     def _render_obstacles(self):
@@ -383,4 +386,4 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
     
     def _render_lines(self):
         super()._render_lines()
-        self.gui_scene.lines(self.target_line_vertices, per_vertex_color=self.target_line_colors, width=3.0)
+        self.gui_scene.lines(self.target_line_vertices, per_vertex_color=self.target_line_colors, width=1.0)

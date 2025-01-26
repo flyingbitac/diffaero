@@ -3,7 +3,7 @@ name: obstacle_avoidance_renderer
 headless: ${headless}
 n_envs: ${env.n_envs}
 dt: ${env.dt}
-render_n_envs: 64
+render_n_envs: 16
 env_spacing: ${env.length}
 physics_engine: "physx"
 ground_plane: ${env.ground_plane}
