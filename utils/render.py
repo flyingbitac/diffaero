@@ -60,6 +60,7 @@ def add_box(xyz: Tensor, lwh: Tensor, rpy: Tensor, color: Tensor):
     color = color.unsqueeze(-2).expand_as(rotated_vertices_tensor)
     return rotated_vertices_tensor, indices_torch, color
 
+@ti.data_oriented
 class BaseRenderer:
     def __init__(self, cfg: DictConfig, device: torch.device, z_ground_plane: Optional[float] = None):
         # ti.init(arch=ti.vulkan)
@@ -114,8 +115,17 @@ class BaseRenderer:
             "brightness": 1.0,
             "display_basis": False,
             "display_groundplane": True,
+            "tracking_view": False,
+            "tracking_env_idx": 0
         }
         self._init_viewer()
+        self.campos_b = torch.tensor([[-1., 0., 0.5]], device=self.device)
+        self.up_b = torch.tensor([[0., 0., 1.]], device=self.device)
+        self.camera_state = {
+            "position": self.gui_camera.curr_position,
+            "lookat": self.gui_camera.curr_lookat,
+            "up": self.gui_camera.curr_up,
+        }
     
     def _init_viewer(self):
         end_points = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
@@ -134,9 +144,17 @@ class BaseRenderer:
         self.gui_camera.position(-1.5*env_bound, 0.5*env_bound, -1.8*env_bound)  # x, y, z
         self.gui_camera.lookat(0, -0.1*env_bound, 0)
         self.gui_camera.up(0, 1, 0)
+        self.gui_camera.z_far(200)
         self.gui_camera.projection_mode(ti.ui.ProjectionMode.Perspective)
     
-    def _init_ground_plane(self, z_ground_plane: float, edge_length: float = 1):
+    def _set_camera_state(self, camera_state, fov=90.):
+        self.gui_camera.position(*camera_state["position"])
+        self.gui_camera.lookat(*camera_state["lookat"])
+        self.gui_camera.up(*camera_state["up"])
+        self.gui_camera.fov(fov=fov)
+    
+    @ti.kernel
+    def _init_ground_plane(self, z_ground_plane: float, edge_length: float):
         # Initialize the ground plane mesh by creating a grid of quadrilateral faces
         for i, j in ti.ndrange(self.n_plane, self.n_plane):
             idx = (i * self.n_plane + j)
@@ -209,35 +227,87 @@ class BaseRenderer:
     ):
         rotation_matrix = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         drone_vertices_tensor = torch.bmm(self.drone_vertices_tensor, rotation_matrix.transpose(-2, -1))
-        drone_vertices_tensor = drone_vertices_tensor + pos.unsqueeze(-2) + self.env_origin.unsqueeze(-2)
+        absolute_pos = pos + self.env_origin
+        drone_vertices_tensor = drone_vertices_tensor + absolute_pos.unsqueeze(-2)
         self.drone_mesh_dict["vertices"].from_torch(torch2ti(drone_vertices_tensor.flatten(end_dim=-2)))
+        
+        if self.gui_states["tracking_view"]:
+            idx = self.gui_states["tracking_env_idx"]
+            campos_w = torch.mm(rotation_matrix[idx], self.campos_b.T).T + absolute_pos[idx]
+            up_w = torch.mm(rotation_matrix[idx], self.up_b.T).T
+            unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
+            cam_state = {
+                "position": unbind(campos_w),
+                "lookat": unbind(absolute_pos[idx]),
+                "up": unbind(up_w)}
+            self._set_camera_state(cam_state, fov=90.)
     
     def step(self, state: Tensor):
         return NotImplementedError
     
     def _render_subwindow(self):
         self.gui_states["reset_all"] = False
-        with self.gui_handle.sub_window("Simulation Settings", x=0.02, y=0.02, height=0.1, width=0.25) as sub_window:
-            self.gui_states["reset_all"] = sub_window.button("Reset All")
-            if sub_window.button("Exit"): raise KeyboardInterrupt
+        with self.gui_handle.sub_window("Simulation Settings", x=0.02, y=0.02, height=0.1, width=0.35) as sub_window:
+            self.gui_states["reset_all"] = sub_window.button("(R) Reset All")
+            if sub_window.button("(ESC) Exit"): raise KeyboardInterrupt
         
-        color = (0, 0, 1)
-        with self.gui_handle.sub_window("Render Settings", x=0.02, y=0.14, height=0.25, width=0.25) as sub_window:
-            if sub_window.button("Pause Rendering"):
+        with self.gui_handle.sub_window("Render Settings", x=0.02, y=0.14, height=0.3, width=0.35) as sub_window:
+            if sub_window.button("(V) Pause Rendering"):
                 self.enable_rendering = False
                 sub_window.text("Rendering paused. Press \"V\" to resume.")
                 tqdm.write("Rendering paused. Press \"V\" to resume.")
-            self.gui_states["enable_lightsource"] = sub_window.checkbox("Enable Light Source", self.gui_states["enable_lightsource"])
+            self.gui_states["enable_lightsource"] = sub_window.checkbox("(L) Enable Light Source", self.gui_states["enable_lightsource"])
             if self.gui_states["enable_lightsource"]:
                 self.gui_states["brightness"] = sub_window.slider_float("Brightness", self.gui_states["brightness"], minimum=0, maximum=1)
-            self.gui_states["display_basis"] = sub_window.checkbox("Display Axis Basis", self.gui_states["display_basis"])
+            self.gui_states["display_basis"] = sub_window.checkbox("(B) Display Axis Basis", self.gui_states["display_basis"])
             if self.ground_plane:
-                self.gui_states["display_groundplane"] = sub_window.checkbox("Display Ground Plane", self.gui_states["display_groundplane"])
-            # color = sub_window.color_edit_3("name2", color)
+                self.gui_states["display_groundplane"] = sub_window.checkbox("(G) Display Ground Plane", self.gui_states["display_groundplane"])
+            prev_tracking_mode = self.gui_states["tracking_view"]
+            self.gui_states["tracking_view"] = sub_window.checkbox("(T) Tracking View", self.gui_states["tracking_view"])
+            if self.gui_states["tracking_view"]:
+                self.gui_states["tracking_env_idx"] = sub_window.slider_int(
+                    "Tracking Env Index",
+                    self.gui_states["tracking_env_idx"],
+                    minimum=0,
+                    maximum=self.n_envs-1)
+        
+        # Track user inputs
+        if self.gui_window.get_event(ti.ui.PRESS):
+            if self.gui_window.event.key == 'v':
+                self.enable_rendering = not self.enable_rendering
+                if not self.enable_rendering:
+                    tqdm.write("Rendering paused. Press \"V\" to resume.")
+            if self.gui_window.event.key == 'r':
+                self.gui_states["reset_all"] = True
+            if self.gui_window.event.key == 'l':
+                self.gui_states["enable_lightsource"] = not self.gui_states["enable_lightsource"]
+            if self.gui_window.event.key == 'b':
+                self.gui_states["display_basis"] = not self.gui_states["display_basis"]
+            if self.gui_window.event.key == 'g':
+                self.gui_states["display_groundplane"] = not self.gui_states["display_groundplane"]
+            if self.gui_window.event.key == 't':
+                self.gui_states["tracking_view"] = not self.gui_states["tracking_view"]
+            if self.gui_states["tracking_view"] and self.gui_window.is_pressed(ti.ui.RIGHT):
+                self.gui_states["tracking_env_idx"] = (self.gui_states["tracking_env_idx"] + 1) % self.n_envs
+            elif self.gui_states["tracking_view"] and self.gui_window.is_pressed(ti.ui.LEFT):
+                self.gui_states["tracking_env_idx"] = (self.gui_states["tracking_env_idx"] + self.n_envs - 1) % self.n_envs
+        
+        if prev_tracking_mode != self.gui_states["tracking_view"]:
+            if not self.gui_states["tracking_view"]:
+                # restore camera state
+                self._set_camera_state(self.camera_state, fov=45.)
+            else:
+                # backup current camera state
+                self.camera_state = {
+                    "position": self.gui_camera.curr_position,
+                    "lookat": self.gui_camera.curr_lookat,
+                    "up": self.gui_camera.curr_up
+                }
     
     def render(self):
         if self.enable_rendering:
             
+            # Track user inputs
             self.gui_camera.track_user_inputs(
                 self.gui_window,
                 movement_speed=0.1,
@@ -271,13 +341,8 @@ class BaseRenderer:
             canvas.scene(self.gui_scene)
             self.gui_window.show()
         
-        if self.gui_window.get_event(ti.ui.PRESS):
-            if self.gui_window.event.key == 'v':
-                self.enable_rendering = not self.enable_rendering
-                if not self.enable_rendering:
-                    tqdm.write("Rendering paused. Press \"V\" to resume.")
-            if self.gui_window.event.key == 'r':
-                self.gui_states["reset_all"] = True
+        if not self.enable_rendering and self.gui_window.get_event(ti.ui.PRESS) and self.gui_window.event.key == 'v':
+            self.enable_rendering = True
         if self.gui_window.is_pressed(ti.ui.ESCAPE):
             raise KeyboardInterrupt
     
