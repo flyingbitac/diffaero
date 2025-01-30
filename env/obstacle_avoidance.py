@@ -101,7 +101,7 @@ class ObstacleAvoidance(BaseEnv):
             self.renderer.render()
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
         reset = terminated | truncated
-        reset_indices = reset.nonzero().squeeze(-1)
+        reset_indices = reset.nonzero().view(-1)
         arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
         success = arrived & truncated

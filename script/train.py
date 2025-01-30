@@ -57,7 +57,7 @@ def learn(
                 "loss": f"{env_info['loss_components']['total_loss']:.3f}",
                 "l_episode": f"{l_episode:.1f}",
                 "success_rate": f"{success_rate:.2f}",
-                "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
+                "fps": f"{int(cfg.l_rollout*cfg.env.n_envs/(pbar._time()-t1)):,d}"})
         log_info = {
             "env_loss": env_info["loss_components"],
             "agent_loss": losses,
