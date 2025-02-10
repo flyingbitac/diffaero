@@ -124,11 +124,10 @@ class BaseRenderer:
             "display_basis": False,
             "display_groundplane": True,
             "tracking_view": False,
+            "fpp_view": False,
             "tracking_env_idx": 0
         }
         self._init_viewer()
-        self.campos_b = torch.tensor([[-1., 0., 0.5]], device=self.device)
-        self.up_b = torch.tensor([[0., 0., 1.]], device=self.device)
         self.camera_state = {
             "position": self.gui_camera.curr_position,
             "lookat": self.gui_camera.curr_lookat,
@@ -248,12 +247,20 @@ class BaseRenderer:
         
         if self.gui_states["tracking_view"]:
             idx = self.gui_states["tracking_env_idx"]
-            campos_w = torch.mm(rotation_matrix[idx], self.campos_b.T).T + absolute_pos[idx]
-            up_w = torch.mm(rotation_matrix[idx], self.up_b.T).T
+            if self.gui_states["fpp_view"]:
+                campos_w = absolute_pos[idx]
+                up_b = torch.tensor([[0., 0., 1.]], device=self.device)
+                lookat = torch.mm(rotation_matrix[idx], torch.tensor([[1., 0., 0.]], device=self.device).T).T + absolute_pos[idx]
+            else:
+                campos_b = torch.tensor([[-1., 0., 0.5]], device=self.device)
+                campos_w = torch.mm(rotation_matrix[idx], campos_b.T).T + absolute_pos[idx]
+                up_b = torch.tensor([[0., 0., 1.]], device=self.device)
+                lookat = absolute_pos[idx]
+            up_w = torch.mm(rotation_matrix[idx], up_b.T).T
             unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
             cam_state = {
                 "position": unbind(campos_w),
-                "lookat": unbind(absolute_pos[idx]),
+                "lookat": unbind(lookat),
                 "up": unbind(up_w)}
             self._set_camera_state(cam_state, fov=90.)
     
@@ -280,6 +287,7 @@ class BaseRenderer:
             prev_tracking_mode = self.gui_states["tracking_view"]
             self.gui_states["tracking_view"] = sub_window.checkbox("(T) Tracking View", self.gui_states["tracking_view"])
             if self.gui_states["tracking_view"]:
+                self.gui_states["fpp_view"] = sub_window.checkbox("(F) First Person View", self.gui_states["fpp_view"])
                 self.gui_states["tracking_env_idx"] = sub_window.slider_int(
                     "Tracking Env Index",
                     self.gui_states["tracking_env_idx"],
@@ -302,6 +310,8 @@ class BaseRenderer:
                 self.gui_states["display_groundplane"] = not self.gui_states["display_groundplane"]
             if self.gui_window.event.key == 't':
                 self.gui_states["tracking_view"] = not self.gui_states["tracking_view"]
+            if self.gui_window.event.key == 'f':
+                self.gui_states["fpp_view"] = not self.gui_states["fpp_view"]
             if self.gui_states["tracking_view"] and self.gui_window.is_pressed(ti.ui.RIGHT):
                 self.gui_states["tracking_env_idx"] = (self.gui_states["tracking_env_idx"] + 1) % self.n_envs
             elif self.gui_states["tracking_view"] and self.gui_window.is_pressed(ti.ui.LEFT):
