@@ -31,19 +31,18 @@ def display_image(state, action, policy_info, env_info):
         cv2.imshow('image', disp_image)
         cv2.waitKey(1)
 
-def save_video_mp4(cfg: DictConfig, video_tensor: torch.Tensor, logger: Logger, name: str):
+def save_video_mp4(cfg: DictConfig, video_array: np.ndarray, logger: Logger, name: str):
     # save the video using imageio
     path = os.path.join(logger.logdir, "video")
     if not os.path.exists(path):
         os.makedirs(path)
     with imageio.get_writer(os.path.join(path, name), fps=1/cfg.env.dt) as video:
-        for frame_index in range(video_tensor.size(0)):
-            frame = video_tensor[frame_index]
-            frame = frame.permute(1, 2, 0).cpu().numpy()
+        for frame_index in range(video_array.shape[0]):
+            frame = video_array[frame_index]
             video.append_data(frame)
 
-def save_video_tensorboard(cfg: DictConfig, video_tensor: torch.Tensor, logger: Logger, tag: str, step: int):
-    logger.log_video(tag, video_tensor, step=step, fps=1/cfg.env.dt)
+def save_video_tensorboard(cfg: DictConfig, video_array: np.ndarray, logger: Logger, tag: str, step: int):
+    logger.log_video(tag, video_array, step=step, fps=1/cfg.env.dt)
 
 @torch.no_grad()
 def test(
@@ -54,10 +53,13 @@ def test(
     on_step_cb: Optional[Callable] = None
 ):
     if cfg.record_video:
-        H, W = cfg.env.render.rgb_camera.height, cfg.env.render.rgb_camera.width
-        video_tensor = torch.zeros(
-            (cfg.n_envs, env.max_steps, 3, H, W * 2),
-            dtype=torch.uint8, device=env.device)
+        H_video, W_video = env.renderer.video_H, env.renderer.video_W
+        H_depth, W_depth = cfg.sensor.height, cfg.sensor.width
+        H_scale, W_scale = H_video / H_depth, W_video / W_depth
+        H_depth = H_video if H_scale >= W_scale else int(H_depth * W_scale)
+        W_depth = W_video if W_scale >= H_scale else int(W_depth * H_scale)
+        H, W = H_video, W_video + W_depth
+        video_array = np.empty((cfg.n_envs, env.max_steps, H, W, 3), dtype=np.uint8)
     
     state = env.reset()
     pbar = tqdm(range(10000))
@@ -84,29 +86,31 @@ def test(
         logger.log_scalars(log_info, i+1)
         
         if cfg.record_video:
-            rgb_image: torch.Tensor = env.renderer.render_rgb_camera()
+            rgb_image: np.ndarray = env.renderer.render_fpp()
             index = (torch.arange(env.n_envs, device=env.device), env.progress-1)
             depth_image = torchvision.transforms.Resize(
-                (H, W), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(env_info["sensor"])
-            depth_image = (depth_image * 255).to(torch.uint8)
-            image = torch.cat([rgb_image, depth_image.unsqueeze(1).expand(-1, 3, -1, -1)], dim=-1)
-            video_tensor[index] = image
+                (H_depth, W_depth), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(env_info["sensor"])
+            depth_image = (depth_image * 255).to(torch.uint8).unsqueeze(-1).expand(-1, -1, -1, 3).cpu().numpy()
+            print(rgb_image.shape, depth_image.shape)
+            image = np.concatenate([rgb_image, depth_image], axis=-2)
+            print(image.shape, "FUCK")
+            video_array[index] = image
             
             if env_info["reset"].sum().item() > env_info["success"].sum().item(): # some episodes failed
                 failed = torch.logical_and(env_info["reset"], ~env_info["success"])
                 idx = failed.nonzero().flatten()[0]
                 video_length = env_info["l"][idx] - 1
                 if cfg.video_saveas == "mp4":
-                    save_video_mp4(cfg, video_tensor[idx, :video_length], logger, f"failed_{i+1}.mp4")
+                    save_video_mp4(cfg, video_array[idx, :video_length], logger, f"failed_{i+1}.mp4")
                 elif cfg.video_saveas == "tensorboard":
-                    save_video_tensorboard(cfg, video_tensor[idx.unsqueeze(0), :video_length], logger, "video/fail", i+1)
+                    save_video_tensorboard(cfg, video_array[idx.unsqueeze(0), :video_length], logger, "video/fail", i+1)
             if env_info["success"].sum().item() > 0: # some episodes succeeded
                 idx = env_info["success"].nonzero().flatten()[0]
                 video_length = min(env_info["l"][idx].item(), int(env_info["arrive_time"][idx].item()/env.dt) + 100) - 1
                 if cfg.video_saveas == "mp4":
-                    save_video_mp4(cfg, video_tensor[idx, :video_length], logger, f"success_{i+1}.mp4")
+                    save_video_mp4(cfg, video_array[idx, :video_length], logger, f"success_{i+1}.mp4")
                 elif cfg.video_saveas == "tensorboard":
-                    save_video_tensorboard(cfg, video_tensor[idx.unsqueeze(0), :video_length], logger, "video/success", i+1)
+                    save_video_tensorboard(cfg, video_array[idx.unsqueeze(0), :video_length], logger, "video/success", i+1)
             
         if on_step_cb is not None:
             on_step_cb(

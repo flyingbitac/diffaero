@@ -1,5 +1,6 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 
+import numpy as np
 import torch
 from torch import Tensor
 from pytorch3d import transforms as T
@@ -8,6 +9,7 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 from quaddif.utils.assets import ObstacleManager
+from quaddif.utils.math import quaternion_to_euler, axis_rotmat
 
 @torch.jit.script
 def torch2ti(tensor_from_torch: Tensor):
@@ -65,20 +67,24 @@ def add_box(xyz: Tensor, lwh: Tensor, rpy: Tensor, color: Tensor):
 
 @ti.data_oriented
 class BaseRenderer:
-    def __init__(self, cfg: DictConfig, device: torch.device, z_ground_plane: Optional[float] = None):
-        # ti.init(arch=ti.vulkan)
-        if "cpu" in str(device):
+    def __init__(self, cfg: DictConfig, device: torch.device, z_ground_plane: Optional[float] = None, headless: bool = False):
+        self.n_envs: int = min(cfg.n_envs, cfg.render_n_envs)
+        self.L: int = cfg.env_spacing
+        self.dt: float = cfg.dt
+        self.ground_plane: bool = cfg.ground_plane
+        self.record_video: bool = cfg.record_video
+        self.enable_rendering: bool = True
+        self.headless = headless
+        self.device = device
+        
+        if self.record_video:
+            ti.init(arch=ti.vulkan)
+        elif "cpu" in str(self.device):
             print("Using CPU to render the GUI.")
             ti.init(arch=ti.cpu)
         else:
             print("Using GPU to render the GUI.")
             ti.init(arch=ti.gpu)
-        self.n_envs: int = min(cfg.n_envs, cfg.render_n_envs)
-        self.L: int = cfg.env_spacing
-        self.ground_plane: bool = cfg.ground_plane
-        self.dt = cfg.dt
-        self.enable_rendering: bool = True
-        self.device = device
         
         N = torch.ceil(torch.sqrt(torch.tensor(self.n_envs, device=self.device))).int()
         assert N * N >= self.n_envs
@@ -127,6 +133,12 @@ class BaseRenderer:
             "fpp_view": False,
             "tracking_env_idx": 0
         }
+        if self.record_video:
+            self.video_H, self.video_W, self.video_fov = cfg.video_camera.height, cfg.video_camera.width, cfg.video_camera.fov
+            self.video_frame = np.empty((self.n_envs, self.video_H, self.video_W, 3), dtype=np.uint8)
+            self.video_cam_pos    = torch.empty(self.n_envs, 3, device=self.device)
+            self.video_cam_lookat = torch.empty(self.n_envs, 3, device=self.device)
+            self.video_cam_up     = torch.empty(self.n_envs, 3, device=self.device)
         self._init_viewer()
         self.camera_state = {
             "position": self.gui_camera.curr_position,
@@ -143,7 +155,13 @@ class BaseRenderer:
                 end_point
             ], dtype=torch.float32, device=self.device)))
         
-        self.gui_window = ti.ui.Window(name='Renderer Running at', res=(1280, 900), fps_limit=2*int(1/self.dt), pos=(150, 150))
+        self.gui_window = ti.ui.Window(
+            name='Renderer Running at',
+            res=(1280, 900),
+            fps_limit=2*int(1/self.dt),
+            pos=(150, 150), 
+            show_window=not self.headless
+        )
         self.gui_handle = self.gui_window.get_gui()
         self.gui_scene = self.gui_window.get_scene()
         self.gui_camera = ti.ui.make_camera()
@@ -154,12 +172,20 @@ class BaseRenderer:
         self.gui_camera.z_far(200)
         self.gui_camera.projection_mode(ti.ui.ProjectionMode.Perspective)
         self.gui_canvas = self.gui_window.get_canvas()
+        
+        if self.record_video:
+            self.video_window = ti.ui.Window(name=f"Env {i}", res=(self.video_W, self.video_H), fps_limit=int(1/self.dt), show_window=False)
+            self.video_gui    = self.video_window.get_gui()
+            self.video_scene  = self.video_window.get_scene()
+            self.video_camera = ti.ui.make_camera()
+            self.video_canvas = self.video_window.get_canvas()
     
-    def _set_camera_state(self, camera_state, fov=90.):
-        self.gui_camera.position(*camera_state["position"])
-        self.gui_camera.lookat(*camera_state["lookat"])
-        self.gui_camera.up(*camera_state["up"])
-        self.gui_camera.fov(fov=fov)
+    def _set_camera_state(self, camera_handle, camera_state, fov=90.):
+        # type: (ti.ui.Camera, Dict[str, List[float]], float) -> None
+        camera_handle.position(*camera_state["position"])
+        camera_handle.lookat(*camera_state["lookat"])
+        camera_handle.up(*camera_state["up"])
+        camera_handle.fov(fov=fov)
     
     @ti.kernel
     def _init_ground_plane(self, z_ground_plane: float, edge_length: float):
@@ -231,7 +257,7 @@ class BaseRenderer:
         self.drone_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
         self.drone_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
     
-    def _update_drone_model(
+    def _update_drone_pose(
         self,
         pos: Tensor,      # [n_envs, 3]
         quat_xyzw: Tensor # [n_envs, 4]
@@ -244,25 +270,44 @@ class BaseRenderer:
         
         idx = self.gui_states["tracking_env_idx"]
         self.drone_mesh_dict_one_env["vertices"].from_torch(torch2ti(drone_vertices_tensor[idx].flatten(end_dim=-2)))
+
+    def _update_camera_pose(
+        self,
+        pos: Tensor,      # [n_envs, 3]
+        quat_xyzw: Tensor # [n_envs, 4]
+    ):
+        rotation_matrix = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
+        absolute_pos = pos + self.env_origin
+        idx = self.gui_states["tracking_env_idx"]
+        unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
         
         if self.gui_states["tracking_view"]:
             idx = self.gui_states["tracking_env_idx"]
             if self.gui_states["fpp_view"]:
                 campos_w = absolute_pos[idx]
-                up_b = torch.tensor([[0., 0., 1.]], device=self.device)
                 lookat = torch.mm(rotation_matrix[idx], torch.tensor([[1., 0., 0.]], device=self.device).T).T + absolute_pos[idx]
-            else:
-                campos_b = torch.tensor([[-1., 0., 0.5]], device=self.device)
-                campos_w = torch.mm(rotation_matrix[idx], campos_b.T).T + absolute_pos[idx]
                 up_b = torch.tensor([[0., 0., 1.]], device=self.device)
+                up_w = torch.mm(rotation_matrix[idx], up_b.T).T
+            else:
+                yaw_rotmat = axis_rotmat("Z", quaternion_to_euler(quat_xyzw[idx])[..., -1])
+                campos_b = torch.tensor([[-1., 0., 0.5]], device=self.device)
+                campos_w = torch.mm(yaw_rotmat, campos_b.T).T + absolute_pos[idx]
                 lookat = absolute_pos[idx]
-            up_w = torch.mm(rotation_matrix[idx], up_b.T).T
-            unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
+                up_w = torch.tensor([[0., 0., 1.]], device=self.device)
             cam_state = {
                 "position": unbind(campos_w),
                 "lookat": unbind(lookat),
                 "up": unbind(up_w)}
-            self._set_camera_state(cam_state, fov=90.)
+            self._set_camera_state(self.gui_camera, cam_state, fov=90.)
+        
+        if self.record_video:
+            self.video_cam_pos.copy_(absolute_pos)
+            lookat_b = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.n_envs, -1, -1)
+            lookat_w = torch.bmm(lookat_b, rotation_matrix.transpose(-2, -1)).squeeze(1) + absolute_pos
+            self.video_cam_lookat.copy_(lookat_w)
+            up_b = torch.tensor([[0., 0., 1.]], device=self.device).expand(self.n_envs, -1, -1)
+            up_w = torch.bmm(up_b, rotation_matrix.transpose(-2, -1)).squeeze(1)
+            self.video_cam_up.copy_(up_w)
     
     def step(self, state: Tensor):
         return NotImplementedError
@@ -320,7 +365,7 @@ class BaseRenderer:
         if prev_tracking_mode != self.gui_states["tracking_view"]:
             if not self.gui_states["tracking_view"]:
                 # restore camera state
-                self._set_camera_state(self.camera_state, fov=45.)
+                self._set_camera_state(self.gui_camera, self.camera_state, fov=45.)
             else:
                 # backup current camera state
                 self.camera_state = {
@@ -329,9 +374,27 @@ class BaseRenderer:
                     "up": self.gui_camera.curr_up
                 }
     
+    def render_fpp(self):
+        assert self.record_video
+        unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
+        for i in range(self.n_envs):
+            self.video_scene.mesh(**self.ground_plane_mesh_dict)
+            self.video_scene.point_light(pos=(0, 50, 0), color=(1., 1., 1.))
+            self.video_scene.ambient_light(color=(0.5, 0.5, 0.5))
+            video_camera_state = {
+                "position": unbind(self.video_cam_pos[i]),
+                "lookat": unbind(self.video_cam_lookat[i]),
+                "up": unbind(self.video_cam_up[i])
+            }
+            self._set_camera_state(self.video_camera, video_camera_state, fov=self.video_fov)
+            self.video_scene.set_camera(self.video_camera)
+            self.video_canvas.scene(self.video_scene)
+            buffer: np.ndarray = (self.video_window.get_image_buffer_as_numpy() * 255).astype(np.uint8)
+            self.video_frame[i] = np.flip(buffer[..., :3].transpose(1, 0, 2), axis=0)
+        return self.video_frame
+
     def render(self):
-        if self.enable_rendering:
-            
+        if self.enable_rendering and not self.headless:
             # Track user inputs
             self.gui_camera.track_user_inputs(
                 self.gui_window,
@@ -380,15 +443,20 @@ class BaseRenderer:
     
     def _render_obstacles(self):
         pass
-
+    
+    def close(self):
+        self.gui_window.destroy()
+        if self.record_video:
+            self.video_window.destroy()
 
 class PositionControlRenderer(BaseRenderer):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
     
-    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor):
+    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
         if self.enable_rendering:
-            self._update_drone_model(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_drone_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
     def __init__(
@@ -396,10 +464,11 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         cfg: DictConfig,
         device: torch.device,
         obstacle_manager: ObstacleManager,
-        z_ground_plane: float
+        z_ground_plane: float,
+        headless: bool
     ):
         cfg.env_spacing = cfg.env_spacing + 3
-        super().__init__(cfg, device, z_ground_plane=z_ground_plane)
+        super().__init__(cfg, device, z_ground_plane=z_ground_plane, headless=headless)
         self.obstacle_manager = obstacle_manager
         self.cube_color = [0.8, 0.3, 0.1]
         self.sphere_color = [0.8, 0.1, 0.3]
@@ -463,7 +532,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
     
     def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
         if self.enable_rendering:
-            self._update_drone_model(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_drone_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
             self._update_obstacles()
             self._update_lines(drone_pos[:self.n_envs], target_pos[:self.n_envs])
     
@@ -516,3 +586,33 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
                 self.target_line_vertices,
                 per_vertex_color=self.target_line_colors,
                 width=1.0)
+    
+    def render_fpp(self):
+        assert self.record_video
+        unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
+        for i in range(self.n_envs):
+            cube_vertices_tensor = (
+                self.cube_vertices_tensor + 
+                self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
+                self.env_origin.unsqueeze(-2).unsqueeze(-2))
+            self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[i].flatten(end_dim=-2)))
+            self.video_scene.mesh(**self.cube_mesh_dict_one_env)
+            
+            sphere_center_tensor = self.obstacle_manager.p_spheres[:self.n_envs] + self.env_origin.unsqueeze(-2)
+            self.sphere_mesh_dict_one_env["centers"].from_torch(torch2ti(sphere_center_tensor[i].flatten(end_dim=-2)))
+            self.video_scene.particles(**self.sphere_mesh_dict_one_env)
+            
+            self.video_scene.mesh(**self.ground_plane_mesh_dict)
+            self.video_scene.point_light(pos=(0, 50, 0), color=(1., 1., 1.))
+            self.video_scene.ambient_light(color=(0.5, 0.5, 0.5))
+            video_camera_state = {
+                "position": unbind(self.video_cam_pos[i]),
+                "lookat": unbind(self.video_cam_lookat[i]),
+                "up": unbind(self.video_cam_up[i])
+            }
+            self._set_camera_state(self.video_camera, video_camera_state, fov=self.video_fov)
+            self.video_scene.set_camera(self.video_camera)
+            self.video_canvas.scene(self.video_scene)
+            buffer: np.ndarray = (self.video_window.get_image_buffer_as_numpy() * 255).astype(np.uint8)
+            self.video_frame[i] = np.flip(buffer[..., :3].transpose(1, 0, 2), axis=0)
+        return self.video_frame

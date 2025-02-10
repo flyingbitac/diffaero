@@ -41,7 +41,8 @@ class ObstacleAvoidance(BaseEnv):
                 cfg=cfg.render,
                 device=device,
                 obstacle_manager=self.obstacle_manager,
-                z_ground_plane=self.z_ground_plane)
+                z_ground_plane=self.z_ground_plane,
+                headless=cfg.render.headless)
         else:
             self.renderer = None
         
