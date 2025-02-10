@@ -108,12 +108,14 @@ def main(cfg: DictConfig):
         learn(cfg, agent, env, logger)
     except KeyboardInterrupt:
         tqdm.write("Interrupted.")
-    finally:
-        ckpt_path = os.path.join(logger.logdir, "checkpoints")
-        agent.save(ckpt_path)
-        print(f"The checkpoint is saved to {ckpt_path}.")
-        if cfg.export:
-            PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
+    
+    ckpt_path = os.path.join(logger.logdir, "checkpoints")
+    agent.save(ckpt_path)
+    print(f"The checkpoint is saved to {ckpt_path}.")
+    if cfg.export:
+        PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
+    if env.renderer is not None:
+        env.renderer.close()
     
     global logdir
     logdir = logger.logdir
