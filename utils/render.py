@@ -131,6 +131,7 @@ class BaseRenderer:
             "display_groundplane": True,
             "tracking_view": False,
             "fpp_view": False,
+            "lookat_target": False,
             "tracking_env_idx": 0
         }
         if self.record_video:
@@ -273,8 +274,9 @@ class BaseRenderer:
 
     def _update_camera_pose(
         self,
-        pos: Tensor,      # [n_envs, 3]
-        quat_xyzw: Tensor # [n_envs, 4]
+        pos: Tensor,        # [n_envs, 3]
+        quat_xyzw: Tensor,  # [n_envs, 4]
+        target_pos: Tensor, # [n_envs, 3]
     ):
         rotation_matrix = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         absolute_pos = pos + self.env_origin
@@ -289,7 +291,11 @@ class BaseRenderer:
                 up_b = torch.tensor([[0., 0., 1.]], device=self.device)
                 up_w = torch.mm(rotation_matrix[idx], up_b.T).T
             else:
-                yaw_rotmat = axis_rotmat("Z", quaternion_to_euler(quat_xyzw[idx])[..., -1])
+                if self.gui_states["lookat_target"]:
+                    target_relpos = target_pos[idx] - pos[idx]
+                    yaw_rotmat = axis_rotmat("Z", torch.atan2(target_relpos[1], target_relpos[0]))
+                else:
+                    yaw_rotmat = axis_rotmat("Z", quaternion_to_euler(quat_xyzw[idx])[..., -1])
                 campos_b = torch.tensor([[-1., 0., 0.5]], device=self.device)
                 campos_w = torch.mm(yaw_rotmat, campos_b.T).T + absolute_pos[idx]
                 lookat = absolute_pos[idx]
@@ -333,6 +339,7 @@ class BaseRenderer:
             self.gui_states["tracking_view"] = sub_window.checkbox("(T) Tracking View", self.gui_states["tracking_view"])
             if self.gui_states["tracking_view"]:
                 self.gui_states["fpp_view"] = sub_window.checkbox("(F) First Person View", self.gui_states["fpp_view"])
+                self.gui_states["lookat_target"] = sub_window.checkbox("Look at Target", self.gui_states["lookat_target"])
                 self.gui_states["tracking_env_idx"] = sub_window.slider_int(
                     "Tracking Env Index",
                     self.gui_states["tracking_env_idx"],
@@ -456,7 +463,7 @@ class PositionControlRenderer(BaseRenderer):
     def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
         if self.enable_rendering:
             self._update_drone_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
-            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs], target_pos[:self.n_envs])
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
     def __init__(
@@ -533,7 +540,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
     def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
         if self.enable_rendering:
             self._update_drone_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
-            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs], target_pos[:self.n_envs])
             self._update_obstacles()
             self._update_lines(drone_pos[:self.n_envs], target_pos[:self.n_envs])
     

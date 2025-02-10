@@ -58,7 +58,7 @@ class PositionControl(BaseEnv):
         return self.state(), loss, terminated, extra
     
     def state_for_render(self) -> Tensor:
-        return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone()}
+        return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
     def loss_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
