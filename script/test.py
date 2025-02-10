@@ -115,7 +115,7 @@ def test(
                 policy_info=policy_info,
                 env_info=env_info)
 
-@hydra.main(config_path="../cfg", config_name="config")
+@hydra.main(config_path="../cfg", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
     device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"

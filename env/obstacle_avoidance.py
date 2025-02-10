@@ -23,10 +23,8 @@ class ObstacleAvoidance(BaseEnv):
         assert self.sensor_type in ["camera", "lidar", "relpos"]
         
         if self.sensor_type == "camera":
-            self.camera_type = cfg.sensor.type
-            if self.sensor_type == "camera" and self.camera_type == "raydist":
-                self.camera = Camera(cfg.sensor, device=device)
-            H, W = cfg.sensor.height, cfg.sensor.width
+            self.camera = Camera(cfg.sensor, device=device)
+            H, W = self.camera.H, self.camera.W
         elif self.sensor_type == "lidar":
             self.lidar = LiDAR(cfg.sensor, device=device)
             H, W = self.lidar.H, self.lidar.W
@@ -37,8 +35,7 @@ class ObstacleAvoidance(BaseEnv):
         self.state_dim = (10, (H, W)) # flattened depth image as additional observation
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
-        use_isaacgym_camera = self.sensor_type == "camera" and self.camera_type == "isaacgym"
-        need_renderer = (not cfg.render.headless) or cfg.render.record_video or use_isaacgym_camera
+        need_renderer = (not cfg.render.headless) or cfg.render.record_video
         if need_renderer:
             self.renderer = ObstacleAvoidanceRenderer(
                 cfg=cfg.render,
@@ -62,22 +59,13 @@ class ObstacleAvoidance(BaseEnv):
         return state
     
     def update_sensor_data(self):
-        if self.sensor_type == "camera":
-            if self.camera_type == "isaacgym":
-                self.sensor_tensor.copy_(self.renderer.render_camera())
-            elif self.camera_type == "raydist":
-                H, W = self.sensor_tensor.shape[1:]
-                self.sensor_tensor.copy_(self.camera(
-                    sphere_pos=self.obstacle_manager.p_spheres,
-                    sphere_r=self.obstacle_manager.r_spheres,
-                    box_min=self.obstacle_manager.box_min,
-                    box_max=self.obstacle_manager.box_max,
-                    start=self.p.unsqueeze(1).expand(-1, H*W, -1),
-                    quat_xyzw=self.q,
-                    z_ground_plane=self.z_ground_plane))
-        elif self.sensor_type == "lidar":
+        if self.sensor_type == "camera" or self.sensor_type == "lidar":
             H, W = self.sensor_tensor.shape[1:]
-            self.sensor_tensor.copy_(self.lidar(
+            if self.sensor_type == "camera":
+                sensor = self.camera
+            else:
+                sensor = self.lidar
+            self.sensor_tensor.copy_(sensor(
                 sphere_pos=self.obstacle_manager.p_spheres,
                 sphere_r=self.obstacle_manager.r_spheres,
                 box_min=self.obstacle_manager.box_min,
