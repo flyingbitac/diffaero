@@ -2,7 +2,6 @@ from typing import *
 import sys
 sys.path.append('..')
 
-import isaacgym
 import torch
 import hydra
 from omegaconf import DictConfig, OmegaConf

@@ -7,8 +7,7 @@
     - [Dynamic Models](#dynamic-models)
   - [Installation](#installation)
     - [Requirements](#requirements)
-    - [Install the Nvidia Isaac Gym](#install-the-nvidia-isaac-gym)
-    - [Install the Quaddif](#install-the-quaddif)
+    - [Install the QuadDif](#install-the-quaddif)
   - [Usage](#usage)
   - [Deploy](#deploy)
 
@@ -26,8 +25,6 @@ QuadDif now supports two flight tasks:
   - Relative positions of obstacles w.r.t. the quadrotor, or
   - Image from the depth camera attached to the quadrotor, or
   - Ray distance from the LiDAR attached to the quadrotor.
-
-Since the development of a 3D GUI viewer needs a large amont of work, QuadDif is built upon [Nvidia Isaac Gym Preview 4](https://developer.nvidia.com/isaac-gym) for now, not for physical simulation, but for visualize the environment and the control policy.
 
 ### Learning Algorithms
 
@@ -52,33 +49,10 @@ We have implemented three types of dynamic models for the quadrotor:
 
 ### Requirements
 
-- Ubuntu 18.04(Bionic) or 20.04(Focal).
-- Python 3.6, 3.7 or 3.8.
+- System: Ubuntu.
 - Pytorch 2.x.
-- Minimum NVIDIA driver version: 470.xx.
 
-### Install the Nvidia Isaac Gym
-
-First, download the Nvidia Isaac Gym Preview 4 from [their website](https://developer.nvidia.com/isaac-gym), and then unpack it into your work space:
-
-```bash
-tar -xf ./IsaacGym_Preview_4_Package.tar.gz
-```
-
-Then, install the Isaac Gym:
-
-```bash
-cd isaacgym/python
-pip install -e .
-```
-
-If there's any issue, please refer to their documentation in `isaacgym/docs`. To verify the details of the installed package, run:
-
-```bash
-pip show isaacgym
-```
-
-### Install the Quaddif
+### Install the QuadDif
 
 First, clone the QuadDif under your workspace:
 
@@ -91,6 +65,9 @@ Then, install the dependencies:
 
 ```bash
 cd quaddif
+# install pytorch3d from source
+pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+# install other requirements
 pip install -r requirements.txt
 ```
 

@@ -1,12 +1,9 @@
-import os
 from typing import Optional, Tuple, List
 
 import numpy as np
 from omegaconf import DictConfig
 import torch
 from torch.nn import functional as F
-
-from quaddif import QUADDIF_ROOT_DIR
 
 class ObstacleManager:
     def __init__(self, cfg: DictConfig, n_envs: int, env_spacing: float, device: torch.device):
@@ -127,73 +124,3 @@ class ObstacleManager:
             mask = torch.ones(self.n_obstacles, device=self.device, dtype=torch.bool)
         
         return mask
-
-
-def create_cube(x: float, y: float, z: float) -> str:
-    xml = [
-        "<?xml version='1.0' encoding='UTF-8'?>",
-        '<robot name="box">',
-        '  <link name="base_link">',
-        '    <inertial>',
-        '      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>',
-        '      <mass value="1.0"/>',
-        '      <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0"/>',
-        '    </inertial>',
-        '    <visual name="base_link_visual">',
-        '      <geometry>',
-        f'        <box size="{x} {y} {z}"/>',
-        '      </geometry>',
-        '      <origin xyz="0 0 0" rpy="0 0 0"/>',
-        '    </visual>',
-        '    <collision name="base_link_collision">',
-        '      <geometry>',
-        f'        <box size="{x} {y} {z}"/>',
-        '      </geometry>',    
-        '      <origin xyz="0 0 0" rpy="0 0 0"/>',
-        '    </collision>',
-        '  </link>',
-        '</robot>']
-    file = f"cube_{x:.1f}__{y:.1f}__{z:.1f}".replace(".", "_") + ".urdf"
-    root = os.path.join(QUADDIF_ROOT_DIR, 'resources', 'environment_assets', 'cubes')
-    if not os.path.exists(root):
-        os.makedirs(root)
-    path = os.path.join(root, file)
-    with open(path, 'w') as f:
-        for line in xml:
-            f.write(line+"\n")
-    return path
-    
-def create_ball(r: float) -> str:
-    xml = [
-        "<?xml version='1.0' encoding='UTF-8'?>",
-        '<robot name="sphere">',
-        '  <link name="base_link">',
-        '    <inertial>',
-        '      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>',
-        '      <mass value="1.0"/>',
-        '      <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0"/>',
-        '    </inertial>',
-        '    <visual name="base_link_visual">',
-        '      <geometry>',
-        f'        <sphere radius="{float(r):.1f}"/>',
-        '      </geometry>',
-        '      <origin xyz="0 0 0" rpy="0 0 0"/>',
-        '    </visual>',
-        '    <collision name="base_link_collision">',
-        '      <geometry>',
-        f'        <sphere radius="{float(r):.1f}"/>',
-        '      </geometry>',    
-        '      <origin xyz="0 0 0" rpy="0 0 0"/>',
-        '    </collision>',
-        '  </link>',
-        '</robot>']
-    file = f"sphere_{r:.2f}".replace(".", "_") + ".urdf"
-    root = os.path.join(QUADDIF_ROOT_DIR, 'resources', 'environment_assets', 'spheres')
-    if not os.path.exists(root):
-        os.makedirs(root)
-    path = os.path.join(root, file)
-    if not os.path.exists(path):    
-        with open(path, 'w') as f:
-            for line in xml:
-                f.write(line+"\n")
-    return path
