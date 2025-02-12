@@ -15,7 +15,7 @@ setup(
         'hydra-core',
         'line_profiler',
         'tqdm',
-        'tensorboard==2.12.0',
+        'tensorboard',
         'tensorboardX',
         'wandb',
         'opencv-python',
