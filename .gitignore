@@ -5,3 +5,4 @@ deploy/*
 !deploy/px4_setup.bash
 !deploy/README.md
 imgui.ini
+quaddif.egg-info/
