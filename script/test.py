@@ -87,13 +87,11 @@ def test(
         
         if cfg.record_video:
             rgb_image: np.ndarray = env.renderer.render_fpp()
-            index = (torch.arange(env.n_envs, device=env.device), env.progress-1)
+            index = (np.arange(env.n_envs), env.progress.cpu().numpy()-1)
             depth_image = torchvision.transforms.Resize(
                 (H_depth, W_depth), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(env_info["sensor"])
             depth_image = (depth_image * 255).to(torch.uint8).unsqueeze(-1).expand(-1, -1, -1, 3).cpu().numpy()
-            print(rgb_image.shape, depth_image.shape)
             image = np.concatenate([rgb_image, depth_image], axis=-2)
-            print(image.shape, "FUCK")
             video_array[index] = image
             
             if env_info["reset"].sum().item() > env_info["success"].sum().item(): # some episodes failed
