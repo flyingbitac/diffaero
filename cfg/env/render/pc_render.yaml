@@ -3,14 +3,14 @@ name: position_control_renderer
 headless: ${headless}
 n_envs: ${env.n_envs}
 dt: ${env.dt}
-render_n_envs: 1024
+render_n_envs: 256
 env_spacing: 1
 physics_engine: "physx"
 ground_plane: True
 record_video: ${record_video}
 
 video_camera:
-  width: 128
-  height: 128
+  width: 512
+  height: 288
   fov: 60.0
   far_plane: 20
