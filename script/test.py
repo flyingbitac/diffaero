@@ -59,7 +59,7 @@ def test(
         H_depth = H_video if H_scale >= W_scale else int(H_depth * W_scale)
         W_depth = W_video if W_scale >= H_scale else int(W_depth * H_scale)
         H, W = H_video, W_video + W_depth
-        video_array = np.empty((cfg.n_envs, env.max_steps, H, W, 3), dtype=np.uint8)
+        video_array = np.empty((env.renderer.n_envs, env.max_steps, H, W, 3), dtype=np.uint8)
     
     state = env.reset()
     pbar = tqdm(range(10000))
@@ -86,24 +86,25 @@ def test(
         logger.log_scalars(log_info, i+1)
         
         if cfg.record_video:
+            n_envs = env.renderer.n_envs
             rgb_image: np.ndarray = env.renderer.render_fpp()
-            index = (np.arange(env.n_envs), env.progress.cpu().numpy()-1)
+            index = (np.arange(n_envs), env.progress[:n_envs].cpu().numpy()-1)
             depth_image = torchvision.transforms.Resize(
-                (H_depth, W_depth), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(env_info["sensor"])
+                (H_depth, W_depth), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(env_info["sensor"][:n_envs])
             depth_image = (depth_image * 255).to(torch.uint8).unsqueeze(-1).expand(-1, -1, -1, 3).cpu().numpy()
             image = np.concatenate([rgb_image, depth_image], axis=-2)
             video_array[index] = image
             
-            if env_info["reset"].sum().item() > env_info["success"].sum().item(): # some episodes failed
-                failed = torch.logical_and(env_info["reset"], ~env_info["success"])
+            if env_info["reset"][:n_envs].sum().item() > env_info["success"][:n_envs].sum().item(): # some episodes failed
+                failed = torch.logical_and(env_info["reset"], ~env_info["success"])[:n_envs]
                 idx = failed.nonzero().flatten()[0]
                 video_length = env_info["l"][idx] - 1
                 if cfg.video_saveas == "mp4":
                     save_video_mp4(cfg, video_array[idx, :video_length], logger, f"failed_{i+1}.mp4")
                 elif cfg.video_saveas == "tensorboard":
                     save_video_tensorboard(cfg, video_array[idx.unsqueeze(0), :video_length], logger, "video/fail", i+1)
-            if env_info["success"].sum().item() > 0: # some episodes succeeded
-                idx = env_info["success"].nonzero().flatten()[0]
+            if env_info["success"][:n_envs].sum().item() > 0: # some episodes succeeded
+                idx = env_info["success"][:n_envs].nonzero().flatten()[0]
                 video_length = min(env_info["l"][idx].item(), int(env_info["arrive_time"][idx].item()/env.dt) + 100) - 1
                 if cfg.video_saveas == "mp4":
                     save_video_mp4(cfg, video_array[idx, :video_length], logger, f"success_{i+1}.mp4")
@@ -128,7 +129,7 @@ def main(cfg: DictConfig):
     cfg_path = os.path.join(os.path.dirname(os.path.abspath(cfg.checkpoint)), ".hydra", "config.yaml")
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo
-    cfg.dynamics = ckpt_cfg.dynamics
+    # cfg.dynamics = ckpt_cfg.dynamics
     if cfg.algo.name != 'world':
         cfg.network = ckpt_cfg.network
     
