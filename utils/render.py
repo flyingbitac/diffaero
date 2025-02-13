@@ -267,7 +267,8 @@ class BaseRenderer:
         drone_vertices_tensor = torch.bmm(self.drone_vertices_tensor, rotation_matrix.transpose(-2, -1))
         absolute_pos = pos + self.env_origin
         drone_vertices_tensor = drone_vertices_tensor + absolute_pos.unsqueeze(-2)
-        self.drone_mesh_dict["vertices"].from_torch(torch2ti(drone_vertices_tensor.flatten(end_dim=-2)))
+        if self.enable_rendering:
+            self.drone_mesh_dict["vertices"].from_torch(torch2ti(drone_vertices_tensor.flatten(end_dim=-2)))
         
         idx = self.gui_states["tracking_env_idx"]
         self.drone_mesh_dict_one_env["vertices"].from_torch(torch2ti(drone_vertices_tensor[idx].flatten(end_dim=-2)))
@@ -566,11 +567,13 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self.cube_vertices_tensor + 
             self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
             self.env_origin.unsqueeze(-2).unsqueeze(-2))
-        self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
-        self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[idx].flatten(end_dim=-2)))
-        
         sphere_center_tensor = self.obstacle_manager.p_spheres[:self.n_envs] + self.env_origin.unsqueeze(-2)
-        self.sphere_mesh_dict["centers"].from_torch(torch2ti(sphere_center_tensor.flatten(end_dim=-2)))
+        
+        if self.enable_rendering:
+            self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
+            self.sphere_mesh_dict["centers"].from_torch(torch2ti(sphere_center_tensor.flatten(end_dim=-2)))
+        
+        self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[idx].flatten(end_dim=-2)))
         self.sphere_mesh_dict_one_env["centers"].from_torch(torch2ti(sphere_center_tensor[idx].flatten(end_dim=-2)))
     
     def _render_obstacles(self):
