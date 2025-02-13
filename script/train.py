@@ -4,7 +4,6 @@ import random
 import sys
 sys.path.append('..')
 
-import isaacgym
 import torch
 import numpy as np
 import hydra
@@ -61,7 +60,7 @@ def learn(
                 "loss": f"{env_info['loss_components']['total_loss']:.3f}",
                 "l_episode": f"{l_episode:.1f}",
                 "success_rate": f"{success_rate:.2f}",
-                "fps": f"{(cfg.l_rollout*cfg.env.n_envs)/(pbar._time()-t1):,.0f}"})
+                "fps": f"{int(cfg.l_rollout*cfg.env.n_envs/(pbar._time()-t1)):,d}"})
         log_info = {
             "env_loss": env_info["loss_components"],
             "agent_loss": losses,
@@ -79,7 +78,7 @@ def learn(
             max_success_rate = success_rate
             agent.save(os.path.join(logger.logdir, "best"))
 
-@hydra.main(config_path="../cfg", config_name="config")
+@hydra.main(config_path="../cfg", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
     device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
@@ -93,32 +92,34 @@ def main(cfg: DictConfig):
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
     env_class = ENV_ALIAS[cfg.env.name]
+    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
+    if hasattr(env, "update_sensor_data"):
+        profiler.add_function(env_class.update_sensor_data)
+    if env.renderer is not None:
+        profiler.add_function(env.renderer.render)
     profiler.add_function(env_class.step)
     profiler.add_function(env_class.state)
     profiler.add_function(env_class.loss_fn)
-    if hasattr(env_class, "update_sensor_data"):
-        profiler.add_function(env_class.update_sensor_data)
-    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
     
     agent_class = AGENT_ALIAS[cfg.algo.name]
-    profiler.add_function(agent_class.step)
     agent = agent_class.build(cfg, env, device)
+    profiler.add_function(agent_class.step)
     
     logger = Logger(cfg, run_name=cfg.runname)
     try:
         # learn(cfg, agent, env, logger, on_step_cb=display_image)
         learn(cfg, agent, env, logger)
     except KeyboardInterrupt:
-        pass
-    finally:
-        ckpt_path = os.path.join(logger.logdir, "checkpoints")
-        agent.save(ckpt_path)
-        print(f"The checkpoint is saved to {ckpt_path}.")
-        if cfg.export:
-            PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
+        tqdm.write("Interrupted.")
     
+    ckpt_path = os.path.join(logger.logdir, "checkpoints")
+    agent.save(ckpt_path)
+    print(f"The checkpoint is saved to {ckpt_path}.")
+    if cfg.export:
+        PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
     if env.renderer is not None:
         env.renderer.close()
+    
     global logdir
     logdir = logger.logdir
 

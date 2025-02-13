@@ -1,7 +1,8 @@
 **/__pycache__
 outputs/
-resources/environment_assets/*
 deploy/*
 !deploy/src/
 !deploy/px4_setup.bash
 !deploy/README.md
+imgui.ini
+quaddif.egg-info/

@@ -18,7 +18,7 @@ class PositionControl(BaseEnv):
         if cfg.render.headless:
             self.renderer = None
         else:
-            self.renderer = PositionControlRenderer(cfg.render, device.index)
+            self.renderer = PositionControlRenderer(cfg.render, device)
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":
@@ -34,11 +34,11 @@ class PositionControl(BaseEnv):
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
         if self.renderer is not None:
-            self.renderer.step(self.state_for_render())
-            reset_all = self.renderer.render()
-            truncated = torch.full_like(truncated, reset_all) | truncated
+            self.renderer.step(**self.state_for_render())
+            self.renderer.render()
+            truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
         reset = terminated | truncated
-        reset_indices = reset.nonzero().squeeze(-1)
+        reset_indices = reset.nonzero().view(-1)
         arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
         success = arrived & truncated
@@ -58,9 +58,7 @@ class PositionControl(BaseEnv):
         return self.state(), loss, terminated, extra
     
     def state_for_render(self) -> Tensor:
-        w = torch.zeros_like(self.v) if self.dynamic_type == "pointmass" else self.w
-        state = torch.concat([self.p, self.q, self.v, w], dim=-1)
-        return state
+        return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
     def loss_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
