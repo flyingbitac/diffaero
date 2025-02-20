@@ -16,7 +16,7 @@ import imageio
 from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
 from quaddif.utils.logger import RecordEpisodeStatistics, Logger
-from quaddif.utils.device import idle_device
+from quaddif.utils.device import get_idle_device
 
 def display_image(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
@@ -120,7 +120,7 @@ def test(
 
 @hydra.main(config_path="../cfg", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
-    device_idx = f"{idle_device()}" if cfg.device is None else f"{cfg.device}"
+    device_idx = f"{get_idle_device()}" if cfg.device is None else f"{cfg.device}"
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
     print(f"Using device {device}.")
     device = torch.device(device)
