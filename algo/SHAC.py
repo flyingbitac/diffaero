@@ -172,7 +172,7 @@ class SHAC:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(state)
-            next_state, loss, terminated, env_info = env.step(action)
+            next_state, loss, terminated, env_info = env.step(env.rescale_action(action))
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(state, loss/10, policy_info["value"], env_info["reset"], terminated, next_value)
@@ -383,7 +383,7 @@ class SHAC_Q:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(state)
-            next_state, loss, terminated, env_info = env.step(action)
+            next_state, loss, terminated, env_info = env.step(env.rescale_action(action))
             self.record_loss(loss, policy_info, env_info, terminated)
             # divide by 10 to avoid disstability
             self.buffer.add(state, action, loss/10, env_info["next_state_before_reset"], terminated)
