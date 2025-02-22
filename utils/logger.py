@@ -20,8 +20,7 @@ class Logger:
         self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
         if run_name != "":
             run_name = "__" + run_name
-        env_name = {"position_control": "PC", "obstacle_avoidance": "OA"}[cfg.env.name]
-        run_name = f"{cfg.dynamics.name}__{env_name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
+        run_name = f"{cfg.dynamics.name}__{cfg.env.name[:4]}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         if type.lower() == 'tensorboard':
             print("Using Tensorboard Logger.")
             self.writer = SummaryWriter(

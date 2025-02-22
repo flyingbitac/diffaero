@@ -1,4 +1,5 @@
 from typing import *
+import os
 import sys
 sys.path.append('..')
 
@@ -12,7 +13,7 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 import taichi as ti
 
-from quaddif.env import ObstacleAvoidance
+from quaddif.env.obstacle_avoidance import ObstacleAvoidanceYOPO
 from quaddif.utils.render import torch2ti
 
 class YOPONet(nn.Module):
@@ -37,9 +38,11 @@ class YOPONet(nn.Module):
             nn.AdaptiveAvgPool2d((H_out, W_out))
         )
         self.head = nn.Sequential(
-            nn.Conv2d(feature_dim+9, 256, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(feature_dim+9, 64, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
-            nn.Conv2d(256, 10, kernel_size=1, stride=1, padding=0)
+            nn.Conv2d(64, 64, kernel_size=1, stride=1, padding=0),
+            nn.ELU(),
+            nn.Conv2d(64, 10, kernel_size=1, stride=1, padding=0)
         )
     
     def forward(
@@ -155,8 +158,9 @@ class YOPO:
         self.v_range: float = cfg.v_range
         self.a_range: float = cfg.a_range
         self.G = torch.tensor([[0., 0., 9.81]], device=device)
-        self.n_epochs: int = cfg.n_epochs
+        self.gamma: float = cfg.gamma
         self.expl_prob: float = cfg.expl_prob
+        self.grad_norm: Optional[float] = cfg.grad_norm
         self.device = device
         
         pitches = torch.linspace(self.min_pitch, self.max_pitch, self.n_pitch, device=device)
@@ -165,12 +169,10 @@ class YOPO:
         pitches, yaws = torch.meshgrid(pitches, yaws, indexing="ij")
         rolls = torch.zeros_like(pitches)
         self.euler_angles = torch.stack([yaws, pitches, rolls], dim=-1).reshape(-1, 3)
-        print(self.euler_angles)
         self.rpy_base = torch.stack([torch.full_like(yaws, self.r_base), pitches, yaws], dim=-1).reshape(-1, 3)
 
         # convert coordinates from primitive frame to body frame
         self.rotmat_p2b = T.euler_angles_to_matrix(self.euler_angles, convention="ZYX")
-        print(self.rotmat_p2b)
         # convert coordinates from body frame to primitive frame
         self.rotmat_b2p = self.rotmat_p2b.transpose(-2, -1)
         
@@ -180,22 +182,17 @@ class YOPO:
             feature_dim=self.feature_dim).to(device)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
     
-    def act(
-        self,
-        env: ObstacleAvoidance,
-    ):
-        rotmat_b2w = T.quaternion_to_matrix(env.q.roll(1, dims=-1))
+    def inference(self, p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor]
+        rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         rotmat_w2b = rotmat_b2w.transpose(-2, -1)
-        target_vel_b = torch.matmul(rotmat_w2b, env.target_vel.unsqueeze(-1)).squeeze(-1)
-        depth_image = env.sensor_tensor.unsqueeze(1)
-        p_curr_b = torch.zeros_like(env.p)
-        v_curr_b = torch.matmul(rotmat_w2b, env.v.unsqueeze(-1)).squeeze(-1)
-        a_curr_b = torch.matmul(rotmat_w2b, env.a.unsqueeze(-1)).squeeze(-1) - self.G
+        target_vel_b = torch.matmul(rotmat_w2b, target_vel_w.unsqueeze(-1)).squeeze(-1)
+        p_curr_b = torch.zeros_like(p_w)
+        v_curr_b = torch.matmul(rotmat_w2b, v_w.unsqueeze(-1)).squeeze(-1)
+        a_curr_b = torch.matmul(rotmat_w2b, a_w.unsqueeze(-1)).squeeze(-1) - self.G
         
-        N, HW = p_curr_b.size(0), self.n_pitch * self.n_yaw
         state = torch.stack([target_vel_b, v_curr_b, a_curr_b], dim=-1)
         net_output: Tensor = self.net(self.rotmat_b2p, depth_image, state)
-        tqdm.write(str(target_vel_b[0]))
         p_end_b, v_end_b, a_end_b, score = post_process(
             output=net_output,
             rpy_base=self.rpy_base,
@@ -206,190 +203,115 @@ class YOPO:
             a_range=self.a_range,
             rotmat_p2b=self.rotmat_p2b
         )
-        # tqdm.write(str(p_end_b[0]))
-        best_idx = score.argmin(dim=-1).reshape(N, 1, 1).expand(-1, -1, 3) # [N, 1, 3]
-        if self.expl_prob > 0.:
-            random_idx = torch.randint(0, HW, (N, 1, 3), device=self.device)
-            use_random = torch.rand(N, 1, 3, device=self.device) < self.expl_prob
+        coef_xyz = solve_coef( # [N, HW, 6, 3]
+            torch.tensor(self.tmax, device=self.device),
+            p_curr_b.unsqueeze(1).expand_as(p_end_b),
+            v_curr_b.unsqueeze(1).expand_as(v_end_b),
+            a_curr_b.unsqueeze(1).expand_as(a_end_b),
+            p_end_b,
+            v_end_b,
+            a_end_b
+        )
+        return score, coef_xyz
+    
+    def act(self, state: Tuple[Tensor], expl_prob: float = 0.):
+        p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = state
+        rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
+        N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
+        
+        score, coef_xyz = self.inference(p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image)
+        
+        best_idx = score.argmin(dim=-1)
+        if expl_prob > 0.:
+            random_idx = torch.randint(0, HW, (N, ), device=self.device)
+            use_random = torch.rand(N, device=self.device) < expl_prob
             grid_index = torch.where(use_random, random_idx, best_idx)
         else:
             grid_index = best_idx
-        p_best_b = torch.gather(p_end_b.reshape(N, HW, 3), 1, grid_index).squeeze(1)
-        v_best_b = torch.gather(v_end_b.reshape(N, HW, 3), 1, grid_index).squeeze(1)
-        a_best_b = torch.gather(a_end_b.reshape(N, HW, 3), 1, grid_index).squeeze(1)
-        tqdm.write(str(v_best_b[0])+"\n")
-        coef_xyz = solve_coef( # [N, 6, 3]
-            torch.tensor(self.tmax, device=self.device),
-            p_curr_b,
-            v_curr_b,
-            a_curr_b,
-            p_best_b,
-            v_best_b,
-            a_best_b
-        )
-        p_next_b, v_next_b, a_next_b = get_traj_point(self.t_vec[1], coef_xyz) # [N, 3]
+        grid_index = grid_index.reshape(N, 1, 1, 1).expand(-1, -1, 6, 3)
+        coef_best = torch.gather(coef_xyz, 1, grid_index).squeeze(1)
+        
+        p_next_b, v_next_b, a_next_b = get_traj_point(self.t_vec[1], coef_best) # [N, 3]
         a_next_w = torch.matmul(rotmat_b2w, a_next_b.unsqueeze(-1)).squeeze(-1)
-        return a_next_w + self.G, coef_xyz
+        return a_next_w + self.G, {"coef_best": coef_best}
 
-    def step(
-        self,
-        env: ObstacleAvoidance,
-    ):
+    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, state: Tuple[Tensor], on_step_cb=None):
         N, HW = env.n_envs, self.n_pitch * self.n_yaw
         
-        rotmat_b2w = T.quaternion_to_matrix(env.q.roll(1, dims=-1))
-        rotmat_w2b = rotmat_b2w.transpose(-2, -1)
-        target_vel_b = torch.matmul(rotmat_w2b, env.target_vel.unsqueeze(-1)).squeeze(-1)
-        depth_image = env.sensor_tensor.unsqueeze(1)
-        p_curr_b = torch.zeros_like(env.p)
-        v_curr_b = torch.matmul(rotmat_w2b, env.v.unsqueeze(-1)).squeeze(-1)
-        a_curr_b = torch.matmul(rotmat_w2b, env.a.unsqueeze(-1)).squeeze(-1) - self.G
-        state = torch.stack([target_vel_b, v_curr_b, a_curr_b], dim=-1)
+        p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = state
+        rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         
-        for _ in range(self.n_epochs):
+        for _ in range(cfg.algo.n_epochs):
+            # traverse the trajectory and cumulate the loss
+            score, coef_xyz = self.inference(p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image)
+            
             cumulative_loss = torch.zeros(N, HW, device=self.device)
             survive = torch.ones(N, HW, device=self.device, dtype=torch.bool)
             survive_time = torch.ones(N, HW, device=self.device)
             
-            net_output: Tensor = self.net(self.rotmat_b2p, depth_image, state)
-            p_end_b, v_end_b, a_end_b, score = post_process(
-                output=net_output,
-                rpy_base=self.rpy_base,
-                r_range=self.r_range,
-                pitch_range=self.pitch_range,
-                yaw_range=self.yaw_range,
-                v_range=self.v_range,
-                a_range=self.a_range,
-                rotmat_p2b=self.rotmat_p2b
-            )
-            coef_xyz = solve_coef( # [N, 6, 3]
-                torch.tensor(self.tmax, device=self.device),
-                p_curr_b.unsqueeze(1).expand_as(p_end_b),
-                v_curr_b.unsqueeze(1).expand_as(v_end_b),
-                a_curr_b.unsqueeze(1).expand_as(a_end_b),
-                p_end_b,
-                v_end_b,
-                a_end_b
-            )
-            for t in self.t_vec[1:]:
+            for i, t in enumerate(self.t_vec[1:]):
                 p_t_b, v_t_b, a_t_b = get_traj_point(t, coef_xyz) # [N, 3]
-                p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + env.p.unsqueeze(1)
+                p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
                 v_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), v_t_b.unsqueeze(-1)).squeeze(-1)
                 a_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), a_t_b.unsqueeze(-1)).squeeze(-1) + self.G.unsqueeze(0)
-                loss, _, dead = loss_fn(env, p_t_w, v_t_w, a_t_w)
+                loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
                 survive = survive & ~dead
                 survive_time += survive.float()
-                cumulative_loss = cumulative_loss + loss * survive.float()
+                cumulative_loss = cumulative_loss + loss * survive.float() * self.gamma ** i
             cumulative_loss = cumulative_loss / survive_time
             score_loss = F.mse_loss(score, cumulative_loss.detach())
-            total_loss = cumulative_loss.mean() + score_loss * 0.001
+            cumulative_loss = cumulative_loss.mean()
+            total_loss = cumulative_loss + score_loss
             self.optimizer.zero_grad()
             total_loss.backward()
             self.optimizer.step()
         
+        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.net.parameters()]) ** 0.5
+        if self.grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=self.grad_norm)
+        
         with torch.no_grad():
-            a_next_w, coef_xyz = self.act(env)
+            action, policy_info = self.act(state, expl_prob=self.expl_prob)
+            # render the trajectory
             if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
                 n_envs = env.renderer.n_envs
-                # lines_tensor = env.renderer.env_origin.reshape(n_envs, 1, 1, 3).expand(-1, self.n_points-1, 2, -1)
                 lines_tensor = torch.zeros(n_envs, self.n_points-1, 2, 3, device=self.device, dtype=torch.float32)
                 lines_field = ti.Vector.field(3, dtype=ti.f32, shape=(n_envs * (self.n_points-1) * 2))
                 for i, t in enumerate(self.t_vec):
-                    p_t_b, v_t_b, a_t_b = get_traj_point(t, coef_xyz) # [N, 3]
-                    # p_t_w = torch.matmul(rotmat_b2w, p_t_b.unsqueeze(-1)).squeeze(-1)
-                    p_t_w = torch.matmul(rotmat_b2w, p_t_b.unsqueeze(-1)).squeeze(-1) + env.p
-                    # print(p_t_w.shape)
+                    p_t_b, v_t_b, a_t_b = get_traj_point(t, policy_info["coef_best"]) # [N, 3]
+                    p_t_w = torch.matmul(rotmat_b2w, p_t_b.unsqueeze(-1)).squeeze(-1) + p_w
+                    p_t_w = p_t_w[:n_envs].to(torch.float32) + env.renderer.env_origin
                     if i != self.n_points - 1:
-                        lines_tensor[:, i, 0] = p_t_w[:n_envs].to(torch.float32) + env.renderer.env_origin
+                        lines_tensor[:, i, 0] = p_t_w
                     if i != 0:
-                        lines_tensor[:, i-1, 1] = p_t_w[:n_envs].to(torch.float32) + env.renderer.env_origin
-                    # if i == 1:
-                    #     break
+                        lines_tensor[:, i-1, 1] = p_t_w
                 lines_field.from_torch(torch2ti(lines_tensor.flatten(end_dim=-2)))                
                 env.renderer.gui_scene.lines(lines_field, color=(1., 1., 1.), width=3.)
             
-            env_info = env_step(env, a_next_w)
+            next_state, loss, terminated, env_info = env.step(action)
+            if on_step_cb is not None:
+                on_step_cb(
+                    state=state,
+                    action=action,
+                    policy_info=policy_info,
+                    env_info=env_info)
         
-        return cumulative_loss.mean().item(), score_loss.item(), env_info
+        losses = {
+            "cumulative_loss": cumulative_loss.item(),
+            "score_loss": score_loss.item(),
+            "total_loss": total_loss.item()}
+        grad_norms = {"actor_grad_norm": grad_norm}
+        
+        return next_state, policy_info, env_info, losses, grad_norms
 
-def env_step(env, a_w):
-    # type: (ObstacleAvoidance, Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-    env.model.step(a_w)
-    terminated, truncated = env.terminated(), env.truncated()
-    env.progress += 1
-    if env.renderer is not None:
-        env.renderer.step(**env.state_for_render())
-        env.renderer.render()
-        truncated = torch.full_like(truncated, env.renderer.gui_states["reset_all"]) | truncated
-    reset = terminated | truncated
-    reset_indices = reset.nonzero().view(-1)
-    arrived = (env.p - env.target_pos).norm(dim=-1) < 0.5
-    env.arrive_time.copy_(torch.where(arrived & (env.arrive_time == 0), env.progress.float() * env.dt, env.arrive_time))
-    success = arrived & truncated
-    env.update_sensor_data()
-    if reset_indices.numel() > 0:
-        env.reset_idx(reset_indices)
-    with torch.no_grad():
-        _, loss_components, _ = loss_fn(env, env.p.unsqueeze(1), env.v.unsqueeze(1), env.a.unsqueeze(1))
-    extra = {
-        "truncated": truncated,
-        "l": env.progress.clone(),
-        "reset": reset,
-        "reset_indicies": reset_indices,
-        "success": success,
-        "arrive_time": env.arrive_time.clone(),
-        "next_state_before_reset": env.state(with_grad=True),
-        "loss_components": loss_components,
-        "sensor": env.sensor_tensor.clone(),
-    }
-    return extra
-
-def loss_fn(env, _p, _v, _a):
-    # type: (ObstacleAvoidance, Tensor, Tensor, Tensor) -> Tuple[Tensor, Dict[str, float], Tensor]
-    p, v, a = _p.detach(), _v.detach(), _a.detach()
-    target_relpos = env.target_pos.unsqueeze(1) - p
-    target_dist = target_relpos.norm(dim=-1)
-    target_vel = target_relpos / torch.max(target_dist / env.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
-    virtual_radius = 0.2
-    # calculating the closest point on each sphere to the quadrotor
-    sphere_relpos = env.obstacle_manager.p_spheres.unsqueeze(2) - p.unsqueeze(1) # [n_envs, n_spheres, 3]
-    dist2surface_sphere = (sphere_relpos.norm(dim=-1) - env.obstacle_manager.r_spheres.unsqueeze(2)).clamp(min=0) # [n_envs, n_spheres]
-    # calculating the closest point on each cube to the quadrotor
-    nearest_point = p.unsqueeze(1).clamp(
-        min=env.obstacle_manager.box_min.unsqueeze(2),
-        max=env.obstacle_manager.box_max.unsqueeze(2)) # [n_envs, n_cubes, 3]
-    cube_relpos = nearest_point - p.unsqueeze(1) # [n_envs, n_cubes, 3]
-    dist2surface_cube = cube_relpos.norm(dim=-1).clamp(min=0) # [n_envs, n_cubes]
-    # concatenate the relative direction and distance to the surface of both type of obstacles
-    obstacle_reldirection = F.normalize(torch.cat([sphere_relpos, cube_relpos], dim=1), dim=-1) # [n_envs, n_obstacles, 3]
-    dist2surface = torch.cat([dist2surface_sphere, dist2surface_cube], dim=1) # [n_envs, n_obstacles]
-    dist2surface = (dist2surface - env.r_drone - virtual_radius).clamp(min=0)
-    # calculate the obstacle avoidance loss
-    approaching_vel = torch.sum(obstacle_reldirection * _v.unsqueeze(1), dim=-1) # [n_envs, n_obstacles]
-    approaching = approaching_vel > 0
-    avoiding_vel = torch.norm(_v.unsqueeze(1) - approaching_vel.detach().unsqueeze(-1) * obstacle_reldirection, dim=-1) # [n_envs, n_obstacles]
-    approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dist2surface.neg().exp()).max(dim=1) # [n_envs]
-    avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dist2surface.neg().exp() # [n_envs, n_obstacles]
-    avoiding_reward = avoiding_reward.gather(dim=1, index=most_dangerous.unsqueeze(1)).squeeze(1) # [n_envs]
-    oa_loss = approaching_penalty - 0.5 * avoiding_reward
+    def save(self, path: str):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        torch.save(self.net.state_dict(), os.path.join(path, "network.pth"))
     
-    pos_loss = 1 - target_relpos.norm(dim=-1).neg().exp()
+    def load(self, path: str):
+        self.net.load_state_dict(torch.load(os.path.join(path, "network.pth")))
     
-    vel_diff = torch.norm(_v - target_vel, dim=-1)
-    vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-    
-    total_loss = vel_loss + 4 * oa_loss + 5 * pos_loss
-    loss_components = {
-        "vel_loss": vel_loss.mean().item(),
-        "pos_loss": pos_loss.mean().item(),
-        "oa_loss": oa_loss.mean().item(),
-        "total_loss": total_loss.mean().item()
-    }
-    
-    collision = torch.any(dist2surface < env.r_drone, dim=1) # [n_envs]
-    collision = collision | (p[..., 2] - env.r_drone < env.z_ground_plane)
-    out_of_bound = torch.any(p < -1.5*env.L, dim=-1) | torch.any(p > 1.5*env.L, dim=-1)
-    
-    dead = collision
-    
-    return total_loss, loss_components, dead
+    @staticmethod
+    def build(cfg: DictConfig, env: ObstacleAvoidanceYOPO, device: torch.device):
+        return YOPO(cfg.algo, device)
