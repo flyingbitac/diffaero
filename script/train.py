@@ -50,19 +50,25 @@ def learn(
         state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
         l_episode = (env_info["stats"]["l"] - 1) * env.dt
         success_rate = env_info["stats"]["success_rate"]
+        survive_rate = env_info["stats"]["survive_rate"]
         arrive_time = env_info["stats"]["arrive_time"]
         if cfg.algo.name != 'world':
             pbar.set_postfix({
-                "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
+                # "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
                 "loss": f"{env_info['loss_components']['total_loss']:.3f}",
                 "l_episode": f"{l_episode:.1f}",
                 "success_rate": f"{success_rate:.2f}",
+                "survive_rate": f"{survive_rate:.2f}",
                 "fps": f"{int(cfg.l_rollout*cfg.env.n_envs/(pbar._time()-t1)):,d}"})
         log_info = {
             "env_loss": env_info["loss_components"],
             "agent_loss": losses,
             "agent_grad_norm": grad_norms,
-            "metrics": {"l_episode": l_episode, "success_rate": success_rate, "arrive_time": arrive_time}
+            "metrics": {
+                "l_episode": l_episode,
+                "success_rate": success_rate,
+                "survive_rate": survive_rate,
+                "arrive_time": arrive_time}
         }
         if "value" in policy_info.keys():
             log_info["value"] = policy_info["value"].mean().item()

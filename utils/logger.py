@@ -110,6 +110,7 @@ class RecordEpisodeStatistics:
         self.n_envs = getattr(env, "n_envs", 1)
         self.device = env.device
         self.success = torch.zeros(self.n_envs, dtype=torch.float, device=self.device)
+        self.survive = torch.zeros(self.n_envs, dtype=torch.float, device=self.device)
         self.arrive_time = torch.full((self.n_envs,), env.max_steps*env.dt, dtype=torch.float, device=self.device)
         self.episode_length = torch.zeros(self.n_envs, dtype=torch.long, device=self.device)
         
@@ -129,10 +130,13 @@ class RecordEpisodeStatistics:
                 self.arrive_time[-n_success:] = extra["arrive_time"][extra["success"]]
             self.success = torch.roll(self.success, -n_resets, 0)
             self.success[-n_resets:] = extra["success"][extra["reset"]]
+            self.survive = torch.roll(self.survive, -n_resets, 0)
+            self.survive[-n_resets:] = extra["truncated"][extra["reset"]]
             self.episode_length = torch.roll(self.episode_length, -n_resets, 0)
             self.episode_length[-n_resets:] = extra["l"][extra["reset"]]
         extra["stats"] = {
             "success_rate": self.success.mean().item(),
+            "survive_rate": self.survive.mean().item(),
             "l": self.episode_length.float().mean().item(),
             "arrive_time": self.arrive_time.mean().item()
         }
