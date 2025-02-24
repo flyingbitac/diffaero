@@ -10,3 +10,4 @@ entropy_weight: 0.01
 actor_grad_norm: 1.
 critic_grad_norm: 
 n_minibatch: 8
+target_update_rate: 0.005

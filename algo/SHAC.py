@@ -42,6 +42,7 @@ class SHAC:
         self.entropy_weight: float = cfg.entropy_weight
         self.actor_grad_norm: float = cfg.actor_grad_norm
         self.critic_grad_norm: float = cfg.critic_grad_norm
+        self.target_update_rate: float = cfg.target_update_rate
         self.n_minibatch: int = cfg.n_minibatch
         self.n_envs: int = n_envs
         self.l_rollout: int = l_rollout
@@ -162,7 +163,7 @@ class SHAC:
                 torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
             self.critic_optim.step()
         for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
-            p_t.data.lerp_(p.data, 5e-3)
+            p_t.data.lerp_(p.data, self.target_update_rate)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
     
     def step(self, cfg, env, state, on_step_cb=None):
