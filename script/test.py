@@ -70,8 +70,11 @@ def test(
         t1 = pbar._time()
         env.detach()
         action, policy_info = agent.act(state, test=True)
-        state, loss, terminated, env_info = env.step(env.rescale_action(action))
-        agent.reset(env_info["reset"])
+        if cfg.algo.name != "yopo":
+            action = env.rescale_action(action)
+        state, loss, terminated, env_info = env.step(action)
+        if hasattr(agent, "reset"):
+            agent.reset(env_info["reset"])
         l_episode = (env_info["stats"]["l"] - 1) * env.dt
         n_resets += env_info["reset"].sum().item()
         n_survive += env_info["truncated"].sum().item()

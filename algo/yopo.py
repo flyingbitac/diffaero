@@ -8,9 +8,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from pytorch3d import transforms as T
-from tensordict import TensorDict
 from omegaconf import DictConfig
-from tqdm import tqdm
 import taichi as ti
 
 from quaddif.env.obstacle_avoidance import ObstacleAvoidanceYOPO
@@ -74,19 +72,19 @@ def rpy2xyz(rpy: Tensor) -> Tensor:
 def post_process(
     output: Tensor,
     rpy_base: Tensor,
-    r_range: float,
-    pitch_range: float,
-    yaw_range: float,
-    v_range: float,
-    a_range: float,
+    dr_range: float,
+    dpitch_range: float,
+    dyaw_range: float,
+    dv_range: float,
+    da_range: float,
     rotmat_p2b: Tensor,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     d_rpy, v_p, a_p, score = output.chunk(4, dim=-1) # #channels: [3, 3, 3, 1]
-    rpy_range = torch.tensor([r_range, pitch_range, yaw_range], device=rpy_base.device)
+    rpy_range = torch.tensor([dr_range, dpitch_range, dyaw_range], device=rpy_base.device)
     rpy = rpy_base.unsqueeze(0) + torch.tanh(d_rpy) * rpy_range.expand_as(d_rpy)
     # print(rpy.view(-1, 3).min(dim=0).values, rpy.view(-1, 3).max(dim=0).values)
     p_b = rpy2xyz(rpy)
-    v_p, a_p = v_range * torch.tanh(v_p), a_range * torch.tanh(a_p)
+    v_p, a_p = dv_range * torch.tanh(v_p), da_range * torch.tanh(a_p)
     v_b = torch.matmul(rotmat_p2b, v_p.unsqueeze(-1)).squeeze(-1)
     a_b = torch.matmul(rotmat_p2b, a_p.unsqueeze(-1)).squeeze(-1)
     return p_b, v_b, a_b, score.squeeze(-1)
@@ -196,11 +194,11 @@ class YOPO:
         p_end_b, v_end_b, a_end_b, score = post_process(
             output=net_output,
             rpy_base=self.rpy_base,
-            r_range=self.r_range,
-            pitch_range=self.pitch_range,
-            yaw_range=self.yaw_range,
-            v_range=self.v_range,
-            a_range=self.a_range,
+            dr_range=self.dr_range,
+            dpitch_range=self.dpitch_range,
+            dyaw_range=self.dyaw_range,
+            dv_range=self.dv_range,
+            da_range=self.da_range,
             rotmat_p2b=self.rotmat_p2b
         )
         coef_xyz = solve_coef( # [N, HW, 6, 3]
@@ -214,7 +212,7 @@ class YOPO:
         )
         return score, coef_xyz
     
-    def act(self, state: Tuple[Tensor], expl_prob: float = 0.):
+    def act(self, state: Tuple[Tensor], test: bool = False):
         p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = state
         rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
@@ -222,9 +220,9 @@ class YOPO:
         score, coef_xyz = self.inference(p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image)
         
         best_idx = score.argmin(dim=-1)
-        if expl_prob > 0.:
+        if not test:
             random_idx = torch.randint(0, HW, (N, ), device=self.device)
-            use_random = torch.rand(N, device=self.device) < expl_prob
+            use_random = torch.rand(N, device=self.device) < self.expl_prob
             grid_index = torch.where(use_random, random_idx, best_idx)
         else:
             grid_index = best_idx
@@ -271,7 +269,7 @@ class YOPO:
             torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=self.grad_norm)
         
         with torch.no_grad():
-            action, policy_info = self.act(state, expl_prob=self.expl_prob)
+            action, policy_info = self.act(state)
             # render the trajectory
             if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
                 n_envs = env.renderer.n_envs

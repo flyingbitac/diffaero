@@ -16,7 +16,7 @@ class ObstacleAvoidance(BaseEnv):
         super(ObstacleAvoidance, self).__init__(cfg, device)
         self.obstacle_manager = ObstacleManager(cfg.obstacles, self.n_envs, self.L, device)
         self.n_obstacles = self.obstacle_manager.n_obstacles
-        self.height_scale = cfg.height_scale
+        self.height_scale: float = cfg.height_scale
         self.z_ground_plane = -self.height_scale*self.L if cfg.ground_plane else None
         
         self.sensor_type = cfg.sensor.name
@@ -47,7 +47,7 @@ class ObstacleAvoidance(BaseEnv):
             self.renderer = None
         
         self.action_dim = self.model.action_dim
-        self.r_drone = cfg.r_drone
+        self.r_drone: float = cfg.r_drone
     
     def state(self, with_grad=False):
         if self.dynamic_type == "pointmass":
