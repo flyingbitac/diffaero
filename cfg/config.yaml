@@ -5,7 +5,7 @@ defaults:
   - network: mlp # [mlp, cnn]
   - sensor: camera # [camera, lidar, relpos]
   - _self_
-  # - override hydra/launcher: joblib
+  - override hydra/launcher: joblib
 
 n_envs: 4096
 l_rollout: ${algo.l_rollout}
@@ -28,5 +28,5 @@ env:
 hydra:
   sweep:
     dir: ./outputs/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}
-  # launcher:
-    # n_jobs: 8
+  launcher:
+    n_jobs: 8

@@ -13,6 +13,7 @@ setup(
         'matplotlib',
         'pytorch3d',
         'hydra-core',
+        'hydra-joblib-launcher',
         'line_profiler',
         'tqdm',
         'tensorboard',
