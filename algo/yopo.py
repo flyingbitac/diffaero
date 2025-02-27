@@ -36,11 +36,11 @@ class YOPONet(nn.Module):
             nn.AdaptiveAvgPool2d((H_out, W_out))
         )
         self.head = nn.Sequential(
-            nn.Conv2d(feature_dim+9, 64, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(feature_dim+9, 128, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
-            nn.Conv2d(64, 64, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(128, 128, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
-            nn.Conv2d(64, 10, kernel_size=1, stride=1, padding=0)
+            nn.Conv2d(128, 10, kernel_size=1, stride=1, padding=0)
         )
     
     def forward(
@@ -140,7 +140,8 @@ class YOPO:
         device: torch.device
     ):
         self.tmax: float = cfg.tmax
-        self.n_points: int = int(cfg.n_points_per_sec * self.tmax)
+        self.n_points_per_sec: int = cfg.n_points_per_sec
+        self.n_points: int = int(self.n_points_per_sec * self.tmax)
         self.t_vec = torch.linspace(0, self.tmax, self.n_points, device=device)
         self.min_pitch: float = cfg.min_pitch * torch.pi / 180.
         self.max_pitch: float = cfg.max_pitch * torch.pi / 180.
@@ -150,11 +151,11 @@ class YOPO:
         self.n_yaw: int = cfg.n_yaw
         self.feature_dim: int = cfg.feature_dim
         self.r_base: float = cfg.r
-        self.r_range: float = cfg.r_range
-        self.pitch_range: float = cfg.pitch_range * torch.pi / 180.
-        self.yaw_range: float = cfg.yaw_range * torch.pi / 180.
-        self.v_range: float = cfg.v_range
-        self.a_range: float = cfg.a_range
+        self.dr_range: float = self.r_base
+        self.dpitch_range: float = cfg.dpitch_range * torch.pi / 180.
+        self.dyaw_range: float = cfg.dyaw_range * torch.pi / 180.
+        self.dv_range: float = cfg.dv_range
+        self.da_range: float = cfg.da_range
         self.G = torch.tensor([[0., 0., 9.81]], device=device)
         self.gamma: float = cfg.gamma
         self.expl_prob: float = cfg.expl_prob
@@ -233,6 +234,10 @@ class YOPO:
         a_next_w = torch.matmul(rotmat_b2w, a_next_b.unsqueeze(-1)).squeeze(-1)
         return a_next_w + self.G, {"coef_best": coef_best}
 
+    def dynamics_step(self, env: ObstacleAvoidanceYOPO, pva: Tensor, a_next: Tensor):
+        pva_next = env.model.solver(env.model.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
+        return pva_next
+
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, state: Tuple[Tensor], on_step_cb=None):
         N, HW = env.n_envs, self.n_pitch * self.n_yaw
         
@@ -242,21 +247,24 @@ class YOPO:
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
             score, coef_xyz = self.inference(p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image)
+            pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, HW, -1)
             
             cumulative_loss = torch.zeros(N, HW, device=self.device)
             survive = torch.ones(N, HW, device=self.device, dtype=torch.bool)
-            survive_time = torch.ones(N, HW, device=self.device)
+            survive_steps = torch.ones(N, HW, device=self.device)
             
             for i, t in enumerate(self.t_vec[1:]):
                 p_t_b, v_t_b, a_t_b = get_traj_point(t, coef_xyz) # [N, 3]
-                p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
-                v_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), v_t_b.unsqueeze(-1)).squeeze(-1)
+                # p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
+                # v_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), v_t_b.unsqueeze(-1)).squeeze(-1)
                 a_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), a_t_b.unsqueeze(-1)).squeeze(-1) + self.G.unsqueeze(0)
-                loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
+                pva_w = self.dynamics_step(env, pva_w, a_t_w)
+                loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
+                # loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
                 survive = survive & ~dead
-                survive_time += survive.float()
+                survive_steps += survive.float()
                 cumulative_loss = cumulative_loss + loss * survive.float() * self.gamma ** i
-            cumulative_loss = cumulative_loss / survive_time
+            cumulative_loss = cumulative_loss / survive_steps
             score_loss = F.mse_loss(score, cumulative_loss.detach())
             cumulative_loss = cumulative_loss.mean()
             total_loss = cumulative_loss + score_loss
