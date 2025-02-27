@@ -328,18 +328,15 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         vel_diff = torch.norm(_v - target_vel, dim=-1)
         vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
         
-        total_loss = vel_loss + 4 * oa_loss + 5 * pos_loss
+        collision = torch.any(dist2surface < self.r_drone, dim=1) # [n_envs]
+        collision = collision | (p[..., 2] - self.r_drone < self.z_ground_plane)
+        # out_of_bound = torch.any(p < -1.5*self.L, dim=-1) | torch.any(p > 1.5*self.L, dim=-1)
+        
+        total_loss = vel_loss + 4 * oa_loss + 5 * pos_loss + collision.float() * 0
         loss_components = {
             "vel_loss": vel_loss.mean().item(),
             "pos_loss": pos_loss.mean().item(),
             "oa_loss": oa_loss.mean().item(),
             "total_loss": total_loss.mean().item()
         }
-        
-        collision = torch.any(dist2surface < self.r_drone, dim=1) # [n_envs]
-        collision = collision | (p[..., 2] - self.r_drone < self.z_ground_plane)
-        out_of_bound = torch.any(p < -1.5*self.L, dim=-1) | torch.any(p > 1.5*self.L, dim=-1)
-        
-        dead = collision
-        
-        return total_loss, loss_components, dead
+        return total_loss, loss_components, collision

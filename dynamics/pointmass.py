@@ -47,7 +47,7 @@ class PointMassModel:
     
     def dynamics(self, X: Tensor, U: Tensor) -> Tensor:
         # Unpacking state and input variables
-        p, v, a = X[:, :3], X[:, 3:6], X[:, 6:9]
+        p, v, a = X[..., :3], X[..., 3:6], X[..., 6:9]
         
         a_dot = self.lmbda * (U - a)
         
