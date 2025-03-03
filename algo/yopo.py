@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 import taichi as ti
+from tqdm import tqdm
 
 from quaddif.env.obstacle_avoidance import ObstacleAvoidanceYOPO
 from quaddif.utils.render import torch2ti
@@ -133,6 +134,16 @@ def get_traj_point(
     p, v, a = pva.unbind(dim=-2)
     return p, v, a
 
+@torch.jit.script
+def get_traj_points(
+    t_vec: Tensor,
+    coef_xyz: Tensor # [..., 6, 3]
+):
+    coef_mat = get_coef_matrices(t_vec)[..., 3:, :] # [3, 6]
+    pva = torch.matmul(coef_mat.unsqueeze(0), coef_xyz.unsqueeze(1)) # [..., 3(pva), 3(xyz)]
+    p, v, a = pva.unbind(dim=-2)
+    return p, v, a
+
 class YOPO:
     def __init__(
         self,
@@ -213,7 +224,7 @@ class YOPO:
         )
         return score, coef_xyz
     
-    def act(self, state: Tuple[Tensor], test: bool = False):
+    def act(self, state: Tuple[Tensor], test: bool = False, env: Optional[ObstacleAvoidanceYOPO] = None):
         p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = state
         rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
@@ -229,6 +240,25 @@ class YOPO:
             grid_index = best_idx
         grid_index = grid_index.reshape(N, 1, 1, 1).expand(-1, -1, 6, 3)
         coef_best = torch.gather(coef_xyz, 1, grid_index).squeeze(1)
+        
+        if env is not None:
+            losses = []
+            for _ in range(10):
+                coef_best = coef_best.detach().requires_grad_(True)
+                pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, len(self.t_vec)-1, -1)
+                
+                p_t_b, v_t_b, a_t_b = get_traj_points(self.t_vec[1:], coef_best)
+                p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
+                v_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), v_t_b.unsqueeze(-1)).squeeze(-1)
+                a_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), a_t_b.unsqueeze(-1)).squeeze(-1) + self.G.unsqueeze(1)
+                # pva_w = self.dynamics_step(env, pva_w, a_t_w)
+                # loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
+                loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
+                loss.mean().backward()
+                losses.append(loss.mean().item())
+                coef_best = coef_best - 1 * coef_best.grad
+                
+            tqdm.write(f"Losses: {losses[0]-losses[-1]:.4f}")
         
         p_next_b, v_next_b, a_next_b = get_traj_point(self.t_vec[1], coef_best) # [N, 3]
         a_next_w = torch.matmul(rotmat_b2w, a_next_b.unsqueeze(-1)).squeeze(-1)
@@ -276,24 +306,25 @@ class YOPO:
         if self.grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=self.grad_norm)
         
+        # with torch.no_grad():
+        action, policy_info = self.act(state, env=env)
+        # render the trajectory
+        if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
+            n_envs = env.renderer.n_envs
+            lines_tensor = torch.zeros(n_envs, self.n_points-1, 2, 3, device=self.device, dtype=torch.float32)
+            lines_field = ti.Vector.field(3, dtype=ti.f32, shape=(n_envs * (self.n_points-1) * 2))
+            for i, t in enumerate(self.t_vec):
+                p_t_b, v_t_b, a_t_b = get_traj_point(t, policy_info["coef_best"]) # [N, 3]
+                p_t_w = torch.matmul(rotmat_b2w, p_t_b.unsqueeze(-1)).squeeze(-1) + p_w
+                p_t_w = p_t_w[:n_envs].to(torch.float32) + env.renderer.env_origin
+                if i != self.n_points - 1:
+                    lines_tensor[:, i, 0] = p_t_w
+                if i != 0:
+                    lines_tensor[:, i-1, 1] = p_t_w
+            lines_field.from_torch(torch2ti(lines_tensor.flatten(end_dim=-2)))                
+            env.renderer.gui_scene.lines(lines_field, color=(1., 1., 1.), width=3.)
+        
         with torch.no_grad():
-            action, policy_info = self.act(state)
-            # render the trajectory
-            if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
-                n_envs = env.renderer.n_envs
-                lines_tensor = torch.zeros(n_envs, self.n_points-1, 2, 3, device=self.device, dtype=torch.float32)
-                lines_field = ti.Vector.field(3, dtype=ti.f32, shape=(n_envs * (self.n_points-1) * 2))
-                for i, t in enumerate(self.t_vec):
-                    p_t_b, v_t_b, a_t_b = get_traj_point(t, policy_info["coef_best"]) # [N, 3]
-                    p_t_w = torch.matmul(rotmat_b2w, p_t_b.unsqueeze(-1)).squeeze(-1) + p_w
-                    p_t_w = p_t_w[:n_envs].to(torch.float32) + env.renderer.env_origin
-                    if i != self.n_points - 1:
-                        lines_tensor[:, i, 0] = p_t_w
-                    if i != 0:
-                        lines_tensor[:, i-1, 1] = p_t_w
-                lines_field.from_torch(torch2ti(lines_tensor.flatten(end_dim=-2)))                
-                env.renderer.gui_scene.lines(lines_field, color=(1., 1., 1.), width=3.)
-            
             next_state, loss, terminated, env_info = env.step(action)
             if on_step_cb is not None:
                 on_step_cb(

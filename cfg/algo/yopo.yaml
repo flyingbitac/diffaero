@@ -22,7 +22,7 @@ feature_dim: 16
 
 lr: 0.003
 gamma: 0.99
-n_epochs: 4
+n_epochs: 1
 expl_prob: 0.1
 grad_norm: 
 l_rollout: 1 # do not modify
