@@ -131,17 +131,17 @@ def get_traj_point(
 ):
     coef_mat = get_coef_matrix(t)[3:, :] # [3, 6]
     pva = torch.matmul(coef_mat, coef_xyz) # [..., 3(pva), 3(xyz)]
-    p, v, a = pva.unbind(dim=-2)
+    p, v, a = pva.unbind(dim=-2) # [..., 3(xyz)]
     return p, v, a
 
 @torch.jit.script
 def get_traj_points(
-    t_vec: Tensor,
+    t_vec: Tensor, # [T]
     coef_xyz: Tensor # [..., 6, 3]
 ):
-    coef_mat = get_coef_matrices(t_vec)[..., 3:, :] # [3, 6]
-    pva = torch.matmul(coef_mat.unsqueeze(0), coef_xyz.unsqueeze(1)) # [..., 3(pva), 3(xyz)]
-    p, v, a = pva.unbind(dim=-2)
+    coef_mat = get_coef_matrices(t_vec)[..., 3:, :] # [T, 3, 6]
+    pva = torch.matmul(coef_mat.unsqueeze(0), coef_xyz.unsqueeze(1)) # [..., T, 3(pva), 3(xyz)]
+    p, v, a = pva.unbind(dim=-2) # [..., T, 3(xyz)]
     return p, v, a
 
 class YOPO:
@@ -171,6 +171,9 @@ class YOPO:
         self.gamma: float = cfg.gamma
         self.expl_prob: float = cfg.expl_prob
         self.grad_norm: Optional[float] = cfg.grad_norm
+        self.optimized_inference: bool = cfg.optimized_inference
+        self.real_dynamics_rollout: bool = cfg.real_dynamics_rollout
+        self.t_next = torch.tensor(cfg.t_next, device=device) if cfg.t_next is not None else self.t_vec[1]
         self.device = device
         
         pitches = torch.linspace(self.min_pitch, self.max_pitch, self.n_pitch, device=device)
@@ -241,11 +244,11 @@ class YOPO:
         grid_index = grid_index.reshape(N, 1, 1, 1).expand(-1, -1, 6, 3)
         coef_best = torch.gather(coef_xyz, 1, grid_index).squeeze(1)
         
-        if env is not None:
+        if env is not None and self.optimized_inference:
             losses = []
             for _ in range(10):
                 coef_best = coef_best.detach().requires_grad_(True)
-                pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, len(self.t_vec)-1, -1)
+                # pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, len(self.t_vec)-1, -1)
                 
                 p_t_b, v_t_b, a_t_b = get_traj_points(self.t_vec[1:], coef_best)
                 p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
@@ -254,15 +257,17 @@ class YOPO:
                 # pva_w = self.dynamics_step(env, pva_w, a_t_w)
                 # loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
                 loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
+                torch.cum
                 loss.mean().backward()
                 losses.append(loss.mean().item())
                 coef_best = coef_best - 1 * coef_best.grad
                 
             tqdm.write(f"Losses: {losses[0]-losses[-1]:.4f}")
         
-        p_next_b, v_next_b, a_next_b = get_traj_point(self.t_vec[1], coef_best) # [N, 3]
+        p_next_b, v_next_b, a_next_b = get_traj_point(self.t_next, coef_best) # [N, 3]
         a_next_w = torch.matmul(rotmat_b2w, a_next_b.unsqueeze(-1)).squeeze(-1)
-        return a_next_w + self.G, {"coef_best": coef_best}
+        acc = a_next_w + self.G
+        return acc, {"coef_best": coef_best}
 
     def dynamics_step(self, env: ObstacleAvoidanceYOPO, pva: Tensor, a_next: Tensor):
         pva_next = env.model.solver(env.model.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
@@ -285,12 +290,14 @@ class YOPO:
             
             for i, t in enumerate(self.t_vec[1:]):
                 p_t_b, v_t_b, a_t_b = get_traj_point(t, coef_xyz) # [N, 3]
-                # p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
-                # v_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), v_t_b.unsqueeze(-1)).squeeze(-1)
+                p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
+                v_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), v_t_b.unsqueeze(-1)).squeeze(-1)
                 a_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), a_t_b.unsqueeze(-1)).squeeze(-1) + self.G.unsqueeze(0)
-                pva_w = self.dynamics_step(env, pva_w, a_t_w)
-                loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
-                # loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
+                if self.real_dynamics_rollout:
+                    pva_w = self.dynamics_step(env, pva_w, a_t_w)
+                    loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
+                else:
+                    loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
                 survive = survive & ~dead
                 survive_steps += survive.float()
                 cumulative_loss = cumulative_loss + loss * survive.float() * self.gamma ** i

@@ -297,9 +297,10 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def loss_fn(self, _p, _v, _a):
         # type: (ObstacleAvoidance, Tensor, Tensor, Tensor) -> Tuple[Tensor, Dict[str, float], Tensor]
         p, v, a = _p.detach(), _v.detach(), _a.detach()
-        target_relpos = self.target_pos.unsqueeze(1) - p
+        target_relpos = self.target_pos.unsqueeze(1) - _p
         target_dist = target_relpos.norm(dim=-1)
         target_vel = target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
+        target_vel.detach_()
         virtual_radius = 0.2
         # calculating the closest point on each sphere to the quadrotor
         sphere_relpos = self.obstacle_manager.p_spheres.unsqueeze(2) - p.unsqueeze(1) # [n_envs, n_spheres, 3]
@@ -321,7 +322,8 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dist2surface.neg().exp()).max(dim=1) # [n_envs]
         avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dist2surface.neg().exp() # [n_envs, n_obstacles]
         avoiding_reward = avoiding_reward.gather(dim=1, index=most_dangerous.unsqueeze(1)).squeeze(1) # [n_envs]
-        oa_loss = approaching_penalty - 0.5 * avoiding_reward
+        oa_loss = approaching_penalty - 0.2 * avoiding_reward
+        # oa_loss = approaching_penalty
         
         pos_loss = 1 - target_relpos.norm(dim=-1).neg().exp()
         
@@ -332,7 +334,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         collision = collision | (p[..., 2] - self.r_drone < self.z_ground_plane)
         # out_of_bound = torch.any(p < -1.5*self.L, dim=-1) | torch.any(p > 1.5*self.L, dim=-1)
         
-        total_loss = vel_loss + 4 * oa_loss + 5 * pos_loss + collision.float() * 0
+        total_loss = vel_loss + 4 * oa_loss + 0 * pos_loss + collision.float() * 0
         loss_components = {
             "vel_loss": vel_loss.mean().item(),
             "pos_loss": pos_loss.mean().item(),
