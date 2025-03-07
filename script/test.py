@@ -81,8 +81,8 @@ def test(
         n_success += env_info["success"].sum().item()
         pbar.set_postfix({
             "l_episode": f"{l_episode:.1f}",
-            "survive_rate": f"{n_survive / n_resets:.2f}",
             "success_rate": f"{n_success / n_resets:.2f}",
+            "survive_rate": f"{n_survive / n_resets:.2f}",
             "fps": f"{int(cfg.env.n_envs/(pbar._time()-t1)):,d}"})
         
         log_info = {"metrics": {"success_rate": n_success / n_resets}}
