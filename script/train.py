@@ -7,7 +7,7 @@ sys.path.append('..')
 import hydra
 from omegaconf import DictConfig
 
-@hydra.main(config_path="../cfg", config_name="config", version_base="1.3")
+@hydra.main(config_path="../cfg", config_name="config_train", version_base="1.3")
 def main(cfg: DictConfig):
     
     import torch
@@ -52,7 +52,8 @@ def main(cfg: DictConfig):
     agent_class = AGENT_ALIAS[cfg.algo.name]
     agent = agent_class.build(cfg, env, device)
     
-    logger = Logger(cfg, run_name=cfg.runname)
+    runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
+    logger = Logger(cfg, run_name=f"__train{runname}")
     
     profiler = LineProfiler()
     if hasattr(env, "update_sensor_data"):
@@ -116,6 +117,7 @@ def main(cfg: DictConfig):
     ckpt_path = os.path.join(logger.logdir, "checkpoints")
     agent.save(ckpt_path)
     print(f"The checkpoint is saved to {ckpt_path}.")
+    print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
     if cfg.export:
         PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
     if env.renderer is not None:

@@ -2,6 +2,7 @@
 
 - [QuadDif: A Fully Pytorch-based Differentiable Quadrotor Simulator for Efficient Policy Learning](#quaddif-a-fully-pytorch-based-differentiable-quadrotor-simulator-for-efficient-policy-learning)
   - [Introduction](#introduction)
+  - [Features](#features)
     - [Environments](#environments)
     - [Learning Algorithms](#learning-algorithms)
     - [Dynamic Models](#dynamic-models)
@@ -16,6 +17,16 @@
 QuadDif is a fully Pytorch-based differentiable quadrotor simulator that utilizes the parallel computing power of GPUs for efficient policy learning. It supports multiple types of dynamic models, all of which are customizable and implemented in [Pytorch](https://www.pytorch.org) so that they run efficiently on modern GPUs and are fully differentiable.
 
 QuadDif utilizes a modular design where different components (e.g., environment, dynamics, network architecture, and learning algorithms) are decoupled from each other and can be configured independently. As a result, users can combine different components almost arbitrarily to initiate a custom-configured training process with minimal effort.
+
+## Features
+<!-- Inserted English summary table -->
+| Module         | Currently Supported                                                     |
+|----------------|-------------------------------------------------------------------------|
+| Tasks          | Position Control, Obstacle Avoidance                                    |
+| Differential  Learning Algorithms     | BPTT, SHAC, YOPO                                 |
+| Reinforcement Learning Algorithms     | PPO, Dreamer v3                                  |
+| Sensors        | Relative obstacle positions, Depth Camera, LiDAR                        |
+| Dynamic Models | Full Quadrotor, Simplified Quadrotor, Point Mass                        |
 
 ### Environments
 
@@ -34,9 +45,10 @@ We have implemented several learning algorithms, including RL algorithms and alg
     - **PPO**: [Proximal Policy Optimization](https://arxiv.org/abs/1707.06347)
     - **Dreamer v3**: [Mastering Diverse Domains through World Models](http://arxiv.org/abs/2301.04104)
 
-- **Differentiable algorithms**:
-    - **BPTT**(deterministic policy and stochastic policy)
+- **Differential algorithms**:
+    - **BPTT** (deterministic policy and stochastic policy)
     - **SHAC**: [Accelerated Policy Learning with Parallel Differentiable Simulation](http://arxiv.org/abs/2204.07137)
+    - **YOPO**: [You Only Plan Once: A Learning-Based One-Stage Planner With Guidance Learning](https://ieeexplore.ieee.org/document/10528860)
 
 ### Dynamic Models
 
@@ -54,38 +66,45 @@ We have implemented three types of dynamic models for the quadrotor:
 
 ### Install the QuadDif
 
-First, clone the QuadDif under your workspace:
+Install the pytorch and pytorch3d:
+```bash
+# install pytorch via pip
+pip install torch torchvision torchaudio
+# build and install pytorch3d from source
+pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+# or
+git clone git@github.com:facebookresearch/pytorch3d.git -b stable && cd pytorch3d && pip install -e .
+```
+
+Clone this repo and install the python package:
 
 ```bash
 cd /path/to/your/workspace
 git clone https://github.com/zxh0916/quaddif.git
-```
-
-Then, install the dependencies:
-
-```bash
-cd quaddif
-# install pytorch3d from source
-pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable"
-# install other requirements
-pip install -r requirements.txt
+cd quaddif && pip install -e .
 ```
 
 ## Usage
 
-Under the repo's root directory, run:
+Under the repo's root directory, run the following command to train a policy.
 
 ```bash
 python script/train.py env=[pc,oa] algo=[apg,apg_sto,shac,ppo] n_envs=4096 l_rollout=32 headless=True
 ```
 
-to train the model. Once the training is done, run:
+Note that `env=[pc,oa]` means use `env=pc` or `env=oa`, etc.
+
+Once the training is done, run the following command to test and visualize the trained policy:
 
 ```bash
 python script/test.py env=[pc,oa] checkpoint=/absolute/path/to/checkpoints/directory n_envs=64 headless=False
 ```
 
-to test the model and create a GUI viewer to visualize the environment and the learned policy.
+If you want to see all configuration choices, run:
+
+```bash
+python script/train.py -h
+```
 
 ## Deploy
 

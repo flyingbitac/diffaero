@@ -1,0 +1,36 @@
+app_name: QuadDif Training Script
+
+header: ===== ${hydra.help.app_name} =====
+
+footer: |-
+  View https://github.com/zxh0916/quaddif for more information.
+  Powered by Hydra (https://hydra.cc)
+  Use --hydra-help to view Hydra specific help and for Tab completion.
+
+# Basic Hydra flags:
+#   $FLAGS_HELP
+#
+# Config groups, choose one of:
+#   $APP_CONFIG_GROUPS: All config groups that does not start with hydra/.
+#   $HYDRA_CONFIG_GROUPS: All the Hydra config groups (starts with hydra/)
+#
+# Configuration generated with overrides:
+#   $CONFIG : Generated config
+#
+template: |-
+  ${hydra.help.header}
+  This is ${hydra.help.app_name}!
+  You can start the simulation and train a policy fully on GPU with this script!
+
+  Compose your configuration from those groups:
+
+  ↓↓↓↓↓ Configuration groups ↓↓↓↓↓
+  $APP_CONFIG_GROUPS↑↑↑↑↑ Configuration groups ↑↑↑↑↑
+
+  Feel free to override any of the configuration groups above by:
+  `python script/train.py env=pc algo=shac algo.actor_lr=0.003`
+
+  Run many experiments in parallel by:
+  `python script/train.py -m seed=0,1,2,3 n_jobs=4`
+  
+  ${hydra.help.footer}
