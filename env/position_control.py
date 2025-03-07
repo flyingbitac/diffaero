@@ -29,7 +29,6 @@ class PositionControl(BaseEnv):
     
     def step(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
-        action = self.rescale_action(action)
         self.model.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1

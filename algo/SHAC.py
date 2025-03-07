@@ -42,6 +42,7 @@ class SHAC:
         self.entropy_weight: float = cfg.entropy_weight
         self.actor_grad_norm: float = cfg.actor_grad_norm
         self.critic_grad_norm: float = cfg.critic_grad_norm
+        self.target_update_rate: float = cfg.target_update_rate
         self.n_minibatch: int = cfg.n_minibatch
         self.n_envs: int = n_envs
         self.l_rollout: int = l_rollout
@@ -162,7 +163,7 @@ class SHAC:
                 torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
             self.critic_optim.step()
         for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
-            p_t.data.lerp_(p.data, 5e-3)
+            p_t.data.lerp_(p.data, self.target_update_rate)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
     
     def step(self, cfg, env, state, on_step_cb=None):
@@ -172,7 +173,7 @@ class SHAC:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(state)
-            next_state, loss, terminated, env_info = env.step(action)
+            next_state, loss, terminated, env_info = env.step(env.rescale_action(action))
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(state, loss/10, policy_info["value"], env_info["reset"], terminated, next_value)
@@ -383,7 +384,7 @@ class SHAC_Q:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(state)
-            next_state, loss, terminated, env_info = env.step(action)
+            next_state, loss, terminated, env_info = env.step(env.rescale_action(action))
             self.record_loss(loss, policy_info, env_info, terminated)
             # divide by 10 to avoid disstability
             self.buffer.add(state, action, loss/10, env_info["next_state_before_reset"], terminated)

@@ -3,6 +3,7 @@ tensordict
 taichi
 tqdm
 hydra-core
+hydra-joblib-launcher
 welford_torch
 line_profiler
 tensorboard
