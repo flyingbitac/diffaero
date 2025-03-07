@@ -17,6 +17,7 @@ from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
 from quaddif.utils.logger import RecordEpisodeStatistics, Logger
 from quaddif.utils.device import get_idle_device
+from quaddif.algo.dreamerv3.world import WorldExporter
 
 def display_image(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
@@ -73,7 +74,7 @@ def test(
         if cfg.algo.name != "yopo":
             action = env.rescale_action(action)
         state, loss, terminated, env_info = env.step(action)
-        if hasattr(agent, "reset"):
+        if cfg.algo.name != 'world' and hasattr(agent, "reset"):
             agent.reset(env_info["reset"])
         l_episode = (env_info["stats"]["l"] - 1) * env.dt
         n_resets += env_info["reset"].sum().item()
@@ -135,6 +136,8 @@ def main(cfg: DictConfig):
     # cfg.dynamics = ckpt_cfg.dynamics
     if cfg.algo.name != 'world':
         cfg.network = ckpt_cfg.network
+    else:
+        cfg.algo.common.is_test = True
     
     if cfg.seed != -1:
         random.seed(cfg.seed)
@@ -149,8 +152,16 @@ def main(cfg: DictConfig):
     agent = agent_class.build(cfg, env, device)
     agent.load(cfg.checkpoint)
     
+    
     logger = Logger(cfg, run_name=cfg.runname)
     # test(cfg, agent, env, logger, on_step_cb=display_image)
+    
+    export_path = os.path.join(logger.logdir,"exportckpt")
+    if not os.path.exists(export_path):
+        os.makedirs(export_path)
+    exporter = WorldExporter(agent)
+    exporter.export(export_path)
+    
     test(cfg, agent, env, logger)
     
     if env.renderer is not None:
