@@ -364,8 +364,3 @@ def proj(input_dim, output_dim, hidden_dim=None):
         nn.Linear(hidden_dim, output_dim)
     )        
         
-
-
-
-
-
