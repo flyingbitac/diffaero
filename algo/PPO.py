@@ -154,7 +154,7 @@ class PPO:
         with torch.no_grad():
             for t in range(cfg.l_rollout):
                 action, policy_info = self.act(state)
-                next_state, loss, terminated, env_info = env.step(action)
+                next_state, loss, terminated, env_info = env.step(env.rescale_action(action))
                 self.add(
                     state=state,
                     sample=policy_info["sample"],

@@ -65,6 +65,83 @@ def add_box(xyz: Tensor, lwh: Tensor, rpy: Tensor, color: Tensor):
     color = color.unsqueeze(-2).expand_as(rotated_vertices_tensor)
     return rotated_vertices_tensor, indices_torch, color
 
+def add_sphere(xyz: Tensor, radius: Tensor, color: Tensor, lat_segments: int = 8, lon_segments: int = 16):
+    # type: (Tensor, Tensor, Tensor, int, int) -> Tuple[Tensor, Tensor, Tensor]
+    # xyz: (..., 3), radius: (...), color: (..., 3)
+    # 生成单位球体顶点（单个球）
+    device = xyz.device
+    pi = torch.pi
+    # 顶点数量：北极+南极+(纬度-1)*经度数
+    n_int = (lat_segments - 1) * lon_segments
+    n_v = 2 + n_int
+
+    # 生成中间纬度角 theta（去除两极）
+    theta = torch.linspace(0, pi, steps=lat_segments + 1, device=device)[1:-1]  # (lat_segments-1,)
+    phi = torch.linspace(0, 2*pi, steps=lon_segments + 1, device=device)[:-1]  # (lon_segments,)
+    theta_grid, phi_grid = torch.meshgrid(theta, phi, indexing="ij")  # shape: (lat_segments-1, lon_segments)
+
+    # 计算中间顶点，采用球面坐标：(x,y,z) = (sinθ*cosφ, sinθ*sinφ, cosθ)
+    inter_x = torch.sin(theta_grid) * torch.cos(phi_grid)  # (lat_segments-1, lon_segments)
+    inter_y = torch.sin(theta_grid) * torch.sin(phi_grid)
+    inter_z = torch.cos(theta_grid)
+    # 将中间顶点展平，形状 (n_int, 3)
+    inter_vertices = torch.stack([inter_x, inter_y, inter_z], dim=-1).reshape(-1, 3)
+
+    # 北极与南极顶点
+    north_vertex = torch.tensor([[0.0, 0.0, 1.0]], device=device)  # shape (1,3)
+    south_vertex = torch.tensor([[0.0, 0.0, -1.0]], device=device)  # shape (1,3)
+
+    # 单个球的单位顶点集合，形状 (n_v, 3)
+    unit_vertices = torch.cat([north_vertex, inter_vertices, south_vertex], dim=0)
+
+    # 生成 indices（针对单个球）
+    indices_list = []
+    # 顶点编号：北极：0, 中间：1 .. 1+n_int-1, 南极： n_v-1
+    # 顶部三角形：连接北极与第一排中间顶点
+    for j in range(lon_segments):
+        next_j = (j + 1) % lon_segments
+        indices_list.append([0, 1 + j, 1 + next_j])
+    # 中间区域，i 从 0 到 (lat_segments-2)-1，即 i=0,...,lat_segments-2
+    for i in range(lat_segments - 2):
+        for j in range(lon_segments):
+            next_j = (j + 1) % lon_segments
+            v1 = 1 + i * lon_segments + j
+            v2 = 1 + (i + 1) * lon_segments + j
+            v3 = 1 + i * lon_segments + next_j
+            v4 = 1 + (i + 1) * lon_segments + next_j
+            indices_list.append([v1, v2, v3])
+            indices_list.append([v3, v2, v4])
+    # 底部三角形：连接最后一排中间顶点与南极点
+    for j in range(lon_segments):
+        next_j = (j + 1) % lon_segments
+        vj = 1 + (lat_segments - 2) * lon_segments + j
+        vnj = 1 + (lat_segments - 2) * lon_segments + next_j
+        indices_list.append([n_v - 1, vj, vnj])
+    
+    n_triangles = len(indices_list)
+    
+    indices_single = torch.tensor(indices_list, dtype=torch.int32, device=device).flatten()  # shape (num_indices,)
+
+    # 处理批量：令 batch_size = xyz[...,0].numel()
+    batch_shape = xyz.shape[:-1]
+    batch_size = xyz.numel() // 3
+
+    # 扩展 unit_vertices 至 (batch_size, n_v, 3)
+    unit_vertices = unit_vertices.unsqueeze(0).expand(batch_size, -1, -1)  # (B, n_v, 3)
+    # 调整 radius 和 xyz，形状：(B, 1)
+    radius = radius.reshape(batch_size, 1)
+    xyz = xyz.reshape(batch_size, 3)
+    # 计算所有球体顶点
+    vertices = unit_vertices * radius.unsqueeze(-1) + xyz.unsqueeze(1)  # (B, n_v, 3)
+
+    # 生成颜色：复制每个顶点的颜色，颜色形状 (B, n_v, 3)
+    colors = color.reshape(batch_size, 1, 3).expand(-1, n_v, -1)
+
+    # 生成 indices 批量: 对于每个球体需要加上偏移量 k * n_v
+    indices_single = indices_single.unsqueeze(0)  # (1, num_indices)
+    indices = indices_single + (torch.arange(batch_size, device=device, dtype=torch.int32).unsqueeze(1) * n_v)
+    return vertices.reshape(*batch_shape, n_v, 3), indices.reshape(*batch_shape, n_triangles * 3), colors.reshape(*batch_shape, n_v, 3)
+
 @ti.data_oriented
 class BaseRenderer:
     def __init__(self, cfg: DictConfig, device: torch.device, z_ground_plane: Optional[float] = None, headless: bool = False):
@@ -77,9 +154,9 @@ class BaseRenderer:
         self.headless = headless
         self.device = device
         
-        if self.record_video:
-            ti.init(arch=ti.vulkan)
-        elif "cpu" in str(self.device):
+        # if self.record_video:
+        #     ti.init(arch=ti.vulkan)
+        if "cpu" in str(self.device):
             print("Using CPU to render the GUI.")
             ti.init(arch=ti.cpu)
         else:
@@ -267,7 +344,8 @@ class BaseRenderer:
         drone_vertices_tensor = torch.bmm(self.drone_vertices_tensor, rotation_matrix.transpose(-2, -1))
         absolute_pos = pos + self.env_origin
         drone_vertices_tensor = drone_vertices_tensor + absolute_pos.unsqueeze(-2)
-        self.drone_mesh_dict["vertices"].from_torch(torch2ti(drone_vertices_tensor.flatten(end_dim=-2)))
+        if self.enable_rendering:
+            self.drone_mesh_dict["vertices"].from_torch(torch2ti(drone_vertices_tensor.flatten(end_dim=-2)))
         
         idx = self.gui_states["tracking_env_idx"]
         self.drone_mesh_dict_one_env["vertices"].from_torch(torch2ti(drone_vertices_tensor[idx].flatten(end_dim=-2)))
@@ -479,6 +557,9 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.obstacle_manager = obstacle_manager
         self.cube_color = [0.8, 0.3, 0.1]
         self.sphere_color = [0.8, 0.1, 0.3]
+        self.sphere_n_segments: int = cfg.sphere_n_segments
+        self.sphere_n_vertices = (self.sphere_n_segments - 1) * self.sphere_n_segments * 2 + 2
+        self.sphere_n_triangles = 4 * self.sphere_n_segments * (self.sphere_n_segments - 1)
         
         n_cubes = self.obstacle_manager.n_cubes
         self.cube_mesh_dict = {
@@ -495,17 +576,16 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         
         n_spheres = self.obstacle_manager.n_spheres
         self.sphere_mesh_dict = {
-            "centers":           ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres)),
-            "per_vertex_radius":        ti.field(   ti.f32, shape=(self.n_envs * n_spheres)),
-            "radius": 0.,
-            "color": tuple(self.sphere_color)
+            "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres * self.sphere_n_vertices)),
+            "indices":                  ti.field(   ti.i32, shape=(self.n_envs * n_spheres * self.sphere_n_triangles * 3)),
+            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres * self.sphere_n_vertices))
         }
         self.sphere_mesh_dict_one_env = {
-            "centers":           ti.Vector.field(3, ti.f32, shape=(n_spheres, )),
-            "per_vertex_radius":        ti.field(   ti.f32, shape=(n_spheres, )),
-            "radius": 0.,
-            "color": tuple(self.sphere_color)
+            "vertices":          ti.Vector.field(3, ti.f32, shape=(n_spheres * self.sphere_n_vertices,)),
+            "indices":                  ti.field(   ti.i32, shape=(n_spheres * self.sphere_n_triangles * 3,)),
+            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(n_spheres * self.sphere_n_vertices,))
         }
+        self.sphere_vertices_tensor = torch.empty(self.n_envs, n_spheres, self.sphere_n_vertices, 3, device=self.device)
         
         self._init_obstacles()
         
@@ -516,6 +596,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.target_line_color_tensor = torch.empty(self.n_envs, 3, device=self.device)
     
     def _init_obstacles(self):
+        # initialize meshes of the cubes
         lwh = self.obstacle_manager.lwh_cubes[:self.n_envs]
         xyz = rpy = torch.zeros_like(lwh)
         vertices_tensor, indices_tensor, color_tensor = add_box(
@@ -525,17 +606,24 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             color=torch.tensor([[self.cube_color]], device=self.device).expand_as(lwh)
         )
         self.cube_vertices_tensor.copy_(vertices_tensor)
-        self.cube_mesh_dict["vertices"].from_torch(torch2ti(self.cube_vertices_tensor.flatten(end_dim=-2)))
         self.cube_mesh_dict["indices"].from_torch(indices_tensor.flatten())
         self.cube_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
-        self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(self.cube_vertices_tensor[0]))
         self.cube_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
         self.cube_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
         
-        self.sphere_mesh_dict["centers"].from_torch(torch2ti(self.obstacle_manager.p_spheres[:self.n_envs].flatten(end_dim=-2)))
-        self.sphere_mesh_dict["per_vertex_radius"].from_torch(self.obstacle_manager.r_spheres[:self.n_envs].flatten())
-        self.sphere_mesh_dict_one_env["centers"].from_torch(torch2ti(self.obstacle_manager.p_spheres[0].flatten(end_dim=-2)))
-        self.sphere_mesh_dict_one_env["per_vertex_radius"].from_torch(self.obstacle_manager.r_spheres[0].flatten())
+        # initialize meshes of the spheres
+        vertices_tensor, indices_tensor, color_tensor = add_sphere(
+            xyz=torch.zeros_like(self.obstacle_manager.p_spheres[:self.n_envs]),
+            radius=self.obstacle_manager.r_spheres[:self.n_envs],
+            lat_segments=self.sphere_n_segments,
+            lon_segments=self.sphere_n_segments * 2,
+            color=torch.tensor([[self.sphere_color]], device=self.device).expand_as(lwh)
+        )
+        self.sphere_vertices_tensor.copy_(vertices_tensor)
+        self.sphere_mesh_dict["indices"].from_torch(indices_tensor.flatten())
+        self.sphere_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
+        self.sphere_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
+        self.sphere_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
     
     def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
         if self.enable_rendering:
@@ -566,20 +654,25 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self.cube_vertices_tensor + 
             self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
             self.env_origin.unsqueeze(-2).unsqueeze(-2))
-        self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
-        self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[idx].flatten(end_dim=-2)))
+        sphere_vertices_tensor = (
+            self.sphere_vertices_tensor + 
+            self.obstacle_manager.p_spheres[:self.n_envs].unsqueeze(-2) + 
+            self.env_origin.unsqueeze(-2).unsqueeze(-2))
         
-        sphere_center_tensor = self.obstacle_manager.p_spheres[:self.n_envs] + self.env_origin.unsqueeze(-2)
-        self.sphere_mesh_dict["centers"].from_torch(torch2ti(sphere_center_tensor.flatten(end_dim=-2)))
-        self.sphere_mesh_dict_one_env["centers"].from_torch(torch2ti(sphere_center_tensor[idx].flatten(end_dim=-2)))
+        if self.enable_rendering:
+            self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
+            self.sphere_mesh_dict["vertices"].from_torch(torch2ti(sphere_vertices_tensor.flatten(end_dim=-2)))
+        
+        self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[idx].flatten(end_dim=-2)))
+        self.sphere_mesh_dict_one_env["vertices"].from_torch(torch2ti(sphere_vertices_tensor[idx].flatten(end_dim=-2)))
     
     def _render_obstacles(self):
         if self.gui_states["tracking_view"]:
             self.gui_scene.mesh(**self.cube_mesh_dict_one_env)
-            self.gui_scene.particles(**self.sphere_mesh_dict_one_env)
+            self.gui_scene.mesh(**self.sphere_mesh_dict_one_env)
         else:
             self.gui_scene.mesh(**self.cube_mesh_dict)
-            self.gui_scene.particles(**self.sphere_mesh_dict)
+            self.gui_scene.mesh(**self.sphere_mesh_dict)
 
     def _render_lines(self):
         super()._render_lines()
@@ -605,9 +698,12 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[i].flatten(end_dim=-2)))
             self.video_scene.mesh(**self.cube_mesh_dict_one_env)
             
-            sphere_center_tensor = self.obstacle_manager.p_spheres[:self.n_envs] + self.env_origin.unsqueeze(-2)
-            self.sphere_mesh_dict_one_env["centers"].from_torch(torch2ti(sphere_center_tensor[i].flatten(end_dim=-2)))
-            self.video_scene.particles(**self.sphere_mesh_dict_one_env)
+            sphere_vertices_tensor = (
+                self.sphere_vertices_tensor + 
+                self.obstacle_manager.p_spheres[:self.n_envs].unsqueeze(-2) + 
+                self.env_origin.unsqueeze(-2).unsqueeze(-2))
+            self.sphere_mesh_dict_one_env["vertices"].from_torch(torch2ti(sphere_vertices_tensor[i].flatten(end_dim=-2)))
+            self.video_scene.mesh(**self.sphere_mesh_dict_one_env)
             
             self.video_scene.mesh(**self.ground_plane_mesh_dict)
             self.video_scene.point_light(pos=(0, 50, 0), color=(1., 1., 1.))

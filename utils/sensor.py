@@ -172,8 +172,8 @@ class Camera:
         yaw = torch.linspace(-0.5*self.hfov, 0.5*self.hfov, self.W, device=self.device) * torch.pi / 180
         pitch, yaw = torch.meshgrid(pitch, yaw, indexing="ij")
         roll = torch.zeros_like(pitch)
-        rpy = torch.stack([roll, pitch, yaw], dim=-1)
-        rotmat = T.euler_angles_to_matrix(rpy, convention='XYZ') # [H, W, 3, 3]
+        euler_angles = torch.stack([yaw, pitch, roll], dim=-1)
+        rotmat = T.euler_angles_to_matrix(euler_angles, convention='ZYX') # [H, W, 3, 3]
         directions = rotmat.transpose(-1, -2) @ forward.unsqueeze(-1) # [H, W, 3, 1]
         return directions.squeeze(-1) # [H, W, 3]
 
