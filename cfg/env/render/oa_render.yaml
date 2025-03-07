@@ -9,6 +9,8 @@ physics_engine: "physx"
 ground_plane: ${env.ground_plane}
 record_video: ${record_video}
 
+sphere_n_segments: 12
+
 video_camera:
   width: 512
   height: 288

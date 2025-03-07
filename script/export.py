@@ -1,4 +1,5 @@
 from typing import *
+import os
 import sys
 sys.path.append('..')
 
@@ -9,7 +10,7 @@ from omegaconf import DictConfig, OmegaConf
 from quaddif.env import ENV_ALIAS
 from quaddif.algo import AGENT_ALIAS
 from quaddif.utils.exporter import PolicyExporter
-from quaddif.utils.logger import RecordEpisodeStatistics, Logger
+from quaddif.utils.logger import RecordEpisodeStatistics
 from quaddif.utils.device import get_idle_device
 
 @hydra.main(config_path="../cfg", config_name="config")
@@ -19,6 +20,14 @@ def main(cfg: DictConfig):
     print(f"Using device {device}.")
     device = torch.device(device)
     
+    assert cfg.checkpoint is not None
+    cfg_path = os.path.join(os.path.dirname(os.path.abspath(cfg.checkpoint)), ".hydra", "config.yaml")
+    ckpt_cfg = OmegaConf.load(cfg_path)
+    cfg.algo = ckpt_cfg.algo
+    # cfg.dynamics = ckpt_cfg.dynamics
+    if cfg.algo.name != 'world':
+        cfg.network = ckpt_cfg.network
+    
     env_class = ENV_ALIAS[cfg.env.name]
     env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
     
@@ -26,7 +35,7 @@ def main(cfg: DictConfig):
     agent = agent_class.build(cfg, env, device)
     agent.load(cfg.checkpoint)
     
-    PolicyExporter(agent.policy_net).export(path=cfg.checkpoint, verbose=True, export_pnnx=False)
+    PolicyExporter(agent.policy_net).export(path=cfg.checkpoint, verbose=True, export_onnx=False, export_pnnx=False)
     
     if env.renderer is not None:
         env.renderer.close()
