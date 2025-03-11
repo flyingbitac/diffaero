@@ -8,12 +8,14 @@ defaults:
   - override hydra/help: train_help
   - override hydra/launcher: joblib
 
+n_agents: 1
 n_envs: 4096
 l_rollout: ${algo.l_rollout}
 n_updates: 1000
 device: 0
 n_jobs: 1
 headless: True
+record_video: False
 
 runname: ""
 checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"

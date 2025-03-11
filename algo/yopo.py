@@ -270,7 +270,7 @@ class YOPO:
         return acc, {"coef_best": coef_best}
 
     def dynamics_step(self, env: ObstacleAvoidanceYOPO, pva: Tensor, a_next: Tensor):
-        pva_next = env.model.solver(env.model.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
+        pva_next = env.dynamics.solver(env.dynamics.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
         return pva_next
 
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, state: Tuple[Tensor], on_step_cb=None):
@@ -358,4 +358,4 @@ class YOPO:
     
     @staticmethod
     def build(cfg: DictConfig, env: ObstacleAvoidanceYOPO, device: torch.device):
-        return YOPO(cfg.algo, device)
+        return YOPO(cfg, device)

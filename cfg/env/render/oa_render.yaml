@@ -2,6 +2,7 @@ name: obstacle_avoidance_renderer
 
 headless: ${headless}
 n_envs: ${env.n_envs}
+n_agents: ${n_agents}
 dt: ${env.dt}
 render_n_envs: 16
 env_spacing: ${env.length}

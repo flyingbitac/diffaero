@@ -16,8 +16,8 @@ def main(cfg: DictConfig):
     from tqdm import tqdm
     import cv2
     
-    from quaddif.env import ENV_ALIAS
-    from quaddif.algo import AGENT_ALIAS
+    from quaddif.env import build_env
+    from quaddif.algo import build_agent
     from quaddif.utils.exporter import PolicyExporter
     from quaddif.utils.device import get_idle_device
     from quaddif.utils.logger import RecordEpisodeStatistics, Logger
@@ -45,36 +45,35 @@ def main(cfg: DictConfig):
         np.random.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
+
+    env = RecordEpisodeStatistics(build_env(cfg.env, device=device))
     
-    env_class = ENV_ALIAS[cfg.env.name]
-    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
-    
-    agent_class = AGENT_ALIAS[cfg.algo.name]
-    agent = agent_class.build(cfg, env, device)
+    agent = build_agent(cfg.algo, env, device)
     
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
     logger = Logger(cfg, run_name=f"__train{runname}")
     
     profiler = LineProfiler()
     if hasattr(env, "update_sensor_data"):
-        profiler.add_function(env_class.update_sensor_data)
+        profiler.add_function(env.env.update_sensor_data)
     if env.renderer is not None:
-        profiler.add_function(env.renderer.render)
-    profiler.add_function(env_class.step)
-    profiler.add_function(env_class.state)
-    profiler.add_function(env_class.loss_fn)
-    profiler.add_function(agent_class.step)
+        profiler.add_function(env.env.renderer.render)
+    profiler.add_function(env.env.step)
+    profiler.add_function(env.env.get_observations)
+    profiler.add_function(env.env.loss_fn)
+    profiler.add_function(env.env.reset_idx)
+    profiler.add_function(agent.step)
     @profiler
     def learn(
         on_step_cb: Optional[Callable] = None
     ):
-        state = env.reset()
+        obs = env.reset()
         max_success_rate = 0
         pbar = tqdm(range(cfg.n_updates))
         for i in pbar:
             t1 = pbar._time()
             env.detach()
-            state, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, state, on_step_cb)
+            obs, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, obs, on_step_cb)
             l_episode = (env_info["stats"]["l"] - 1) * env.dt
             success_rate = env_info["stats"]["success_rate"]
             survive_rate = env_info["stats"]["survive_rate"]

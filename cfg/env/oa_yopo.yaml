@@ -6,6 +6,7 @@ dt: 0.0333
 length: 15
 height_scale: 0.25
 n_envs: ${n_envs}
+n_agents: ${n_agents}
 max_time: 30
 max_vel: 5.
 r_drone: 0.2

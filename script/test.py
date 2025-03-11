@@ -18,8 +18,8 @@ def main(cfg: DictConfig):
     import imageio
 
     from quaddif import QUADDIF_ROOT_DIR
-    from quaddif.env import ENV_ALIAS
-    from quaddif.algo import AGENT_ALIAS
+    from quaddif.env import build_env
+    from quaddif.algo import build_agent
     from quaddif.utils.logger import RecordEpisodeStatistics, Logger
     from quaddif.utils.exporter import PolicyExporter
     from quaddif.utils.device import get_idle_device
@@ -64,7 +64,7 @@ def main(cfg: DictConfig):
             H, W = H_video, W_video + W_depth
             video_array = np.empty((env.renderer.n_envs, env.max_steps, H, W, 3), dtype=np.uint8)
         
-        state = env.reset()
+        obs = env.reset()
         pbar = tqdm(range(cfg.n_steps))
         n_resets = 1
         n_survive = 0
@@ -72,10 +72,10 @@ def main(cfg: DictConfig):
         for i in pbar:
             t1 = pbar._time()
             env.detach()
-            action, policy_info = agent.act(state, test=True)
+            action, policy_info = agent.act(obs, test=True)
             if cfg.algo.name != "yopo":
                 action = env.rescale_action(action)
-            state, loss, terminated, env_info = env.step(action)
+            obs, loss, terminated, env_info = env.step(action)
             if cfg.algo.name != 'world' and hasattr(agent, "reset"):
                 agent.reset(env_info["reset"])
             l_episode = (env_info["stats"]["l"] - 1) * env.dt
@@ -126,7 +126,7 @@ def main(cfg: DictConfig):
                 
             if on_step_cb is not None:
                 on_step_cb(
-                    state=state,
+                    state=obs,
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
@@ -156,11 +156,9 @@ def main(cfg: DictConfig):
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
-    env_class = ENV_ALIAS[cfg.env.name]
-    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
+    env = RecordEpisodeStatistics(build_env(cfg.env, device=device))
     
-    agent_class = AGENT_ALIAS[cfg.algo.name]
-    agent = agent_class.build(cfg, env, device)
+    agent = build_agent(cfg.algo, env, device)
     agent.load(cfg.checkpoint)
     
     # test(agent, env, on_step_cb=display_image)

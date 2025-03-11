@@ -6,7 +6,7 @@ from torch import Tensor
 import torch.nn as nn
 from quaddif.utils.nn import mlp
 
-def state_action_concat(state: Union[Tensor, Tuple[Tensor, Tensor]], action: Optional[Tensor] = None) -> Tensor:
+def obs_action_concat(state: Union[Tensor, Tuple[Tensor, Tensor]], action: Optional[Tensor] = None) -> Tensor:
     if isinstance(state, Tensor):
         return torch.cat([state, action], dim=-1) if action is not None else state
     else:
@@ -42,7 +42,7 @@ class MLP(BaseNetwork):
         action: Optional[Tensor] = None, # [N, D_action]
         hidden: Optional[Tensor] = None
     ) -> Tensor:
-        return self.head(state_action_concat(obs, action))
+        return self.head(obs_action_concat(obs, action))
     
     def forward_export(
         self,
@@ -139,7 +139,7 @@ class RNN(BaseNetwork):
         hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
     ) -> Tensor:
         # self.gru.flatten_parameters()
-        rnn_input = state_action_concat(obs, action)
+        rnn_input = obs_action_concat(obs, action)
         
         use_own_hidden = hidden is None
         if use_own_hidden:
@@ -159,7 +159,7 @@ class RNN(BaseNetwork):
         hidden: Tensor, # [n_layers, N, D_hidden]
         action: Optional[Tensor] = None, # [N, D_action]
     ) -> Tuple[Tensor, Tensor]:
-        rnn_input = state_action_concat(obs, action)
+        rnn_input = obs_action_concat(obs, action)
         rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
         return self.head(rnn_out.squeeze(1)), hidden
 

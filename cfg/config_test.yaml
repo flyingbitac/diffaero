@@ -8,6 +8,7 @@ defaults:
   - override hydra/help: test_help
   - override hydra/launcher: joblib
 
+n_agents: 1
 n_envs: 4096
 l_rollout: ${algo.l_rollout}
 n_steps: 10000
