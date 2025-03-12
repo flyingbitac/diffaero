@@ -8,7 +8,7 @@ from quaddif.algo.APG import *
 from quaddif.algo.SHAC import *
 from quaddif.algo.MASHAC import *
 from quaddif.algo.dreamerv3 import *
-from quaddif.algo.yopo import *
+from quaddif.algo.YOPO import *
 
 AGENT_ALIAS = {
     "ppo": PPO,

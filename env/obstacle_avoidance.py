@@ -261,7 +261,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
     
-    def state(self):
+    def get_observations(self):
         return self.p, self.q, self.v, self.a, self.target_vel, self.sensor_tensor.unsqueeze(1)
     
     def step(self, action):
