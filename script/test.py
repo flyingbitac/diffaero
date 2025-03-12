@@ -11,7 +11,6 @@ def main(cfg: DictConfig):
     
     import torch
     import numpy as np
-    from tqdm import tqdm
 
     from quaddif import QUADDIF_ROOT_DIR
     from quaddif.env import build_env
@@ -58,7 +57,7 @@ def main(cfg: DictConfig):
     try:
         runner.run()
     except KeyboardInterrupt:
-        tqdm.write("Interrupted.")
+        print("Interrupted.")
     finally:
         runner.close()
 
