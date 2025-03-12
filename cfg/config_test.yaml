@@ -7,6 +7,9 @@ defaults:
   - _self_
   - override hydra/help: test_help
   - override hydra/launcher: joblib
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  # - override hydra/sweeper: optuna_sweep
 
 l_rollout: ${algo.l_rollout}
 n_agents: 1
@@ -25,7 +28,7 @@ runname: ""
 checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
 export: False
 
-seed: -1
+seed: 0
 torch_deterministic: False
 
 env:

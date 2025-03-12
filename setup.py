@@ -14,6 +14,8 @@ setup(
         'pytorch3d',
         'hydra-core',
         'hydra-joblib-launcher',
+        'hydra_colorlog',
+        'hydra-optuna-sweeper',
         'line_profiler',
         'tqdm',
         'tensorboard',

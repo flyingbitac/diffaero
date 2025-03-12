@@ -1,0 +1,23 @@
+_target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
+sampler:
+  _target_: optuna.samplers.TPESampler
+  seed: ${seed}
+  consider_prior: true
+  prior_weight: 1.0
+  consider_magic_clip: true
+  consider_endpoints: false
+  n_startup_trials: 10
+  n_ei_candidates: 24
+  multivariate: false
+  warn_independent_sampling: true
+direction: maximize
+storage: null
+study_name: maximize-success-rate
+n_jobs: ${n_jobs}
+search_space: null
+custom_search_space: null
+
+n_trials: 10
+params:
+  # https://hydra.cc/docs/advanced/override_grammar/extended/#sweeps
+  algo.lr: tag(log,interval(0.0001,0.1))

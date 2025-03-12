@@ -59,11 +59,11 @@ class TrainRunner:
         self.env = env
         self.agent = agent
         self.run = self.profiler(self.run)
+        self.max_success_rate = 0.
     
     def run(self):
         """Start training."""
         obs = self.env.reset()
-        max_success_rate = 0
         pbar = tqdm(range(self.cfg.n_updates))
         on_step_cb = display_image if self.cfg.display_image else None
         for i in pbar:
@@ -99,11 +99,11 @@ class TrainRunner:
             if (i+1) % 10 == 0:
                 self.logger.log_scalars(log_info, i+1)
             
-            if success_rate >= max_success_rate:
-                max_success_rate = success_rate
+            if success_rate >= self.max_success_rate:
+                self.max_success_rate = success_rate
                 self.agent.save(os.path.join(self.logger.logdir, "best"))
     
-    def close(self):
+    def close(self) -> float:
         """
         Save (and export) the trained policy, 
         close the environment renderer, 
@@ -120,6 +120,8 @@ class TrainRunner:
 
         with open(os.path.join(self.logger.logdir, "runtime_profile.txt"), "w", encoding="utf-8") as f:
             self.profiler.print_stats(stream=f, output_unit=1e-3)
+        
+        return self.max_success_rate
 
 
 class TestRunner:
@@ -128,6 +130,7 @@ class TestRunner:
         self.logger = logger
         self.env = env
         self.agent = agent
+        self.success_rate = 0.
 
     def save_video_mp4(self, video_array: np.ndarray, name: str):
         # save the video using imageio
@@ -186,6 +189,7 @@ class TestRunner:
                     "survive_rate": n_survive / n_resets,
                     "arrive_time": arrive_time}}
             self.logger.log_scalars(log_info, i+1)
+            self.success_rate = n_success / n_resets
             
             if self.cfg.record_video:
                 n_envs = self.env.renderer.n_envs
@@ -227,3 +231,5 @@ class TestRunner:
         
         if self.env.renderer is not None:
             self.env.renderer.close()
+        
+        return self.success_rate

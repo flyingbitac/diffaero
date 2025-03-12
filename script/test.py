@@ -1,4 +1,5 @@
 import os
+from time import sleep
 import random
 import sys
 sys.path.append('..')
@@ -22,7 +23,9 @@ def main(cfg: DictConfig):
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
     logger = Logger(cfg, run_name=f"__test{runname}")
 
-    device_idx = f"{get_idle_device()}" if cfg.device is None else f"{cfg.device}"
+    if cfg.device is None and cfg.n_jobs > 1:
+        sleep(random.random() * 3)
+    device_idx = get_idle_device() if cfg.device is None else cfg.device
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
     print(f"Using device {device}.")
     device = torch.device(device)
@@ -59,7 +62,9 @@ def main(cfg: DictConfig):
     except KeyboardInterrupt:
         print("Interrupted.")
     finally:
-        runner.close()
+        success_rate = runner.close()
+    
+    return success_rate
 
 if __name__ == "__main__":
     main()
