@@ -1,5 +1,3 @@
-from typing import *
-import os
 import random
 import sys
 sys.path.append('..')
@@ -12,28 +10,13 @@ def main(cfg: DictConfig):
     
     import torch
     import numpy as np
-    from line_profiler import LineProfiler
     from tqdm import tqdm
-    import cv2
     
     from quaddif.env import build_env
     from quaddif.algo import build_agent
-    from quaddif.utils.exporter import PolicyExporter
     from quaddif.utils.device import get_idle_device
     from quaddif.utils.logger import RecordEpisodeStatistics, Logger
-    
-    def display_image(state, action, policy_info, env_info):
-        # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
-        if "sensor" in env_info.keys():
-            N, C = min(64, state.size(0)), 1
-            H, W = env_info["sensor"].shape[-2:]
-            NH = NW = int(N**0.5)
-            scale = 4
-            disp_image = env_info["sensor"][:N].reshape(NH, NW, C, H, W).permute(2, 0, 3, 1, 4).reshape(C, NH*H, NW*W).cpu().numpy().transpose(1, 2, 0)
-            disp_image = cv2.normalize(disp_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            disp_image = cv2.resize(cv2.cvtColor(disp_image, cv2.COLOR_GRAY2BGR), (int(NW*W*scale), int(NH*H*scale)), interpolation=cv2.INTER_NEAREST)
-            cv2.imshow('image', disp_image)
-            cv2.waitKey(1)
+    from quaddif.utils.runner import TrainRunner
 
     device_idx = f"{get_idle_device()}" if cfg.device is None else f"{cfg.device}"
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
@@ -53,79 +36,14 @@ def main(cfg: DictConfig):
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
     logger = Logger(cfg, run_name=f"__train{runname}")
     
-    profiler = LineProfiler()
-    if hasattr(env, "update_sensor_data"):
-        profiler.add_function(env.env.update_sensor_data)
-    if env.renderer is not None:
-        profiler.add_function(env.env.renderer.render)
-    profiler.add_function(env.env.step)
-    profiler.add_function(env.env.get_observations)
-    profiler.add_function(env.env.loss_fn)
-    profiler.add_function(env.env.reset_idx)
-    profiler.add_function(agent.step)
-    @profiler
-    def learn(
-        on_step_cb: Optional[Callable] = None
-    ):
-        obs = env.reset()
-        max_success_rate = 0
-        pbar = tqdm(range(cfg.n_updates))
-        for i in pbar:
-            t1 = pbar._time()
-            env.detach()
-            obs, policy_info, env_info, losses, grad_norms = agent.step(cfg, env, obs, on_step_cb)
-            l_episode = (env_info["stats"]["l"] - 1) * env.dt
-            success_rate = env_info["stats"]["success_rate"]
-            survive_rate = env_info["stats"]["survive_rate"]
-            arrive_time = env_info["stats"]["arrive_time"]
-            if cfg.algo.name != 'world':
-                pbar.set_postfix({
-                    # "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-                    "loss": f"{env_info['loss_components']['total_loss']:.3f}",
-                    "l_episode": f"{l_episode:.1f}",
-                    "success_rate": f"{success_rate:.2f}",
-                    "survive_rate": f"{survive_rate:.2f}",
-                    "fps": f"{int(cfg.l_rollout*cfg.env.n_envs/(pbar._time()-t1)):,d}"})
-            log_info = {
-                "env_loss": env_info["loss_components"],
-                "agent_loss": losses,
-                "agent_grad_norm": grad_norms,
-                "metrics": {
-                    "l_episode": l_episode,
-                    "success_rate": success_rate,
-                    "survive_rate": survive_rate,
-                    "arrive_time": arrive_time}
-            }
-            if "value" in policy_info.keys():
-                log_info["value"] = policy_info["value"].mean().item()
-            if "WorldModel/state_total_loss" in policy_info.keys():
-                log_info.update(policy_info)
-            if (i+1) % 10 == 0:
-                logger.log_scalars(log_info, i+1)
-            
-            if success_rate >= max_success_rate:
-                max_success_rate = success_rate
-                agent.save(os.path.join(logger.logdir, "best"))
+    runner = TrainRunner(cfg, logger, env, agent)
     
     try:
-        # learn(on_step_cb=display_image)
-        learn()
+        runner.run()
     except KeyboardInterrupt:
         tqdm.write("Interrupted.")
-    
-    ckpt_path = os.path.join(logger.logdir, "checkpoints")
-    agent.save(ckpt_path)
-    print(f"The checkpoint is saved to {ckpt_path}.")
-    print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
-    if cfg.export:
-        PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
-    if env.renderer is not None:
-        env.renderer.close()
-    
-    global logdir
-    logdir = logger.logdir
-    with open(os.path.join(logdir, "runtime_profile.txt"), "w", encoding="utf-8") as f:
-        profiler.print_stats(stream=f, output_unit=1e-3)
+    finally:
+        runner.close()
 
 if __name__ == "__main__":
     main()
