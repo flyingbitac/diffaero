@@ -9,6 +9,7 @@ from pytorch3d import transforms as T
 from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
 from quaddif.utils.render import PositionControlRenderer
 from quaddif.utils.math import rand_range
+from quaddif.utils.runner import timeit
 
 class PositionControl(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -17,6 +18,7 @@ class PositionControl(BaseEnv):
         self.action_dim = self.dynamics.action_dim
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
     
+    @timeit
     def get_observations(self, with_grad=False):
         if self.dynamic_type == "pointmass":
             obs = torch.cat([self.target_vel, self.q, self._v], dim=-1)
@@ -24,6 +26,7 @@ class PositionControl(BaseEnv):
             obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         return obs if with_grad else obs.detach()
     
+    @timeit
     def step(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         self.dynamics.step(action)
@@ -56,6 +59,7 @@ class PositionControl(BaseEnv):
     def state_for_render(self) -> Tensor:
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
+    @timeit
     def loss_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
         if self.dynamic_type == "pointmass":
@@ -95,6 +99,7 @@ class PositionControl(BaseEnv):
             }
         return total_loss, loss_components
 
+    @timeit
     def reset_idx(self, env_idx):
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
@@ -140,6 +145,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
         self.collision_distance = 0.5
     
+    @timeit
     def get_observations(self, with_grad=False):
         if self.dynamic_type == "pointmass":
             # agent观测 每个agent的观测为 自身状态(目标方向单位向量+自身姿态四元数+自身速度向量)+所有其他agent相对状态(p+v)+目标位置
@@ -171,6 +177,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             raise NotImplementedError("Observations for quadrotor dynamics are not implemented yet")
         return obs if with_grad else obs.detach()
 
+    @timeit
     def get_global_state(self, with_grad=False):
         if self.dynamic_type == "pointmass":   
             # 全局状态 为所有agent自身状态(p+q+v)+目标位置
@@ -184,6 +191,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             raise NotImplementedError("Global states for quadrotor dynamics are not implemented yet")
         return global_state if with_grad else global_state.detach()
     
+    @timeit
     def step(self, action):
         # type: (Tensor) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         self.dynamics.step(action)
@@ -217,6 +225,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             self.reset_idx(reset_indices)
         return self.get_obs_and_state(), loss, terminated, extra
     
+    @timeit
     def reset_idx(self, env_idx):
         n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
@@ -259,6 +268,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
     def state_for_render(self) -> Tensor:
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
 
+    @timeit
     def loss_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
         if self.dynamic_type == "pointmass":
@@ -290,6 +300,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             raise NotImplementedError
         return total_loss, loss_components
 
+    @timeit
     def terminated(self) -> Tensor:
         out_of_bound = torch.logical_or(
             torch.any(self.p < -self.L, dim=-1),

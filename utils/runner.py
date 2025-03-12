@@ -26,26 +26,42 @@ def display_image(state, action, policy_info, env_info):
         cv2.imshow('image', disp_image)
         cv2.waitKey(1)
 
+def timeit(fn):
+    """
+    Profile this function using `LineProfiler` during training.
+    
+    Usage:
+    ```
+    from quaddif.utils.runner import timeit
+    @timeit
+    def foo():
+        return
+    
+    class Bar:
+        @timeit
+        def foo(self):
+            return
+    ```
+    """
+    def wrapper(*args, **kwargs):
+        if fn not in TrainRunner.profiler.functions:
+            # Add the function to the profiler
+            TrainRunner.profiler.add_function(fn)
+        # Call the original function
+        return fn(*args, **kwargs)
+    return wrapper
+
 class TrainRunner:
+    profiler = LineProfiler()
     def __init__(self, cfg: DictConfig, logger: Logger, env: RecordEpisodeStatistics, agent):
         self.cfg = cfg
         self.logger = logger
         self.env = env
         self.agent = agent
-        
-        self.profiler = LineProfiler()
-        if hasattr(self.env, "update_sensor_data"):
-            self.profiler.add_function(self.env.update_sensor_data)
-        if self.env.renderer is not None:
-            self.profiler.add_function(self.env.renderer.render)
-        self.profiler.add_function(self.env.env.step)
-        self.profiler.add_function(self.env.get_observations)
-        self.profiler.add_function(self.env.loss_fn)
-        self.profiler.add_function(self.env.reset_idx)
-        self.profiler.add_function(self.agent.step)
         self.run = self.profiler(self.run)
     
     def run(self):
+        """Start training."""
         obs = self.env.reset()
         max_success_rate = 0
         pbar = tqdm(range(self.cfg.n_updates))
@@ -88,6 +104,11 @@ class TrainRunner:
                 self.agent.save(os.path.join(self.logger.logdir, "best"))
     
     def close(self):
+        """
+        Save (and export) the trained policy, 
+        close the environment renderer, 
+        and write the profiled data to the disk.
+        """
         ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
         self.agent.save(ckpt_path)
         print(f"The checkpoint is saved to {ckpt_path}.")

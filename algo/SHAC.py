@@ -14,6 +14,7 @@ from quaddif.network.agents import (
     StochasticActorCriticV,
     RPLActorCritic,
     StochasticActorCriticQ)
+from quaddif.utils.runner import timeit
 
 class SHAC:
     def __init__(
@@ -166,6 +167,7 @@ class SHAC:
             p_t.data.lerp_(p.data, self.target_update_rate)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
     
+    @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
@@ -377,6 +379,7 @@ class SHAC_Q:
             p_t.data.lerp_(p.data, 5e-3)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
     
+    @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:

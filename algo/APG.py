@@ -10,6 +10,7 @@ from quaddif.network.agents import (
     tensordict2tuple,
     DeterministicActor,
     StochasticActor)
+from quaddif.utils.runner import timeit
 
 class APG:
     def __init__(
@@ -48,6 +49,7 @@ class APG:
         self.actor_loss = torch.zeros(1, device=self.device)
         return {"actor_loss": actor_loss}, {"actor_grad_norm": grad_norm}
 
+    @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(obs)

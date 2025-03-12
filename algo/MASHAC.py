@@ -12,6 +12,7 @@ from tensordict import TensorDict
 from quaddif.algo.buffer import RolloutBufferMASHAC, RNNStateBuffer
 from quaddif.network.agents import tensordict2tuple
 from quaddif.network.multiagents import MAStochasticActorCriticV
+from quaddif.utils.runner import timeit
 
 class MASHAC:
     def __init__(
@@ -166,6 +167,7 @@ class MASHAC:
             p_t.data.lerp_(p.data, self.target_update_rate)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
     
+    @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
         obs, global_state = obs
         self.buffer.clear()

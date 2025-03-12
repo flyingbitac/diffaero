@@ -10,6 +10,7 @@ from quaddif.env.base_env import BaseEnv
 from quaddif.utils.sensor import Camera, LiDAR
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.assets import ObstacleManager
+from quaddif.utils.runner import timeit
 
 class ObstacleAvoidance(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -49,6 +50,7 @@ class ObstacleAvoidance(BaseEnv):
         self.action_dim = self.dynamics.action_dim
         self.r_drone: float = cfg.r_drone
     
+    @timeit
     def get_observations(self, with_grad=False):
         if self.dynamic_type == "pointmass":
             obs = torch.cat([self.target_vel, self.q, self._v], dim=-1)
@@ -59,6 +61,7 @@ class ObstacleAvoidance(BaseEnv):
         obs = obs if with_grad else obs.detach()
         return obs
     
+    @timeit
     def update_sensor_data(self):
         if self.sensor_type == "camera" or self.sensor_type == "lidar":
             H, W = self.sensor_tensor.shape[1:]
@@ -79,6 +82,7 @@ class ObstacleAvoidance(BaseEnv):
             sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
             self.sensor_tensor.copy_(obst_relpos.gather(dim=1, index=sorted_idx))
     
+    @timeit
     def step(self, action):
         # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         self.dynamics.step(action)
@@ -113,6 +117,7 @@ class ObstacleAvoidance(BaseEnv):
     def state_for_render(self):
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
+    @timeit
     def loss_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
         virtual_radius = 0.2
@@ -174,6 +179,7 @@ class ObstacleAvoidance(BaseEnv):
             }
         return total_loss, loss_components
 
+    @timeit
     def reset_idx(self, env_idx):
         n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
@@ -232,6 +238,7 @@ class ObstacleAvoidance(BaseEnv):
             self.renderer.step(**self.state_for_render())
         return self.get_observations()
     
+    @timeit
     def collision(self) -> Tensor:
         # check if the distance between the drone's mass center and the sphere's center is less than the sum of their radius
         dist2sphere = torch.norm(self.p.unsqueeze(1) - self.obstacle_manager.p_spheres, dim=-1) - self.obstacle_manager.r_spheres # [n_envs, n_spheres]
@@ -264,6 +271,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def get_observations(self):
         return self.p, self.q, self.v, self.a, self.target_vel, self.sensor_tensor.unsqueeze(1)
     
+    @timeit
     def step(self, action):
         # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         self.dynamics.step(action)
@@ -294,6 +302,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             self.reset_idx(reset_indices)
         return self.get_observations(), loss, terminated, extra
     
+    @timeit
     def loss_fn(self, _p, _v, _a):
         # type: (ObstacleAvoidance, Tensor, Tensor, Tensor) -> Tuple[Tensor, Dict[str, float], Tensor]
         p, v, a = _p.detach(), _v.detach(), _a.detach()

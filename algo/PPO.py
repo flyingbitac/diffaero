@@ -13,6 +13,7 @@ from quaddif.network.agents import (
     tensordict2tuple,
     StochasticActorCriticV,
     RPLActorCritic)
+from quaddif.utils.runner import timeit
 
 class PPO:
     def __init__(
@@ -67,6 +68,7 @@ class PPO:
         target_values = advantages + self.buffer.values
         return advantages.view(-1), target_values.view(-1)
     
+    @timeit
     def train(self, advantages, target_values):
         # type: (Tensor, Tensor) -> Tuple[Dict[str, float], Dict[str, float]]
         T, N = self.l_rollout, self.n_envs
@@ -147,6 +149,7 @@ class PPO:
     def add(self, obs, sample, logprob, reward, done, value, next_value):
         self.buffer.add(obs, sample, logprob, reward, done, value, next_value)
     
+    @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:

@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from quaddif.env.obstacle_avoidance import ObstacleAvoidanceYOPO
 from quaddif.utils.render import torch2ti
+from quaddif.utils.runner import timeit
 
 class YOPONet(nn.Module):
     def __init__(
@@ -195,6 +196,7 @@ class YOPO:
             feature_dim=self.feature_dim).to(device)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
     
+    @timeit
     def inference(self, p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor]
         rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
@@ -273,6 +275,7 @@ class YOPO:
         pva_next = env.dynamics.solver(env.dynamics.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
         return pva_next
 
+    @timeit
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, obs: Tuple[Tensor], on_step_cb=None):
         N, HW = env.n_envs, self.n_pitch * self.n_yaw
         
