@@ -48,13 +48,13 @@ class YOPONet(nn.Module):
         self,
         rotmat_b2p: Tensor,
         depth_image: Tensor,
-        state_b: Tensor # []
+        obs_b: Tensor # []
     ):
-        N, C, HW = state_b.size(0), 10, self.H_out * self.W_out
+        N, C, HW = obs_b.size(0), 10, self.H_out * self.W_out
         feat = self.net(depth_image)
-        state_p = torch.matmul(rotmat_b2p.unsqueeze(0), state_b.unsqueeze(1))
-        state_p = state_p.reshape(N, self.H_out, self.W_out, 9).permute(0, 3, 1, 2)
-        feat = torch.cat([feat, state_p], dim=1)
+        obs_p = torch.matmul(rotmat_b2p.unsqueeze(0), obs_b.unsqueeze(1))
+        obs_p = obs_p.reshape(N, self.H_out, self.W_out, 9).permute(0, 3, 1, 2)
+        feat = torch.cat([feat, obs_p], dim=1)
         return self.head(feat).reshape(N, C, HW).permute(0, 2, 1)
 
 @torch.jit.script
@@ -204,8 +204,8 @@ class YOPO:
         v_curr_b = torch.matmul(rotmat_w2b, v_w.unsqueeze(-1)).squeeze(-1)
         a_curr_b = torch.matmul(rotmat_w2b, a_w.unsqueeze(-1)).squeeze(-1) - self.G
         
-        state = torch.stack([target_vel_b, v_curr_b, a_curr_b], dim=-1)
-        net_output: Tensor = self.net(self.rotmat_b2p, depth_image, state)
+        obs = torch.stack([target_vel_b, v_curr_b, a_curr_b], dim=-1)
+        net_output: Tensor = self.net(self.rotmat_b2p, depth_image, obs)
         p_end_b, v_end_b, a_end_b, score = post_process(
             output=net_output,
             rpy_base=self.rpy_base,
@@ -227,8 +227,8 @@ class YOPO:
         )
         return score, coef_xyz
     
-    def act(self, state: Tuple[Tensor], test: bool = False, env: Optional[ObstacleAvoidanceYOPO] = None):
-        p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = state
+    def act(self, obs: Tuple[Tensor], test: bool = False, env: Optional[ObstacleAvoidanceYOPO] = None):
+        p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = obs
         rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
         
@@ -270,13 +270,13 @@ class YOPO:
         return acc, {"coef_best": coef_best}
 
     def dynamics_step(self, env: ObstacleAvoidanceYOPO, pva: Tensor, a_next: Tensor):
-        pva_next = env.model.solver(env.model.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
+        pva_next = env.dynamics.solver(env.dynamics.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
         return pva_next
 
-    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, state: Tuple[Tensor], on_step_cb=None):
+    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, obs: Tuple[Tensor], on_step_cb=None):
         N, HW = env.n_envs, self.n_pitch * self.n_yaw
         
-        p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = state
+        p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = obs
         rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         
         for _ in range(cfg.algo.n_epochs):
@@ -314,7 +314,7 @@ class YOPO:
             torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=self.grad_norm)
         
         # with torch.no_grad():
-        action, policy_info = self.act(state, env=env)
+        action, policy_info = self.act(obs, env=env)
         # render the trajectory
         if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
             n_envs = env.renderer.n_envs
@@ -332,10 +332,10 @@ class YOPO:
             env.renderer.gui_scene.lines(lines_field, color=(1., 1., 1.), width=3.)
         
         with torch.no_grad():
-            next_state, loss, terminated, env_info = env.step(action)
+            next_obs, loss, terminated, env_info = env.step(action)
             if on_step_cb is not None:
                 on_step_cb(
-                    state=state,
+                    obs=obs,
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
@@ -346,7 +346,7 @@ class YOPO:
             "total_loss": total_loss.item()}
         grad_norms = {"actor_grad_norm": grad_norm}
         
-        return next_state, policy_info, env_info, losses, grad_norms
+        return next_obs, policy_info, env_info, losses, grad_norms
 
     def save(self, path: str):
         if not os.path.exists(path):
@@ -358,4 +358,4 @@ class YOPO:
     
     @staticmethod
     def build(cfg: DictConfig, env: ObstacleAvoidanceYOPO, device: torch.device):
-        return YOPO(cfg.algo, device)
+        return YOPO(cfg, device)

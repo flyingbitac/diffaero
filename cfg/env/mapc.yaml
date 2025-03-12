@@ -1,4 +1,4 @@
-name: position_control
+name: multi_agent_position_control
 
 dynamics: ${dynamics}
 dt: 0.0333

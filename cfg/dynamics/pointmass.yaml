@@ -1,5 +1,8 @@
 name: pointmass
 
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+dt: ${env.dt}
 m: 1.0                  # total mass
 g: 9.81                 # gravity
 D: [0.6, 0.6, 0.6]      # drag
@@ -12,3 +15,4 @@ min_action: [-40, -40, 0]
 max_action: [40, 40, 40]
 
 solver_type: "rk4" # "rk4" or "euler"
+n_substeps: 1

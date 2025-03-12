@@ -15,21 +15,21 @@ class APG:
     def __init__(
         self,
         cfg: DictConfig,
-        state_dim: int,
+        obs_dim: int,
         action_dim: int,
         l_rollout: int,
         device: torch.device
     ):
-        self.actor = DeterministicActor(cfg.network, state_dim, action_dim).to(device)
+        self.actor = DeterministicActor(cfg.network, obs_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.max_grad_norm: float = cfg.max_grad_norm
         self.l_rollout: int = l_rollout
         self.actor_loss = torch.zeros(1, device=device)
         self.device = device
     
-    def act(self, state, test=False):
+    def act(self, obs, test=False):
         # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
-        return self.actor(tensordict2tuple(state)), {}
+        return self.actor(tensordict2tuple(obs)), {}
     
     def record_loss(self, loss, policy_info, env_info):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor]) -> None
@@ -48,22 +48,22 @@ class APG:
         self.actor_loss = torch.zeros(1, device=self.device)
         return {"actor_loss": actor_loss}, {"actor_grad_norm": grad_norm}
 
-    def step(self, cfg, env, state, on_step_cb=None):
+    def step(self, cfg, env, obs, on_step_cb=None):
         for _ in range(cfg.l_rollout):
-            action, policy_info = self.act(state)
-            state, loss, terminated, env_info = env.step(env.rescale_action(action))
+            action, policy_info = self.act(obs)
+            obs, loss, terminated, env_info = env.step(env.rescale_action(action))
             self.reset(env_info["reset"])
             self.record_loss(loss, policy_info, env_info)
             if on_step_cb is not None:
                 on_step_cb(
-                    state=state,
+                    obs=obs,
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
             
         losses, grad_norms = self.update_actor()
         self.detach()
-        return state, policy_info, env_info, losses, grad_norms
+        return obs, policy_info, env_info, losses, grad_norms
     
     def save(self, path):
         if not os.path.exists(path):
@@ -84,8 +84,8 @@ class APG:
     @staticmethod
     def build(cfg, env, device):
         return APG(
-            cfg=cfg.algo,
-            state_dim=env.state_dim,
+            cfg=cfg,
+            obs_dim=env.obs_dim,
             action_dim=env.action_dim,
             l_rollout=cfg.l_rollout,
             device=device)
@@ -99,21 +99,21 @@ class APG_stochastic(APG):
     def __init__(
         self,
         cfg: DictConfig,
-        state_dim: int,
+        obs_dim: int,
         action_dim: int,
         l_rollout: int,
         device: torch.device
     ):
-        super().__init__(cfg, state_dim, action_dim, l_rollout, device)
+        super().__init__(cfg, obs_dim, action_dim, l_rollout, device)
         del self.optimizer; del self.actor
-        self.actor = StochasticActor(cfg.network, state_dim, action_dim).to(device)
+        self.actor = StochasticActor(cfg.network, obs_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.lr)
         self.entropy_loss = torch.zeros(1, device=device)
         self.entropy_weight: float = cfg.entropy_weight
 
-    def act(self, state, test=False):
-        # type: (Tensor, bool) -> Tuple[Tensor, Dict[str, Tensor]]
-        action, sample, logprob, entropy = self.actor(tensordict2tuple(state), test=test)
+    def act(self, obs, test=False):
+        # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        action, sample, logprob, entropy = self.actor(tensordict2tuple(obs), test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy}
     
     def record_loss(self, loss, policy_info, env_info):
@@ -139,8 +139,8 @@ class APG_stochastic(APG):
     @staticmethod
     def build(cfg, env, device):
         return APG_stochastic(
-            cfg=cfg.algo,
-            state_dim=env.state_dim,
+            cfg=cfg,
+            obs_dim=env.obs_dim,
             action_dim=env.action_dim,
             l_rollout=cfg.l_rollout,
             device=device)

@@ -2,9 +2,10 @@ name: position_control_renderer
 
 headless: ${headless}
 n_envs: ${env.n_envs}
+n_agents: ${n_agents}
 dt: ${env.dt}
 render_n_envs: 256
-env_spacing: 1
+env_spacing: 4
 physics_engine: "physx"
 ground_plane: True
 record_video: ${record_video}
