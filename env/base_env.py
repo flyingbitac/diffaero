@@ -138,6 +138,9 @@ class BaseEnvMultiAgent(BaseEnv):
         min_distances = distances.min(dim=-1).values
         return min_distances
     
+    def get_observations(self, with_grad=False):
+        raise NotImplementedError
+    
     def get_global_state(self, with_grad=False):
         raise NotImplementedError
     
