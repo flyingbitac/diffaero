@@ -13,7 +13,6 @@ def main(cfg: DictConfig):
     import torch
     import numpy as np
 
-    from quaddif import QUADDIF_ROOT_DIR
     from quaddif.env import build_env
     from quaddif.algo import build_agent
     from quaddif.utils.device import get_idle_device
@@ -36,8 +35,6 @@ def main(cfg: DictConfig):
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
-    if cfg.checkpoint is None:
-        cfg.checkpoint = os.path.join(QUADDIF_ROOT_DIR, "outputs", "latest", "checkpoints")
     cfg_path = os.path.join(os.path.dirname(os.path.abspath(cfg.checkpoint)), ".hydra", "config.yaml")
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo

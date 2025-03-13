@@ -6,8 +6,6 @@ from omegaconf import OmegaConf, DictConfig
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from quaddif import QUADDIF_ROOT_DIR
-
 class Logger:
     def __init__(
         self,
@@ -40,10 +38,6 @@ class Logger:
             self.writer = wandb
         print(f"Output directory  : {self.logdir}")
         self.steps = {}
-        link_path = os.path.join(QUADDIF_ROOT_DIR, "outputs", "latest")
-        if os.path.exists(link_path):
-            os.remove(link_path)
-        os.symlink(self.logdir, link_path)
     
     def log(self,tag,value):
         if tag not in self.steps:
