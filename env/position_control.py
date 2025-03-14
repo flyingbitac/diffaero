@@ -101,6 +101,7 @@ class PositionControl(BaseEnv):
 
     @timeit
     def reset_idx(self, env_idx):
+        n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
         p_new = rand_range(-self.L+0.5, self.L-0.5, size=(self.n_envs, 3), device=self.device)
@@ -114,6 +115,8 @@ class PositionControl(BaseEnv):
         self.target_pos.fill_(0.)
         self.progress[env_idx] = 0
         self.arrive_time[env_idx] = 0
+        self.max_vel[env_idx] = torch.rand(
+            n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
     
     def reset(self):
         super().reset()
@@ -264,6 +267,8 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
 
         self.progress[env_idx] = 0
         self.arrive_time[env_idx] = 0
+        self.max_vel[env_idx] = torch.rand(
+            n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
     
     def state_for_render(self) -> Tensor:
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
