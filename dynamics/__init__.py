@@ -3,14 +3,15 @@ from typing import Union
 import torch
 from omegaconf import DictConfig
 
-from .pointmass import PointMassModel
+from .pointmass import ContinuousPointMassModel, DiscretePointMassModel, PointMassModelBase
 from .quadrotor import QuadrotorModel
 
 DYNAMICS_ALIAS = {
-    "pointmass": PointMassModel,
+    "pointmass_c": ContinuousPointMassModel,
+    "pointmass_d": DiscretePointMassModel,
     "quadrotor": QuadrotorModel
 }
 
 def build_dynamics(cfg, device):
-    # type: (DictConfig, torch.device) -> Union[PointMassModel, QuadrotorModel]
+    # type: (DictConfig, torch.device) -> Union[PointMassModelBase, QuadrotorModel]
     return DYNAMICS_ALIAS[cfg.name](cfg, device)

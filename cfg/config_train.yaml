@@ -1,7 +1,7 @@
 defaults:
   - algo: apg_sto
   - env: pc
-  - dynamics: pointmass # [pointmass, quadrotor]
+  - dynamics: pointmass_c # [pointmass_c, pointmass_d, quadrotor]
   - network: mlp # [mlp, cnn]
   - sensor: camera # [camera, lidar, relpos]
   - _self_

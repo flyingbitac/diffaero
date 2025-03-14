@@ -14,6 +14,7 @@ class QuadrotorModel:
         n_substeps: int,
         device: torch.device
     ):
+        self.type = "quadrotor"
         self.device = device
         self.state_dim = 13
         self.action_dim = 4

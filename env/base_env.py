@@ -9,9 +9,8 @@ from quaddif.dynamics.pointmass import point_mass_quat
 
 class BaseEnv:
     def __init__(self, cfg: DictConfig, device: torch.device):
-        self.dynamic_type: str = cfg.dynamics.name
-        assert self.dynamic_type in ["pointmass", "quadrotor"]
         self.dynamics = build_dynamics(cfg.dynamics, device)
+        self.dynamic_type: str = self.dynamics.type
         self.n_agents: int = cfg.n_agents
         self.dt: float = cfg.dt
         self.L: float = cfg.length
