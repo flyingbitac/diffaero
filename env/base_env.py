@@ -24,9 +24,11 @@ class BaseEnv:
         self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.long)
         self.arrive_time = torch.zeros(self.n_envs, device=device, dtype=torch.float)
         self.max_steps: int = int(cfg.max_time / cfg.dt)
-        self.max_vel: float = cfg.max_vel
         self.cfg = cfg
         self.device = device
+        self.max_vel = torch.zeros(self.n_envs, device=device)
+        self.min_target_vel: float = cfg.min_target_vel
+        self.max_target_vel: float = cfg.max_target_vel
     
     def get_observations(self, with_grad=False):
         raise NotImplementedError
@@ -66,7 +68,7 @@ class BaseEnv:
     @property
     def target_vel(self):
         target_relpos = self.target_pos - self.p
-        target_dist = target_relpos.norm(dim=-1)
+        target_dist = target_relpos.norm(dim=-1) # [n_envs]
         return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
 
     def step(self, action):
@@ -113,8 +115,8 @@ class BaseEnvMultiAgent(BaseEnv):
         # 这里要改成每个环境中的num_agents个飞机分别以距离自身最近的target_pos为目标计算相对的target_relpos:
         target_relpos = self.target_pos - self.p
         # target_relpos = self.multidrone_targetpos
-        target_dist = target_relpos.norm(dim=-1)
-        return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
+        target_dist = target_relpos.norm(dim=-1) # [n_envs, n_agents]
+        return target_relpos / torch.max(target_dist / self.max_vel.unsqueeze(-1), torch.ones_like(target_dist)).unsqueeze(-1)
 
     @property
     def allocated_target_pos(self):
