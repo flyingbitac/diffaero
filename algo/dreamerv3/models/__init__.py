@@ -1,2 +1,2 @@
-from .state_predictor import StateModelCfg,PercModelCfg
+from .state_predictor import DepthStateModelCfg
 from .agent import ActorCriticConfig

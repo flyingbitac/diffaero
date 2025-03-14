@@ -1,4 +1,5 @@
 **/__pycache__
+run.sh
 outputs/
 deploy/*
 !deploy/src/

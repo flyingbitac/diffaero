@@ -7,13 +7,13 @@ import torch
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from quaddif.env import ENV_ALIAS
-from quaddif.algo import AGENT_ALIAS
+from quaddif.env import build_env
+from quaddif.algo import build_agent
 from quaddif.utils.exporter import PolicyExporter
 from quaddif.utils.logger import RecordEpisodeStatistics
 from quaddif.utils.device import get_idle_device
 
-@hydra.main(config_path="../cfg", config_name="config")
+@hydra.main(config_path="../cfg", config_name="test_config")
 def main(cfg: DictConfig):
     device_idx = f"{get_idle_device()}" if cfg.device is None else f"{cfg.device}"
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
@@ -28,11 +28,9 @@ def main(cfg: DictConfig):
     if cfg.algo.name != 'world':
         cfg.network = ckpt_cfg.network
     
-    env_class = ENV_ALIAS[cfg.env.name]
-    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
+    env = RecordEpisodeStatistics(build_env(cfg.env, device=device))
     
-    agent_class = AGENT_ALIAS[cfg.algo.name]
-    agent = agent_class.build(cfg, env, device)
+    agent = build_agent(cfg.algo, env, device)
     agent.load(cfg.checkpoint)
     
     PolicyExporter(agent.policy_net).export(path=cfg.checkpoint, verbose=True, export_onnx=False, export_pnnx=False)
