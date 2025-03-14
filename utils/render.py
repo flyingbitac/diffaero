@@ -166,9 +166,9 @@ class BaseRenderer:
         
         N = torch.ceil(torch.sqrt(torch.tensor(self.n_envs, device=self.device))).int()
         assert N * N >= self.n_envs
-        x = y = torch.arange(N, device=self.device, dtype=torch.float32) * self.L
+        x = y = torch.arange(N, device=self.device, dtype=torch.float32) * self.L * 2
         xy = torch.stack(torch.meshgrid(x, y, indexing="ij"), dim=-1).reshape(-1, 2)
-        xy -= (N-1) * self.L / 2
+        xy -= (N-1) * self.L
         xyz = torch.cat([xy, torch.zeros_like(xy[:, :1])], dim=-1)
         self.env_origin = xyz[:self.n_envs] # [n_envs, 3]
         
@@ -187,7 +187,7 @@ class BaseRenderer:
         self._init_drone_model()
         
         if self.ground_plane:
-            ground_plane_size = int(N.item() * self.L + self.L)
+            ground_plane_size = int(N.item() * self.L * 2 + self.L)
             edge_length = 5
             self.n_plane: int = torch.ceil(torch.tensor(ground_plane_size / edge_length)).int().item()
             n_ground_faces = self.n_plane * self.n_plane
@@ -256,7 +256,7 @@ class BaseRenderer:
         self.gui_camera.position(-1.5*env_bound, 0.5*env_bound, -1.8*env_bound)  # x, y, z
         self.gui_camera.lookat(0, -0.1*env_bound, 0)
         self.gui_camera.up(0, 1, 0) 
-        self.gui_camera.z_far(200)
+        # self.gui_camera.z_far(200)
         self.gui_camera.projection_mode(ti.ui.ProjectionMode.Perspective)
         self.gui_canvas = self.gui_window.get_canvas()
         
@@ -595,6 +595,7 @@ class BaseRenderer:
         if self.record_video:
             self.video_window.destroy()
 
+
 class PositionControlRenderer(BaseRenderer):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
@@ -609,7 +610,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         z_ground_plane: float,
         headless: bool
     ):
-        cfg.env_spacing = cfg.env_spacing + 3
         super().__init__(cfg, device, z_ground_plane=z_ground_plane, headless=headless)
         self.obstacle_manager = obstacle_manager
         self.cube_color = [0.8, 0.3, 0.1]
