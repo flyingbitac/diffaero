@@ -155,8 +155,9 @@ class BaseRenderer:
         self.headless = headless
         self.device = device
         
-        # if self.record_video:
-        #     ti.init(arch=ti.vulkan)
+        if self.record_video:
+            assert str(self.device) in ["cpu", "cuda:0"], "Video recording is only supported on cpu and cuda:0."
+        
         if "cpu" in str(self.device):
             print("Using CPU to render the GUI.")
             ti.init(arch=ti.cpu)
@@ -591,7 +592,8 @@ class BaseRenderer:
         pass
     
     def close(self):
-        self.gui_window.destroy()
+        if not self.headless:
+            self.gui_window.destroy()
         if self.record_video:
             self.video_window.destroy()
 
