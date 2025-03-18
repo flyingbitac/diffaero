@@ -83,8 +83,8 @@ class ObstacleAvoidance(BaseEnv):
             self.sensor_tensor.copy_(obst_relpos.gather(dim=1, index=sorted_idx))
     
     @timeit
-    def step(self, action):
-        # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+    def step(self, action, need_obs_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         self.dynamics.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -106,10 +106,11 @@ class ObstacleAvoidance(BaseEnv):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            "next_obs_before_reset": self.get_observations(with_grad=True),
             "loss_components": loss_components,
             "sensor": self.sensor_tensor.clone(),
         }
+        if need_obs_before_reset:
+            extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_observations(), loss, terminated, extra
@@ -151,7 +152,7 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 4 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),

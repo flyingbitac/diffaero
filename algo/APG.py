@@ -53,7 +53,7 @@ class APG:
     def step(self, cfg, env, obs, on_step_cb=None):
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(obs)
-            obs, loss, terminated, env_info = env.step(env.rescale_action(action))
+            obs, loss, terminated, env_info = env.step(env.rescale_action(action), need_obs_before_reset=False)
             self.reset(env_info["reset"])
             self.record_loss(loss, policy_info, env_info)
             if on_step_cb is not None:

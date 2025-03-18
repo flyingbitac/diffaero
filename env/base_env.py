@@ -70,8 +70,8 @@ class BaseEnv:
         target_dist = target_relpos.norm(dim=-1) # [n_envs]
         return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
 
-    def step(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+    def step(self, action, need_obs_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         raise NotImplementedError
     
     def state_for_render(self):
@@ -104,6 +104,10 @@ class BaseEnvMultiAgent(BaseEnv):
         assert self.n_agents > 1
         self.target_pos_base = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
         self.target_pos_rel  = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
+
+    def step(self, action, need_global_state_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+        raise NotImplementedError
 
     @property
     def target_pos(self):

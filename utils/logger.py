@@ -112,8 +112,8 @@ class RecordEpisodeStatistics:
             raise AttributeError(f"accessing private attribute '{name}' is prohibited")
         return getattr(self.env, name)
     
-    def step(self, action):
-        state, loss, terminated, extra = self.env.step(action)
+    def step(self, *args, **kwargs):
+        state, loss, terminated, extra = self.env.step(*args, **kwargs)
         n_resets = extra["reset_indicies"].size(0)
         if n_resets > 0:
             n_success = int(extra["success"].sum().item())

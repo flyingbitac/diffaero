@@ -27,8 +27,8 @@ class PositionControl(BaseEnv):
         return obs if with_grad else obs.detach()
     
     @timeit
-    def step(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
+    def step(self, action, need_obs_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         self.dynamics.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -49,9 +49,10 @@ class PositionControl(BaseEnv):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            "next_obs_before_reset": self.get_observations(with_grad=True),
             "loss_components": loss_components
         }
+        if need_obs_before_reset:
+            extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_observations(), loss, terminated, extra
@@ -195,8 +196,8 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         return global_state if with_grad else global_state.detach()
     
     @timeit
-    def step(self, action):
-        # type: (Tensor) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
+    def step(self, action, need_global_state_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         self.dynamics.step(action)
         (terminated, collision, out_of_bound), truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -219,11 +220,12 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             "success": success,
             "arrive_time": self.arrive_time.clone(),
             # "next_obs_before_reset": self.get_observations(with_grad=True),
-            "next_global_state_before_reset": self.get_global_state(with_grad=True),
             "loss_components": loss_components,
             "collision": collision,
             "out_of_bound": out_of_bound
         }
+        if need_global_state_before_reset:
+            extra["next_global_state_before_reset"] = self.get_global_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_obs_and_state(), loss, terminated, extra
