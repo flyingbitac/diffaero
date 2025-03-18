@@ -60,13 +60,36 @@ class TrainRunner:
         self.agent = agent
         self.run = self.profiler(self.run)
         self.max_success_rate = 0.
+        
+        if cfg.torch_profile:
+            self.torch_profiler = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU, 
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                record_shapes=False,
+                profile_memory=True,
+                with_stack=True,
+                with_flops=True,
+                schedule=torch.profiler.schedule(wait=0, warmup=1, active=cfg.n_updates-1, repeat=1, skip_first=0),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    dir_name=os.path.join(self.logger.logdir, "profiling_data"),
+                    use_gzip=True
+                ),
+            )
+        else: 
+            self.torch_profiler = None
     
     def run(self):
         """Start training."""
         obs = self.env.reset()
         pbar = tqdm(range(self.cfg.n_updates))
         on_step_cb = display_image if self.cfg.display_image else None
+        if self.torch_profiler is not None:
+            self.torch_profiler.start()
         for i in pbar:
+            if self.torch_profiler is not None:
+                self.torch_profiler.step()
             t1 = pbar._time()
             self.env.detach()
             obs, policy_info, env_info, losses, grad_norms = self.agent.step(self.cfg, self.env, obs, on_step_cb=on_step_cb)
@@ -109,6 +132,8 @@ class TrainRunner:
         close the environment renderer, 
         and write the profiled data to the disk.
         """
+        if self.torch_profiler is not None and self.torch_profiler.step_num == self.cfg.n_updates:
+            self.torch_profiler.stop()
         ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
         self.agent.save(ckpt_path)
         print(f"The checkpoint is saved to {ckpt_path}.")
@@ -137,13 +162,13 @@ class TestRunner:
         path = os.path.join(self.logger.logdir, "video")
         if not os.path.exists(path):
             os.makedirs(path)
-        with imageio.get_writer(os.path.join(path, name), fps=1/self.dt) as video:
+        with imageio.get_writer(os.path.join(path, name), fps=1/self.env.dt) as video:
             for frame_index in range(video_array.shape[0]):
                 frame = video_array[frame_index]
                 video.append_data(frame)
 
     def save_video_tensorboard(self, video_array: np.ndarray, tag: str, step: int):
-        self.logger.log_video(tag, video_array, step=step, fps=1/self.dt)
+        self.logger.log_video(tag, video_array, step=step, fps=1/self.env.dt)
     
     @torch.no_grad()
     def run(self):
@@ -200,11 +225,10 @@ class TestRunner:
                 depth_image = (depth_image * 255).to(torch.uint8).unsqueeze(-1).expand(-1, -1, -1, 3).cpu().numpy()
                 image = np.concatenate([rgb_image, depth_image], axis=-2)
                 video_array[index] = image
-                
                 if env_info["reset"][:n_envs].sum().item() > env_info["success"][:n_envs].sum().item(): # some episodes failed
                     failed = torch.logical_and(env_info["reset"], ~env_info["success"])[:n_envs]
                     idx = failed.nonzero().flatten()[0]
-                    video_length = env_info["l"][idx] - 1
+                    video_length = env_info["l"][idx].item() - 1
                     if self.cfg.video_saveas == "mp4":
                         self.save_video_mp4(video_array[idx, :video_length], f"failed_{i+1}.mp4")
                     elif self.cfg.video_saveas == "tensorboard":

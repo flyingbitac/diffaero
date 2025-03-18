@@ -20,6 +20,7 @@ setup(
         'tqdm',
         'tensorboard',
         'tensorboardX',
+        'torch-tb-profiler',
         'wandb',
         'opencv-python',
         'welford_torch',

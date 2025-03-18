@@ -1,4 +1,4 @@
-name: pointmass
+name: pointmass_c
 
 n_envs: ${n_envs}
 n_agents: ${n_agents}
