@@ -241,7 +241,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         self.target_pos_rel[env_idx] = 0.
         self.target_pos_rel[env_idx, 1, 0] = 1.
         self.target_pos_rel[env_idx, 2, 1] = 1.
-        self.target_pos_rel[env_idx, 3, :2] = 1.
+        # self.target_pos_rel[env_idx, 3, :2] = 1.
         # 随机初始化新的位置
         N = 5
         assert N**3 > self.n_agents
@@ -300,7 +300,6 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
                 "jerk_loss": jerk_loss.mean().item(),
                 "collide_loss": collide_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
-                
                 "mean_distance_to_nearest_target": mean_distance_to_nearest_target.mean().item()
             }
         else:

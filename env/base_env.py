@@ -28,6 +28,7 @@ class BaseEnv:
         self.max_vel = torch.zeros(self.n_envs, device=device)
         self.min_target_vel: float = cfg.min_target_vel
         self.max_target_vel: float = cfg.max_target_vel
+        self.use_old_obs_proc = cfg.use_old_obs_proc
     
     def get_observations(self, with_grad=False):
         raise NotImplementedError
@@ -150,7 +151,52 @@ class BaseEnvMultiAgent(BaseEnv):
         raise NotImplementedError
     
     def get_obs_and_state(self, with_grad=False):
-        return self.get_observations(with_grad), self.get_global_state(with_grad)
+        if self.use_old_obs_proc:
+            if self.dynamic_type == "pointmass":
+                # 全局状态 为所有agent自身状态(p+q+v)+目标位置
+                global_state = torch.cat([self._p, self._q, self._v], dim=-1)
+                global_state = global_state.reshape(global_state.shape[0], global_state.shape[1]*global_state.shape[2]).unsqueeze(1)
+                global_state = torch.cat([global_state, self.target_pos.reshape(self.target_pos.shape[0], self.target_pos.shape[1]*self.target_pos.shape[2]).unsqueeze(1), self.box_size.unsqueeze(1)], dim=-1)
+
+                # global state维度不对，太短，对不上设置的global_state_dim
+                
+                # agent观测 每个agent的观测为 自身状态(目标方向单位向量+自身姿态四元数+自身速度向量)+所有其他agent相对状态(p+v)+目标位置
+                obs = []
+                for i in range(self.n_agents):
+                    obs_i = torch.zeros((self.n_envs, self.obs_dim), device=self.device)
+                    # 获取i-th agent的p q v
+                    p_i = self.p[:, i, :]
+                    q_i = self.q[:, i, :]
+                    v_i = self.v[:, i, :]
+                    # 获取i-th agent对自己状态的观测
+                    obs_i[:, :3*self.n_agents+4+3] = torch.cat([self.target_vel.reshape(self.target_vel.shape[0], self.target_vel.shape[1]*self.target_vel.shape[2]), q_i, v_i], dim=-1)
+                    # 获取i-th agent对其他agent的观测
+                    for j in range(self.n_agents):
+                        # 逐个计算i-th agent对其他agent的观测值，包括相对位置和速度，不计算对自己的观测，所以i=j时跳过
+                        if j == i:
+                            continue
+                        p_j = self.p[:, j, :]
+                        v_j = self.v[:, j, :]
+                        p_ji = p_j - p_i
+                        v_ji = v_j - v_i
+                        if j < i:
+                            obs_i[:, (3*self.n_agents+4+3) + 6*j:(3*self.n_agents+4+3) + 6*(j+1)] = torch.cat([p_ji, v_ji], dim=-1)
+                        else:
+                            obs_i[:, (3*self.n_agents+4+3) + 6*(j-1):((3*self.n_agents+4+3)) + 6*j] = torch.cat([p_ji, v_ji], dim=-1)
+                    # 获取i-th agent对目标位置的观测
+                    related_pos = self.target_pos - p_i[:, None, :]
+                    obs_i[:, -3*self.n_agents:] = related_pos.reshape(related_pos.shape[0], related_pos.shape[1]*related_pos.shape[2])
+                    obs.append(obs_i)
+                obs = torch.stack(obs, dim=1) # (num_envs, num_agents, obs_dim)
+            else:
+                raise NotImplementedError
+                state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+            if with_grad:
+                return obs, global_state.squeeze(1)
+            else:
+                return obs.detach(), global_state.squeeze(1).detach()
+        else:
+            return self.get_observations(with_grad), self.get_global_state(with_grad)
     
     def reset(self):
         self.reset_idx(torch.arange(self.n_envs, device=self.device))
