@@ -26,6 +26,8 @@ runname: ""
 checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
 export: False
 
+torch_profile: False
+
 seed: 0
 torch_deterministic: False
 

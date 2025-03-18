@@ -60,13 +60,36 @@ class TrainRunner:
         self.agent = agent
         self.run = self.profiler(self.run)
         self.max_success_rate = 0.
+        
+        if cfg.torch_profile:
+            self.torch_profiler = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU, 
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                record_shapes=False,
+                profile_memory=True,
+                with_stack=True,
+                with_flops=True,
+                schedule=torch.profiler.schedule(wait=0, warmup=1, active=cfg.n_updates-1, repeat=1, skip_first=0),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    dir_name=os.path.join(self.logger.logdir, "profiling_data"),
+                    use_gzip=True
+                ),
+            )
+        else: 
+            self.torch_profiler = None
     
     def run(self):
         """Start training."""
         obs = self.env.reset()
         pbar = tqdm(range(self.cfg.n_updates))
         on_step_cb = display_image if self.cfg.display_image else None
+        if self.torch_profiler is not None:
+            self.torch_profiler.start()
         for i in pbar:
+            if self.torch_profiler is not None:
+                self.torch_profiler.step()
             t1 = pbar._time()
             self.env.detach()
             obs, policy_info, env_info, losses, grad_norms = self.agent.step(self.cfg, self.env, obs, on_step_cb=on_step_cb)
@@ -109,6 +132,8 @@ class TrainRunner:
         close the environment renderer, 
         and write the profiled data to the disk.
         """
+        if self.torch_profiler is not None and self.torch_profiler.step_num == self.cfg.n_updates:
+            self.torch_profiler.stop()
         ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
         self.agent.save(ckpt_path)
         print(f"The checkpoint is saved to {ckpt_path}.")

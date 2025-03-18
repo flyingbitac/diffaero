@@ -8,6 +8,7 @@ welford_torch
 line_profiler
 tensorboard
 tensorboardX
+torch-tb-profiler
 wandb
 gpustat
 opencv-python
