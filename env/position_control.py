@@ -207,7 +207,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        arrived = torch.norm(self.p - self.target_pos, dim=-1).lt(0.25).all(dim=-1) # [n_envs, ]
+        arrived = torch.norm(self.p - self.target_pos, dim=-1).lt(0.5).all(dim=-1) # [n_envs, ]
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
         success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
@@ -253,11 +253,9 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         random_idx = random_idx[:, :self.n_agents, None].expand(-1, -1, 3) # [n_resets, n_agents, 3]
         new_pos = torch.zeros(self.n_envs, self.n_agents, 3, device=self.device)
         new_pos[env_idx] = xyz.gather(dim=1, index=random_idx)
-        new_vel = torch.randn_like(new_pos) # [n_envs, n_agents, 3]
         new_state = torch.cat([
             new_pos,
-            new_vel,
-            torch.zeros(self.n_envs, self.n_agents, self.dynamics.state_dim-6, device=self.device)
+            torch.zeros(self.n_envs, self.n_agents, self.dynamics.state_dim-3, device=self.device)
         ], dim=-1)
         
         if self.dynamic_type == "pointmass":
