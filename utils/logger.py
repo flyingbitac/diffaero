@@ -16,7 +16,7 @@ class Logger:
         assert type.lower() in ['tensorboard', 'wandb']
         self.cfg = copy.deepcopy(cfg)
         self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-        run_name = f"{cfg.dynamics.name}__{cfg.env.name[:4]}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
+        run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         if type.lower() == 'tensorboard':
             print("Using Tensorboard Logger.")
             self.writer = SummaryWriter(

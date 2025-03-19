@@ -28,7 +28,6 @@ class BaseEnv:
         self.max_vel = torch.zeros(self.n_envs, device=device)
         self.min_target_vel: float = cfg.min_target_vel
         self.max_target_vel: float = cfg.max_target_vel
-        self.use_old_obs_proc = cfg.use_old_obs_proc
     
     def get_observations(self, with_grad=False):
         raise NotImplementedError
