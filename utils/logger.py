@@ -1,10 +1,14 @@
 import os
 import copy
+from collections import defaultdict
+from typing import Union
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
 import torch
 from torch.utils.tensorboard import SummaryWriter
+
+from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
 
 class Logger:
     def __init__(
@@ -97,14 +101,14 @@ class Logger:
                     self.writer.add_text("Overrides", ' '.join(overrides), 0)
 
 class RecordEpisodeStatistics:
-    def __init__(self, env):
+    def __init__(self, env: Union[BaseEnv, BaseEnvMultiAgent]):
         self.env = env
         self.n_envs = getattr(env, "n_envs", 1)
         self.device = env.device
-        self.success = torch.zeros(self.n_envs, dtype=torch.float, device=self.device)
-        self.survive = torch.zeros(self.n_envs, dtype=torch.float, device=self.device)
-        self.arrive_time = torch.full((self.n_envs,), env.max_steps*env.dt, dtype=torch.float, device=self.device)
-        self.episode_length = torch.zeros(self.n_envs, dtype=torch.long, device=self.device)
+        # dictionary to be used to store statistical metrics
+        # metric will be calculated in a sliding-window manner
+        # with length of the window = n_envs
+        self.stats = defaultdict(lambda: torch.zeros(self.n_envs, dtype=torch.float, device=self.device))
         
     def __getattr__(self, name: str):
         """Returns an attribute with ``name``, unless ``name`` starts with an underscore."""
@@ -114,22 +118,16 @@ class RecordEpisodeStatistics:
     
     def step(self, *args, **kwargs):
         state, loss, terminated, extra = self.env.step(*args, **kwargs)
-        n_resets = extra["reset_indicies"].size(0)
-        if n_resets > 0:
-            n_success = int(extra["success"].sum().item())
-            if n_success > 0:
-                self.arrive_time = torch.roll(self.arrive_time, -n_success, 0)
-                self.arrive_time[-n_success:] = extra["arrive_time"][extra["success"]]
-            self.success = torch.roll(self.success, -n_resets, 0)
-            self.success[-n_resets:] = extra["success"][extra["reset"]]
-            self.survive = torch.roll(self.survive, -n_resets, 0)
-            self.survive[-n_resets:] = extra["truncated"][extra["reset"]]
-            self.episode_length = torch.roll(self.episode_length, -n_resets, 0)
-            self.episode_length[-n_resets:] = extra["l"][extra["reset"]]
-        extra["stats"] = {
-            "success_rate": self.success.mean().item(),
-            "survive_rate": self.survive.mean().item(),
-            "l": self.episode_length.float().mean().item(),
-            "arrive_time": self.arrive_time.mean().item()
-        }
+        # dictionary to be used to store scalar metrics
+        extra["stats"] = {} # Dict[str, float]
+        # traverse through all metrics to be sliding-window-averaged
+        for k, v in extra["stats_raw"].items(): # Dict[str, Tensor]
+            assert v.ndim == 1
+            # construct a queue to record new data and discard old ones
+            l = v.size(0)
+            if l > 0:
+                self.stats[k] = torch.roll(self.stats[k], shifts=-l, dims=0)
+                self.stats[k][-l:] = v
+            # write the scalar metrics back to the extra info provided by the environment
+            extra["stats"][k] = self.stats[k].mean().item()
         return state, loss, terminated, extra

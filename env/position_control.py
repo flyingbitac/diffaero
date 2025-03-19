@@ -28,7 +28,7 @@ class PositionControl(BaseEnv):
     
     @timeit
     def step(self, action, need_obs_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
+        # type: (Tensor, bool) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
         self.dynamics.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -49,7 +49,17 @@ class PositionControl(BaseEnv):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            "loss_components": loss_components
+            "loss_components": loss_components,
+            # Ddata dictionary that contains all the statistical metrics
+            # need to be calculated and logged in a sliding-window manner
+            # Note: all items in dictionary "stats_raw" should have ndim=1
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "arrive_time": self.arrive_time.clone()[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success]
+            },
         }
         if need_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
@@ -219,10 +229,19 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            # "next_obs_before_reset": self.get_observations(with_grad=True),
             "loss_components": loss_components,
-            "collision": collision,
-            "out_of_bound": out_of_bound
+            # Ddata dictionary that contains all the statistical metrics
+            # need to be calculated and logged in a sliding-window manner
+            # Note: all items in dictionary "stats_raw" should have ndim=1
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "collision_rate": collision[reset],
+                "out_of_bound_rate": out_of_bound[reset],
+                "arrive_time": self.arrive_time.clone()[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
         }
         if need_global_state_before_reset:
             extra["next_global_state_before_reset"] = self.get_global_state(with_grad=True)

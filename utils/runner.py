@@ -93,10 +93,11 @@ class TrainRunner:
             t1 = pbar._time()
             self.env.detach()
             obs, policy_info, env_info, losses, grad_norms = self.agent.step(self.cfg, self.env, obs, on_step_cb=on_step_cb)
-            l_episode = (env_info["stats"]["l"] - 1) * self.env.dt
+            if self.scheduler is not None:
+                self.scheduler.step()
+            l_episode = env_info["stats"]["l_episode"]
             success_rate = env_info["stats"]["success_rate"]
             survive_rate = env_info["stats"]["survive_rate"]
-            arrive_time = env_info["stats"]["arrive_time"]
             if self.cfg.algo.name != 'world':
                 pbar.set_postfix({
                     # "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
@@ -109,11 +110,7 @@ class TrainRunner:
                 "env_loss": env_info["loss_components"],
                 "agent_loss": losses,
                 "agent_grad_norm": grad_norms,
-                "metrics": {
-                    "l_episode": l_episode,
-                    "success_rate": success_rate,
-                    "survive_rate": survive_rate,
-                    "arrive_time": arrive_time}
+                "metrics": env_info["stats"]
             }
             if "value" in policy_info.keys():
                 log_info["value"] = policy_info["value"].mean().item()
@@ -195,7 +192,7 @@ class TestRunner:
             obs, loss, terminated, env_info = self.env.step(action)
             if self.cfg.algo.name != 'world' and hasattr(self.agent, "reset"):
                 self.agent.reset(env_info["reset"])
-            l_episode = (env_info["stats"]["l"] - 1) * self.env.dt
+            l_episode = env_info["stats"]["l_episode"]
             n_resets += env_info["reset"].sum().item()
             n_survive += env_info["truncated"].sum().item()
             n_success += env_info["success"].sum().item()

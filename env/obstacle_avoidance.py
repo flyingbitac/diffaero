@@ -107,7 +107,14 @@ class ObstacleAvoidance(BaseEnv):
             "success": success,
             "arrive_time": self.arrive_time.clone(),
             "loss_components": loss_components,
-            "sensor": self.sensor_tensor.clone(),
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "arrive_time": self.arrive_time.clone()[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
+            "sensor": self.sensor_tensor.clone()
         }
         if need_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
@@ -299,7 +306,14 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             "success": success,
             "arrive_time": self.arrive_time.clone(),
             "loss_components": loss_components,
-            "sensor": self.sensor_tensor.clone(),
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "arrive_time": self.arrive_time.clone()[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
+            "sensor": self.sensor_tensor.clone()
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
