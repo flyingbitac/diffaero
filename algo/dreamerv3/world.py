@@ -178,6 +178,11 @@ class WorldExporter(nn.Module):
         super().__init__()
         self.use_symlog = agent.world_agent_cfg.common.use_symlog
         self.state_encoder = deepcopy(agent.state_model.state_encoder)
+        if hasattr(agent, 'image_encoder'):
+            self.image_encoder = deepcopy(agent.state_model.image_encoder)
+            self.forward = self.forward_perc_prop
+        else:
+            self.forward = self.forward_prop
         self.inp_proj = deepcopy(agent.state_model.inp_proj)
         self.seq_model = deepcopy(agent.state_model.seq_model)
         self.act_state_proj = deepcopy(agent.state_model.act_state_proj)
@@ -190,13 +195,10 @@ class WorldExporter(nn.Module):
         probs = F.softmax(logits,dim=-1)
         return onehotsample(probs)
     
-    def sample_with_post(self,state):
-        feat = self.state_encoder(state)
-        
+    def sample_with_post(self,feat):        
         post_logits = self.inp_proj(torch.cat([feat,self.hidden_state],dim=-1))
         b,d = post_logits.shape
         post_logits = post_logits.reshape(b,int(math.sqrt(d)),-1) # b l d -> b l c k
-        
         post_sample = self.sample_for_deploy(post_logits)
         return post_sample
     
@@ -205,11 +207,24 @@ class WorldExporter(nn.Module):
         state_act = self.act_state_proj(torch.cat([latent,act],dim=-1))
         self.hidden_state = self.seq_model(state_act,self.hidden_state)
 
-    def forward(self,state):
+    def forward_perc_prop(self,state, perception, orientation, min_action, max_action, hidden):
         with torch.no_grad():
             if self.use_symlog:
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
-            latent = self.sample_with_post(state.unsqueeze(0)).flatten(1)
+            state_feat = self.state_encoder(state.unsqueeze(0))
+            image_feat = self.image_encoder(perception)
+            feat = torch.cat([state_feat, image_feat], dim=-1)
+            latent = self.sample_with_post(feat).flatten(1)
+            action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            action = torch.tanh(action)
+            
+            
+    def forward_prop(self,state):
+        with torch.no_grad():
+            if self.use_symlog:
+                state = torch.sign(state) * torch.log(1 + torch.abs(state))
+            state_feat = self.state_encoder(state.unsqueeze(0))
+            latent = self.sample_with_post(state_feat).flatten(1)
             action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
             action = torch.tanh(action)
             self.sample_with_prior(latent,action)
