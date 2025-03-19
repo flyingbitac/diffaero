@@ -93,8 +93,6 @@ class TrainRunner:
             t1 = pbar._time()
             self.env.detach()
             obs, policy_info, env_info, losses, grad_norms = self.agent.step(self.cfg, self.env, obs, on_step_cb=on_step_cb)
-            if self.scheduler is not None:
-                self.scheduler.step()
             l_episode = env_info["stats"]["l_episode"]
             success_rate = env_info["stats"]["success_rate"]
             survive_rate = env_info["stats"]["survive_rate"]
