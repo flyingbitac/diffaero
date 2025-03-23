@@ -34,5 +34,5 @@ setup(
     author='Xinhong Zhang',
     author_email='zxh0916@126.com',
     description='',
-    url=''
+    url='https://github.com/zxh0916/quaddif'
 )

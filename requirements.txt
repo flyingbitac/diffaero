@@ -4,6 +4,8 @@ taichi
 tqdm
 hydra-core
 hydra-joblib-launcher
+hydra_colorlog
+hydra-optuna-sweeper
 welford_torch
 line_profiler
 tensorboard

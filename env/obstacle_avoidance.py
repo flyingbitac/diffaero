@@ -110,7 +110,6 @@ class ObstacleAvoidance(BaseEnv):
             "stats_raw": {
                 "success_rate": success[reset],
                 "survive_rate": truncated[reset],
-                "arrive_time": self.arrive_time.clone()[reset],
                 "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
                 "arrive_time": self.arrive_time.clone()[success],
             },
@@ -149,7 +148,7 @@ class ObstacleAvoidance(BaseEnv):
         avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
         oa_loss = approaching_penalty - 0.5 * avoiding_reward
         
-        collision_loss = self.collision().float() * 100.
+        collision_loss = self.collision().float() * 10.
         
         if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
@@ -159,7 +158,7 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.001 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -309,7 +308,6 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             "stats_raw": {
                 "success_rate": success[reset],
                 "survive_rate": truncated[reset],
-                "arrive_time": self.arrive_time.clone()[reset],
                 "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
                 "arrive_time": self.arrive_time.clone()[success],
             },

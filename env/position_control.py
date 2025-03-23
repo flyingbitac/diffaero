@@ -56,7 +56,6 @@ class PositionControl(BaseEnv):
             "stats_raw": {
                 "success_rate": success[reset],
                 "survive_rate": truncated[reset],
-                "arrive_time": self.arrive_time.clone()[reset],
                 "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
                 "arrive_time": self.arrive_time.clone()[success]
             },

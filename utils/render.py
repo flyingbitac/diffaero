@@ -687,10 +687,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
     def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
         super().step(drone_pos, drone_quat_xyzw, target_pos)
         if self.enable_rendering:
-            if self.n_agents == 1:
-                drone_pos.unsqueeze_(1)
-                drone_quat_xyzw.unsqueeze_(1)
-                target_pos.unsqueeze_(1)
             self._update_obstacles()
     
     def _update_obstacles(self):
