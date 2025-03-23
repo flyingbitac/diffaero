@@ -48,7 +48,7 @@ def main(cfg: DictConfig):
         cfg.env = ckpt_cfg.env
 
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
-    logger = Logger(cfg, run_name=f"__test{runname}")
+    logger = Logger(cfg, run_name=runname)
     
     env = RecordEpisodeStatistics(build_env(cfg.env, device=device))
     

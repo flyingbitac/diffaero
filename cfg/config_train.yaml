@@ -11,6 +11,8 @@ defaults:
   - override hydra/hydra_logging: colorlog
   # - override hydra/sweeper: optuna_sweep
 
+# use rollout length specified by specific algorithm
+# since different algorithm need different rollout length to perform well
 l_rollout: ${algo.l_rollout}
 n_agents: 1
 n_envs: 4096
@@ -35,7 +37,9 @@ env:
   dt: 0.0333
 
 hydra:
+  run:
+    dir: ./outputs/train/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: ./outputs/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}
+    dir: ./outputs/train/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}
   launcher:
     n_jobs: ${n_jobs}

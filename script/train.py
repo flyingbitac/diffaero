@@ -36,7 +36,7 @@ def main(cfg: DictConfig):
     agent = build_agent(cfg.algo, env, device)
     
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
-    logger = Logger(cfg, run_name=f"__train{runname}")
+    logger = Logger(cfg, run_name=runname)
     
     runner = TrainRunner(cfg, logger, env, agent)
     
