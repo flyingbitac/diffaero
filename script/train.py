@@ -15,7 +15,7 @@ def main(cfg: DictConfig):
     from quaddif.env import build_env
     from quaddif.algo import build_agent
     from quaddif.utils.device import get_idle_device
-    from quaddif.utils.logger import RecordEpisodeStatistics, Logger
+    from quaddif.utils.logger import Logger
     from quaddif.utils.runner import TrainRunner
 
     if cfg.device is None and cfg.n_jobs > 1:
@@ -31,7 +31,7 @@ def main(cfg: DictConfig):
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
 
-    env = RecordEpisodeStatistics(build_env(cfg.env, device=device))
+    env = build_env(cfg.env, device=device)
     
     agent = build_agent(cfg.algo, env, device)
     
