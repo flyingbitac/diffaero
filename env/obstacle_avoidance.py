@@ -323,7 +323,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         p, v, a = _p.detach(), _v.detach(), _a.detach()
         target_relpos = self.target_pos.unsqueeze(1) - _p
         target_dist = target_relpos.norm(dim=-1)
-        target_vel = target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
+        target_vel = target_relpos / torch.max(target_dist / self.max_vel.unsqueeze(-1), torch.ones_like(target_dist)).unsqueeze(-1)
         target_vel.detach_()
         virtual_radius = 0.2
         # calculating the closest point on each sphere to the quadrotor
