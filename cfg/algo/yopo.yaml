@@ -29,5 +29,5 @@ l_rollout: 1 # do not modify
 
 optimized_inference: False
 real_dynamics_rollout: True
-update_best_traj_only: False
+update_best_traj_only: True
 t_next: 0.5

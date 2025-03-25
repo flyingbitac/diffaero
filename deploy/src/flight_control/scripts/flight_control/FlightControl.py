@@ -32,13 +32,13 @@ class FlightControlNode:
         #     <alwaysOn>true</alwaysOn>
         #     <updateRate>50.0</updateRate>
         #     <bodyName>base_link</bodyName>
-        #     <topicName>ground_truth/state</topicName>
+        #     <topicName>some_object_name_vrpn_client/estimated_odometry</topicName>
         #     <gaussianNoise>0.01</gaussianNoise>
         #     <frameName>world</frameName>
         #     <xyzOffsets>0 0 0</xyzOffsets>
         #     <rpyOffsets>0 0 0</rpyOffsets>
         # </plugin>
-        self.odom_sub = rospy.Subscriber("ground_truth/state", Odometry, self.odom_cb, tcp_nodelay=True)
+        self.odom_sub = rospy.Subscriber("some_object_name_vrpn_client/estimated_odometry", Odometry, self.odom_cb, tcp_nodelay=True)
         # self.odom_sub = rospy.Subscriber("mavros/odometry/in", Odometry, self.odom_cb, tcp_nodelay=True)
         self.acc_sub = rospy.Subscriber("mavros/imu/data", Imu, self.acc_cb, tcp_nodelay=True)
         

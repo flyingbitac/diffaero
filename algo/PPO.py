@@ -109,11 +109,8 @@ class PPO:
             # entropy loss
             entropy_loss = -entropy.mean()
             # value loss
-            if self.agent.is_rnn_based:
-                newvalue = self.agent.get_value(tensordict2tuple(obs[mb_indices]),
-                                                hidden=critic_hidden_state[mb_indices].permute(1, 0, 2))
-            else:
-                newvalue = self.agent.get_value(tensordict2tuple(obs[mb_indices]))
+            hidden = critic_hidden_state[mb_indices].permute(1, 0, 2) if self.agent.is_rnn_based else None
+            newvalue = self.agent.get_value(tensordict2tuple(obs[mb_indices]), hidden=hidden)
             if self.clip_value_loss:
                 v_loss_unclipped = (newvalue - target_values[mb_indices]) ** 2
                 v_clipped = values[mb_indices] + torch.clamp(
