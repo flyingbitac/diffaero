@@ -111,6 +111,7 @@ class ObstacleAvoidanceNode(PositionControlNode):
         zero_yaw = torch.tensor([[1., 0., 0.]])
         # XXX
         orientation = forward
+        # orientation = forward.lerp(F.normalize(target_vel, dim=-1), 0.8)
         # orientation = forward.lerp(zero_yaw, target_vel.norm(dim=-1).neg().exp().item()) # soft yaw switch
         # orientation = self.vel_ema if target_vel.norm(dim=-1).item() > 1.5 else zero_yaw # hard yaw switc
         if self.actor.is_recurrent:

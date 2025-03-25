@@ -19,8 +19,7 @@ def main():
 
     control_freq = rospy.get_param("~control_freq") # Hz
     device = torch.device(rospy.get_param("~device"))
-    path = rospy.get_param("~path") # XXX
-    checkpoint_path = os.path.join(path, "checkpoints", "exported_actor.pt2")
+    checkpoint_path = rospy.get_param("~path") # XXX
     
     node = ObstacleAvoidanceNode(
         freq=control_freq,
