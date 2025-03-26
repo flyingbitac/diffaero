@@ -140,7 +140,7 @@ class World_Agent:
                 self.hidden = self.state_model.sample_with_prior(latent,action,self.hidden)[2]
             else:
                 action = torch.randn(self.cfg.n_envs,3,device=state.device)
-            next_obs,rewards,terminated,env_info = env.step(action)
+            next_obs,rewards,terminated,env_info = env.step(env.rescale_action(action))
             rewards = 10.*(1-rewards*0.1)
             self.replaybuffer.append(state,action,rewards,terminated,perception)
             
@@ -212,14 +212,16 @@ class WorldExporter(nn.Module):
             if self.use_symlog:
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
             state_feat = self.state_encoder(state.unsqueeze(0))
-            image_feat = self.image_encoder(perception)
+            image_feat = self.image_encoder(perception.unsqueeze(0))
             feat = torch.cat([state_feat, image_feat], dim=-1)
             latent = self.sample_with_post(feat).flatten(1)
             action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
             action = torch.tanh(action)
+            self.sample_with_prior(latent, action)
+            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
+        return action, quat_xyzw, acc_norm
             
-            
-    def forward_prop(self,state):
+    def forward_prop(self,state, orientation, min_action, max_action, hidden):
         with torch.no_grad():
             if self.use_symlog:
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
@@ -228,28 +230,22 @@ class WorldExporter(nn.Module):
             action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
             action = torch.tanh(action)
             self.sample_with_prior(latent,action)
-        return action
+            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
+        return action, quat_xyzw, acc_norm  
     
-    @torch.jit.export
-    def post_process(self,acc,orientation):
-        quat_xyzw = point_mass_quat(acc, orientation)
-        acc_norm = acc.norm(p=2, dim=-1)
-        return quat_xyzw, acc_norm
+    def post_process(self, action, min_action, max_action, orientation):
+        action = (action * 0.5 + 0.5) * (max_action - min_action) + min_action
+        quat_xyzw = point_mass_quat(action, orientation)
+        acc_norm = action.norm(p=2, dim=-1)
+        return action, quat_xyzw, acc_norm
     
-    @torch.jit.export
-    def reset(self):
-        self.hidden_state.zero_()
-    
-    @torch.jit.export
-    def rescale(self,raw_action,min_action,max_action):
-        return (raw_action*0.5+0.5)*(max_action-min_action)+min_action
-    
-    def export(self,path:str,verbose=False):
+    def export_jit(self, path: str, verbose=False):
         traced_script_module = torch.jit.script(self)
         if verbose:
             print(traced_script_module.code)
-            print(traced_script_module.post_process.code)
-            print(traced_script_module.reset.code)
-            print(traced_script_module.rescale.code)
-        save_path = os.path.join(path,"Policy.pt")
-        traced_script_module.save(save_path)
+        export_path = os.path.join(path, "exported_actor.pt2")
+        traced_script_module.save(export_path)
+        print(f"The checkpoint is compiled and exported to {export_path}.")
+    
+    def export(self, path: str, verbose=False, export_onnx=False, export_pnnx=False):
+        self.export_jit(path, verbose)
