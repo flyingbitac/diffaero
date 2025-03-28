@@ -7,10 +7,10 @@ import torch.nn.functional as F
 
 import rospy
 from geometry_msgs.msg import Point, Quaternion
-from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 
 from accel_control.position_control_node import PositionControlNode
+from accel_control.srv import DepthImage, DepthImageRequest, DepthImageResponse
 
 class ObstacleAvoidanceNode(PositionControlNode):
     def __init__(
@@ -43,16 +43,15 @@ class ObstacleAvoidanceNode(PositionControlNode):
             hover_thrust=hover_thrust,
             device=device
         )
-        self.CvImg = CvBridge()
-        self.depth_sub = rospy.Subscriber("/iris_depth_camera/camera/depth/image_raw", Image, self.depth_cb, tcp_nodelay=True)
+        self.cv_bridge = CvBridge()
+        self.depth_client = rospy.ServiceProxy("/camera/get_depth_image", DepthImage)
+        self.depth_client.wait_for_service()
         self.home = Point(x=home_x, y=home_y, z=height) # XXX: replace this with the actual start position
         self.target = Point(x=target_x, y=target_y, z=height) # XXX: replace this with the actual target position
 
         self.max_dist = max_dist
         self.height = img_height
         self.width = img_width
-        
-        self.depth_image = torch.empty(self.height, self.width, device=device)
         
     def load_actor(self):
         rospy.loginfo("Loading actor...")
@@ -71,17 +70,6 @@ class ObstacleAvoidanceNode(PositionControlNode):
         for _ in range(10):
             self.actor(*warmup_input)
         rospy.loginfo("Actor warmed up.")
-    
-    def depth_cb(self, msg: Image):
-        img = torch.from_numpy(self.CvImg.imgmsg_to_cv2(msg, "32FC1"))
-        img.nan_to_num_(nan=self.max_dist).clamp_(max=self.max_dist)
-        img.div_(self.max_dist).sub_(1).neg_()
-        img = F.adaptive_max_pool2d(img[None, ...], (self.height, self.width)).squeeze(0)
-        self.depth_image.copy_(img)
-        
-        N = 16
-        cv2.imshow("depth", cv2.resize(img.cpu().numpy(), (N*16, N*9), interpolation=cv2.INTER_NEAREST))
-        cv2.waitKey(1)
     
     def acc_ctrl_cb(self, event: rospy.timer.TimerEvent):
         self.offboard_setpoint_counter += 1
@@ -108,7 +96,7 @@ class ObstacleAvoidanceNode(PositionControlNode):
         self.vel_ema.lerp_(vel.to(self.device).unsqueeze(0), 0.4)
         state = torch.cat([target_vel, quat_xyzw, vel], dim=-1).to(self.device).unsqueeze(0)
         forward = F.normalize(self.vel_ema, dim=-1)
-        zero_yaw = torch.tensor([[1., 0., 0.]])
+        zero_yaw = torch.tensor([[1., 0., 0.]], device=self.device)
         # XXX
         orientation = forward
         # orientation = forward.lerp(F.normalize(target_vel, dim=-1), 0.8)
@@ -134,5 +122,7 @@ class ObstacleAvoidanceNode(PositionControlNode):
     
     def get_state(self):
         target_vel, quat_xyzw, vel = super().get_state()
-        perception = self.depth_image
+        response: DepthImageResponse = self.depth_client.call(DepthImageRequest(
+            downsample=True, post_process=True))
+        perception = torch.from_numpy(self.cv_bridge.imgmsg_to_cv2(response.img)).to(self.device)
         return target_vel, quat_xyzw, vel, perception.unsqueeze(0)

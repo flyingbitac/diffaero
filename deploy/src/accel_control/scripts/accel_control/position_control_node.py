@@ -84,7 +84,7 @@ class PositionControlNode(FlightControlNode):
     
     def acc_ctrl_cb(self, event: rospy.timer.TimerEvent):
         self.offboard_setpoint_counter += 1
-        self.update_target()
+        # self.update_target()
         if self.offboard_setpoint_counter == 5*self.freq:
             if not (self.set_mode("OFFBOARD") and self.arm()):
                 rospy.logfatal("Failed to switch to OFFBOARD mode and arm the vehicle.")

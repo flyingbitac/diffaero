@@ -1,16 +1,30 @@
 <launch>
+    <arg name="path"         default="/home/zxh/ws/quaddif/outputs/train/2025-03-28/14-03-57/checkpoints/exported_actor.pt2"/>
+    <arg name="use_cuda"     default="true"/>
+
+    <arg name="max_acc"      default="10."/>
+    <arg name="max_vel"      default="5."/>
+    <arg name="hover_thrust" default="0.707"/>
+    <arg name="control_freq" default="30"/>
+
+    <arg name="home_x"       default="0"/>
+    <arg name="home_y"       default="0"/>
+    <arg name="target_x"     default="10"/>
+    <arg name="target_y"     default="-5"/>
+    <arg name="height"       default="5"/>
+
     <node pkg="accel_control" type="position_control.py" name="position_control" output="screen">
-        <param name="path" type="string" value="/home/zxh/ws/quaddif/outputs/2025-01-15/16-29-44"/>
-        <param name="device" type="string" value="cpu"/>
-        <param name="max_acc" type="double" value="10."/>
-        <param name="max_vel" type="double" value="5."/>
-        <param name="hover_thrust" type="double" value="0.707"/>
-        <param name="control_freq" type="int" value="50"/>
+        <param name="path" type="string" value="$(arg path)"/>
+        <param name="use_cuda" type="bool" value="$(arg use_cuda)"/>
+        <param name="max_acc" type="double" value="$(arg max_acc)"/>
+        <param name="max_vel" type="double" value="$(arg max_vel)"/>
+        <param name="hover_thrust" type="double" value="$(arg hover_thrust)"/>
+        <param name="control_freq" type="int" value="$(arg control_freq)"/>
         <!-- home and target -->
-        <param name="home_x" type="double" value="0"/>
-        <param name="home_y" type="double" value="0"/>
-        <param name="target_x" type="double" value="10"/>
-        <param name="target_y" type="double" value="-5"/>
-        <param name="height" type="double" value="5"/>
+        <param name="home_x" type="double" value="$(arg home_x)"/>
+        <param name="home_y" type="double" value="$(arg home_y)"/>
+        <param name="target_x" type="double" value="$(arg target_x)"/>
+        <param name="target_y" type="double" value="$(arg target_y)"/>
+        <param name="height" type="double" value="$(arg height)"/>
     </node>
 </launch>

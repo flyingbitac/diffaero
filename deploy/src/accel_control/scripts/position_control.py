@@ -18,9 +18,9 @@ def main():
     logger = Logger()
 
     control_freq = rospy.get_param("~control_freq") # Hz
-    device = torch.device(rospy.get_param("~device"))
-    path = rospy.get_param("~path") # XXX
-    checkpoint_path = os.path.join(path, "checkpoints", "exported_actor.pt2")
+    use_cuda = rospy.get_param("~use_cuda") and torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+    checkpoint_path = rospy.get_param("~path") # XXX
     
     node = PositionControlNode(
         freq=control_freq,
