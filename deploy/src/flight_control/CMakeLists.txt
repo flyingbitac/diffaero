@@ -164,6 +164,7 @@ target_link_libraries(flight_test
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/test.py
+  scripts/bridge_pose.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

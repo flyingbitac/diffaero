@@ -62,10 +62,4 @@
         <!-- 0: fill_from_left, 1: farest_from_around, 2: nearest_from_around -->
         <param name="holes_fill" value="1" />
     </node>
-
-    <!-- <rosparam>
-        /camera/stereo_module/emitter_enabled: true
-        /camera/stereo_module/enable_auto_exposure: true
-        /camera/temporal/filter_smooth_delta: 50
-    </rosparam> -->
 </launch>

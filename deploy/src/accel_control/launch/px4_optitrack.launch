@@ -1,0 +1,9 @@
+<launch>
+    <arg name="vrpn_server_ip"     default="192.168.1.3"/>
+    
+    <include file="$(find mavros)/launch/px4.launch"/>
+	<include file="$(find ros_vrpn_client)/launch/sample.launch">
+        <arg name="vrpn_server_ip" value="$(arg vrpn_server_ip)" />
+	</include>
+    <node pkg="flight_control" type="bridge_pose.py" name="bridge_pose" required="true" output="screen"/>
+</launch>

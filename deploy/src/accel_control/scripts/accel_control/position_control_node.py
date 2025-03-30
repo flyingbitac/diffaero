@@ -66,9 +66,10 @@ class PositionControlNode(FlightControlNode):
         self.vel_ema.lerp_(vel.to(self.device).unsqueeze(0), 0.2)
         state = torch.cat([target_vel, quat_xyzw, vel], dim=-1).to(self.device).unsqueeze(0)
         forward = F.normalize(self.vel_ema, dim=-1)
-        zero_yaw = torch.tensor([[1., 0., 0.]])
+        zero_yaw = torch.tensor([[1., 0., 0.]], device=self.device)
         # XXX
         orientation = forward
+        # orientation = forward.lerp(F.normalize(target_vel, dim=-1), 0.8)
         # orientation = forward.lerp(zero_yaw, target_vel.norm(dim=-1).neg().exp().item()) # soft yaw switch
         # orientation = self.vel_ema if target_vel.norm(dim=-1).item() > 1.5 else zero_yaw # hard yaw switc
         if self.actor.is_recurrent:

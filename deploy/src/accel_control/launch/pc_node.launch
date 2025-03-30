@@ -1,18 +1,18 @@
 <launch>
-    <arg name="path"         default="/home/zxh/ws/quaddif/outputs/train/2025-03-28/14-03-57/checkpoints/exported_actor.pt2"/>
+    <arg name="path"         default="/home/orin/ws/checkpoints/pc_bptt.pt2"/>
     <arg name="use_cuda"     default="true"/>
 
     <arg name="max_acc"      default="10."/>
-    <arg name="max_vel"      default="5."/>
+    <arg name="max_vel"      default="2."/>
     <arg name="hover_thrust" default="0.707"/>
     <arg name="control_freq" default="30"/>
 
-    <arg name="home_x"       default="0"/>
+    <arg name="home_x"       default="-2"/>
     <arg name="home_y"       default="0"/>
-    <arg name="target_x"     default="10"/>
-    <arg name="target_y"     default="-5"/>
-    <arg name="height"       default="5"/>
-
+    <arg name="target_x"     default="2.6"/>
+    <arg name="target_y"     default="0.5"/>
+    <arg name="height"       default="1.5"/>
+    
     <node pkg="accel_control" type="position_control.py" name="position_control" output="screen">
         <param name="path" type="string" value="$(arg path)"/>
         <param name="use_cuda" type="bool" value="$(arg use_cuda)"/>

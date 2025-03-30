@@ -1,6 +1,6 @@
 <launch>
-    <!-- <arg name="path"         default="/home/zxh/ws/quaddif/outputs/train/2025-03-27/11-41-52/checkpoints/exported_actor.pt2"/> -->
-    <arg name="path"         default="/home/zxh/ws/wrqws/quaddif/outputs/2025-03-27/13-27-29/checkpoints/exported_actor.pt2"/>
+    <!-- <arg name="path"         default="/home/orin/ws/checkpoints/oa_bptt.pt2"/> -->
+    <arg name="path"         default="/home/orin/ws/checkpoints/oa_dreamer.pt2"/>
     <arg name="use_cuda"     default="true"/>
 
     <arg name="max_acc"      default="10."/>
@@ -26,7 +26,7 @@
         <param name="img_width" type="int" value="$(arg image_width)"/>
         <param name="display" type="bool" value="$(arg display)"/>
     </node>
-
+    
     <node pkg="accel_control" type="obstacle_avoidance.py" name="obstacle_avoidance" output="screen">
         <param name="path" type="string" value="$(arg path)"/>
         <param name="use_cuda" type="bool" value="$(arg use_cuda)"/>

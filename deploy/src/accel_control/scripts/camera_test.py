@@ -10,7 +10,7 @@ from accel_control.srv import DepthImage, DepthImageRequest, DepthImageResponse
 def main():
     max_dist = 6.
     rospy.init_node('obstacle_avoidance_node', anonymous=True)
-    node = CameraNode(max_dist, 9, 16)
+    node = CameraNode(max_dist, 9, 16, display=True)
     client = rospy.ServiceProxy("/camera/get_depth_image", DepthImage)
     client.wait_for_service()
     device = torch.device("cuda")
@@ -23,8 +23,9 @@ def main():
             post_process=True
         ))
         img: np.ndarray = cv_bridge.imgmsg_to_cv2(response.img)
-        cv2.imshow("depth", img)
-        cv2.waitKey(1)
+        # print(img.shape)
+        # cv2.imshow("depth", img)
+        # cv2.waitKey(1)
     
     timer = rospy.Timer(rospy.Duration(1/30), callback)
     rospy.spin()
