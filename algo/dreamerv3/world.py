@@ -178,7 +178,7 @@ class WorldExporter(nn.Module):
         super().__init__()
         self.use_symlog = agent.world_agent_cfg.common.use_symlog
         self.state_encoder = deepcopy(agent.state_model.state_encoder)
-        if hasattr(agent, 'image_encoder'):
+        if hasattr(agent.state_model, 'image_encoder'):
             self.image_encoder = deepcopy(agent.state_model.image_encoder)
             self.forward = self.forward_perc_prop
         else:
@@ -190,6 +190,8 @@ class WorldExporter(nn.Module):
         
         self.register_buffer("hidden_state",torch.zeros(1,agent.state_model.cfg.hidden_dim))
         self.hidden_state = self.get_buffer("hidden_state")
+        self.is_recurrent = True
+        self.hidden_shape = agent.state_model.cfg.hidden_dim
     
     def sample_for_deploy(self,logits):
         probs = F.softmax(logits,dim=-1)
@@ -207,11 +209,11 @@ class WorldExporter(nn.Module):
         state_act = self.act_state_proj(torch.cat([latent,act],dim=-1))
         self.hidden_state = self.seq_model(state_act,self.hidden_state)
 
-    def forward_perc_prop(self,state, perception, orientation, min_action, max_action, hidden):
+    def forward_perc_prop(self, state, perception, orientation, min_action, max_action, hidden):
         with torch.no_grad():
             if self.use_symlog:
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
-            state_feat = self.state_encoder(state.unsqueeze(0))
+            state_feat = self.state_encoder(state)
             image_feat = self.image_encoder(perception.unsqueeze(0))
             feat = torch.cat([state_feat, image_feat], dim=-1)
             latent = self.sample_with_post(feat).flatten(1)
@@ -219,7 +221,7 @@ class WorldExporter(nn.Module):
             action = torch.tanh(action)
             self.sample_with_prior(latent, action)
             action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
-        return action, quat_xyzw, acc_norm
+        return action, quat_xyzw, acc_norm, hidden
             
     def forward_prop(self,state, orientation, min_action, max_action, hidden):
         with torch.no_grad():
@@ -231,7 +233,7 @@ class WorldExporter(nn.Module):
             action = torch.tanh(action)
             self.sample_with_prior(latent,action)
             action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
-        return action, quat_xyzw, acc_norm  
+        return action, quat_xyzw, acc_norm, hidden  
     
     def post_process(self, action, min_action, max_action, orientation):
         action = (action * 0.5 + 0.5) * (max_action - min_action) + min_action

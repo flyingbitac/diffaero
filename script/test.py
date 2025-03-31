@@ -156,7 +156,7 @@ def main(cfg: DictConfig):
     logger = Logger(cfg, run_name=cfg.runname)
     # test(cfg, agent, env, logger, on_step_cb=display_image)
     
-    export_path = os.path.join(logger.logdir,"exportckpt")
+    export_path = os.path.join(logger.logdir,"checkpoints")
     if not os.path.exists(export_path):
         os.makedirs(export_path)
     exporter = WorldExporter(agent)

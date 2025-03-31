@@ -61,7 +61,8 @@ class ImageEncoder(nn.Module):
         
     def forward(self, depth_image:Tensor):
         depth_image = self.backbone(depth_image)
-        depth_image = rearrange(depth_image, "B C H W -> B (C H W)")
+        # depth_image = rearrange(depth_image, "B C H W -> B (C H W)")
+        depth_image = depth_image.view(depth_image.shape[0],-1)
         return depth_image
 
 class ImageDecoder(nn.Module):
