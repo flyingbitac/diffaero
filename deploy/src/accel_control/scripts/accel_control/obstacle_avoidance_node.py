@@ -1,10 +1,12 @@
 import time
 
 import numpy as np
+import cv2
 import torch
 import onnxruntime as ort
 
 import rospy
+from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import Point, Quaternion
 from cv_bridge import CvBridge, CvBridgeError
 
@@ -46,8 +48,42 @@ class ObstacleAvoidanceNode(PositionControlNode):
         self.height = img_height
         self.width = img_width
         self.cv_bridge = CvBridge()
-        self.depth_client = rospy.ServiceProxy("/camera/get_depth_image", DepthImage)
-        self.depth_client.wait_for_service()
+        self.gazebo_depth_sub = rospy.Subscriber("/iris_depth_camera/camera/depth/image_raw", Image, self.gazebo_depth_cb, tcp_nodelay=True)
+        self.realsense_depth_sub = rospy.Subscriber("/camera/depth/image_rect_raw", Image, self.realsense_depth_cb, tcp_nodelay=True)
+        self._depth_image = np.ones((self.height, self.width), dtype=np.float32) * max_dist
+        self.downsample_interpolation = cv2.INTER_LINEAR
+        # self.depth_client = rospy.ServiceProxy("/camera/get_depth_image", DepthImage)
+        # self.depth_client.wait_for_service()
+    
+    def imgmsg_to_array(self, msg: Image) -> np.ndarray:
+        return np.array(self.cv_bridge.imgmsg_to_cv2(msg, "passthrough"), dtype=np.float32)
+
+    def display_depth_image(self, img: np.ndarray):
+        img = np.nan_to_num(img, nan=self.max_dist)
+        img = np.array(cv2.resize(img, (self.width, self.height), interpolation=self.downsample_interpolation))
+        img = np.array(cv2.resize(img, (320, 180), interpolation=cv2.INTER_NEAREST))
+        img = 1 - np.clip(img / self.max_dist, 0., 1.)
+        cv2.imshow("depth", (img * 255).astype(np.uint8))
+        cv2.waitKey(1)
+    
+    def gazebo_depth_cb(self, msg: Image):
+        assert msg.encoding == "32FC1"
+        img = self.imgmsg_to_array(msg)
+        self._depth_image = img
+        self.display_depth_image(img)
+    
+    def realsense_depth_cb(self, msg: Image):
+        assert msg.encoding == "16UC1"
+        img = self.imgmsg_to_array(msg) * 0.001
+        self._depth_image = img
+        self.display_depth_image(img)
+    
+    def get_depth_image(self) -> DepthImageResponse:
+        """make majority of processes happen only when the service is called"""
+        img = np.nan_to_num(self._depth_image, nan=self.max_dist)
+        img = np.array(cv2.resize(img, (self.width, self.height), interpolation=self.downsample_interpolation))
+        img = 1 - np.clip(img / self.max_dist, 0., 1.)
+        return img
     
     def load_actor(self):
         if self.model_path.endswith(".onnx"):
@@ -116,6 +152,7 @@ class ObstacleAvoidanceNode(PositionControlNode):
     
     def inference_jit(self, state: np.ndarray, perception: np.ndarray, orientation: np.ndarray):
         state = torch.from_numpy(state).to(**self.factory_kwargs)
+        perception = torch.from_numpy(perception).to(**self.factory_kwargs)
         orientation = torch.from_numpy(orientation).to(**self.factory_kwargs)
         min_action = torch.from_numpy(self.min_action).to(**self.factory_kwargs)
         max_action = torch.from_numpy(self.max_action).to(**self.factory_kwargs)
@@ -130,19 +167,18 @@ class ObstacleAvoidanceNode(PositionControlNode):
         acc_norm = acc_norm.squeeze(0).cpu().numpy()
         return action, quat_xyzw_cmd, acc_norm
     
-    @torch.no_grad()
     def step(self):
         tic = time.time()
         target_vel, quat_xyzw, vel, perception = self.get_state()
-        self.vel_ema = lerp(self.vel_ema, vel.reshape(1, 3), 0.2)
+        self.vel_ema = lerp(self.vel_ema, vel.reshape(1, 3), 0.1)
         state = np.concatenate([target_vel, quat_xyzw, vel], axis=-1).reshape(1, -1)
         target_direction = normalize(target_vel, axis=-1)
         forward = normalize(self.vel_ema, axis=-1)
         zero_yaw = np.array([[1., 0., 0.]])
         # XXX
-        # orientation = forward
+        orientation = forward
         # orientation = lerp(forward, target_direction, 0.8)
-        orientation = lerp(forward, zero_yaw, np.exp(-np.linalg.norm(target_vel/5)))
+        # orientation = lerp(forward, zero_yaw, np.exp(-np.linalg.norm(target_vel/5)))
         # orientation = self.vel_ema if np.linalg.norm(target_vel) > 1.5 else zero_yaw # hard yaw switch
         
         action, quat_xyzw_cmd, acc_norm = self.inference(state, perception, orientation)
@@ -179,7 +215,8 @@ class ObstacleAvoidanceNode(PositionControlNode):
     
     def get_state(self):
         target_vel, quat_xyzw, vel = super().get_state()
-        response: DepthImageResponse = self.depth_client.call(DepthImageRequest(
-            downsample=True, post_process=True))
-        perception = np.array(self.cv_bridge.imgmsg_to_cv2(response.img)).astype(np.float32)
+        # response: DepthImageResponse = self.depth_client.call(DepthImageRequest(
+        #     downsample=True, post_process=True))
+        # perception = np.array(self.cv_bridge.imgmsg_to_cv2(response.img)).astype(np.float32)
+        perception = self.get_depth_image()
         return target_vel, quat_xyzw, vel, np.expand_dims(perception, axis=0)

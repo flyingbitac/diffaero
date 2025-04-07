@@ -10,7 +10,6 @@ def main():
         width=rospy.get_param("~img_width"),
         display=rospy.get_param("~display")
     )
-    print("FUCK")
     rospy.spin()
 
 if __name__ == "__main__":

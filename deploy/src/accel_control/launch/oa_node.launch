@@ -3,15 +3,15 @@
     <arg name="path"         default="/home/orin/ws/checkpoints/oa_dreamer.pt2"/>
     <arg name="use_cuda"     default="true"/>
 
-    <arg name="max_acc"      default="10."/>
+    <arg name="max_acc"      default="6."/>
     <arg name="max_vel"      default="5."/>
     <arg name="hover_thrust" default="0.707"/>
     <arg name="control_freq" default="30"/>
 
     <arg name="home_x"       default="0"/>
     <arg name="home_y"       default="0"/>
-    <arg name="target_x"     default="54"/>
-    <arg name="target_y"     default="54"/>
+    <arg name="target_x"     default="74"/>
+    <arg name="target_y"     default="74"/>
     <arg name="height"       default="3"/>
 
     <arg name="max_dist"     default="10."/>
@@ -19,13 +19,12 @@
     <arg name="image_width"  default="16"/>
     <arg name="display"      default="true"/>
 
-    <node pkg="accel_control" type="depth_camera.py" name="depth_camera" output="screen">
-        <!-- camera parameters -->
+    <!-- <node pkg="accel_control" type="depth_camera.py" name="depth_camera" output="screen">
         <param name="max_dist" type="double" value="$(arg max_dist)"/>
         <param name="img_height" type="int" value="$(arg image_height)"/>
         <param name="img_width" type="int" value="$(arg image_width)"/>
         <param name="display" type="bool" value="$(arg display)"/>
-    </node>
+    </node> -->
     
     <node pkg="accel_control" type="obstacle_avoidance.py" name="obstacle_avoidance" output="screen">
         <param name="path" type="string" value="$(arg path)"/>

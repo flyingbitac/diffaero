@@ -32,7 +32,8 @@ class CameraNode:
 
     def display_depth_image(self, img: np.ndarray):
         img = np.nan_to_num(img, nan=self.max_dist)
-        img = np.array(cv2.resize(img, (1280, 720), interpolation=cv2.INTER_NEAREST))
+        img = np.array(cv2.resize(img, (self.width, self.height), interpolation=self.downsample_interpolation))
+        img = np.array(cv2.resize(img, (320, 180), interpolation=cv2.INTER_NEAREST))
         img = 1 - np.clip(img / self.max_dist, 0., 1.)
         cv2.imshow("depth", (img * 255).astype(np.uint8))
         cv2.waitKey(1)

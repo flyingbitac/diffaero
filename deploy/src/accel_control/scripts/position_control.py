@@ -35,6 +35,7 @@ def main():
     profiler = LineProfiler()
     profiler.add_function(node.inference_jit)
     profiler.add_function(node.inference_onnx)
+    profiler.add_function(node.get_state)
     step = profiler(node.step)
     logger = Logger()
     rate = rospy.Rate(control_freq)
@@ -54,9 +55,9 @@ def main():
             now = datetime.datetime.now()
             path = os.path.join("./outputs/", now.strftime('%Y-%m-%d'), now.strftime('%H-%M-%S'))
             os.makedirs(path, exist_ok=True)
-            logger.save_and_plot(path)
             with open(os.path.join(path, "runtime_profile.txt"), "w", encoding="utf-8") as f:
                 profiler.print_stats(stream=f, output_unit=1e-3)
+            logger.save_and_plot(path)
             break
         rate.sleep()
 

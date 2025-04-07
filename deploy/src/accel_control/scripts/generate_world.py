@@ -115,20 +115,21 @@ def create_cylinder(x, y, r, h):
     cylinder_idx += 1
     return cylinder, (x, y, r)
 
-B = 2
-N = 10
-L = 5
-R_min = 0.4
-R_max = 0.6
-H = 10
+B = 2        # start position offset
+N = 10       # number of cylinders in each direction
+L = 7        # length of the grid
+R_min = 0.6  # min radius of the cylinders
+R_max = 1.   # max radius of the cylinders
+H = 15       # height of the cylinders
 
 if __name__ == "__main__":
     print(f"suggested start position: (0, 0)")
     print(f"suggested target position: ({N * L + 2 * B}, {N * L + 2 * B})")
     x_base = np.arange(N) * L + B
     y_base = np.arange(N) * L + B
-    x_rand = np.random.rand(N, N) * L
-    y_rand = np.random.rand(N, N) * L
+    x_rand = np.random.rand(N, N) * L * 0.8 + L * 0.1
+    y_rand = np.random.rand(N, N) * L * 0.8 + L * 0.1
+    print(x_rand.max(), x_rand.min())
     x_base, y_base = np.meshgrid(x_base, y_base, indexing='xy')
     xs, ys = x_base + x_rand, y_base + y_rand
     rs = np.random.rand(N, N) * (R_max - R_min) + R_min
