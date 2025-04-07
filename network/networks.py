@@ -54,7 +54,8 @@ class MLP(BaseNetwork):
 
 class CNNBackbone(nn.Sequential):
     def __init__(self, input_dim: Tuple[int, Tuple[int, int]]):
-        super().__init__(
+        D, (H, W) = input_dim
+        layers = [
             nn.Conv2d(1, 8, kernel_size=5, stride=1, padding=2),
             nn.ELU(),
             nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
@@ -62,12 +63,18 @@ class CNNBackbone(nn.Sequential):
             nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
             nn.Conv2d(8, 8, kernel_size=3, stride=2, padding=1),
-            nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(start_dim=-3)
-        )
-        D, (H, W) = input_dim
-        # self.out_dim = D + 8 * (H // 4) * (W // 4)
-        self.out_dim = D + 8 * 4 * 4
+        ]
+        ds_rate = 4
+        if any([H % ds_rate != 0, W % ds_rate != 0]):
+            hpad = ceil(H / ds_rate) * ds_rate - H
+            wpad = ceil(W / ds_rate) * ds_rate - W
+            top, left = hpad // 2, wpad // 2
+            bottom, right = hpad - top, wpad - left
+            layers.insert(0, nn.ZeroPad2d((left, right, top, bottom)))
+        hout, wout = ceil(H / ds_rate), ceil(W / ds_rate)
+        super().__init__(*layers)
+        self.out_dim = D + 8 * hout * wout
 
 class CNN(BaseNetwork):
     def __init__(
