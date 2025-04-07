@@ -1,6 +1,7 @@
 from typing import Tuple, Dict, Union, Optional, List
 from copy import deepcopy
 import os
+from collections import OrderedDict
 
 import torch
 from torch import Tensor
@@ -18,7 +19,7 @@ class PolicyExporter(nn.Module):
         actor_net = actor.actor_mean if self.is_stochastic else actor.actor
         if self.is_recurrent:
             actor_net.hidden_state = torch.empty(0)
-            self.hidden_shape = (actor_net.n_layers, 1, actor_net.rnn_hidden_dim)
+            self.hidden_shape = (actor_net.rnn_n_layers, 1, actor_net.rnn_hidden_dim)
         self.actor = deepcopy(actor_net).cpu()
         if isinstance(self.actor, MLP):
             self.forward = self.forward_MLP
@@ -61,8 +62,16 @@ class PolicyExporter(nn.Module):
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
         return action, quat_xyzw, acc_norm, hidden
     
-    def export(self, path: str, verbose=False, export_onnx=False, export_pnnx=False):
-        self.export_jit(path, verbose)
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        export_pnnx,
+        verbose=False,
+    ):
+        if export_jit:
+            self.export_jit(path, verbose)
         if export_onnx:
             self.export_onnx(path, export_pnnx=export_pnnx)
     
@@ -75,20 +84,29 @@ class PolicyExporter(nn.Module):
         print(f"The checkpoint is compiled and exported to {export_path}.")
     
     def export_onnx(self, path: str, export_pnnx: bool = True):
-        example_input = [
-            torch.rand(1, 3),
-            torch.rand(1, 3),
-            torch.rand(1, 3)]
-        if isinstance(self.actor, (CNN, RCNN)):
-            example_input = [torch.rand(1, 10), torch.rand(1, 9, 16)] + example_input
-        else:
-            example_input.insert(0, torch.rand(1, 10))
+        input_dim = self.actor.input_dim
+        state_dim = input_dim[0] if isinstance(input_dim, tuple) else input_dim
+        perception_dim = input_dim[1] if isinstance(input_dim, tuple) else None
+        named_inputs = [
+            ("state", torch.rand(1, state_dim)),
+            ("orientation", torch.rand(1, 3)),
+            ("min_action", torch.rand(1, 3)),
+            ("max_action", torch.rand(1, 3))
+        ]
+        if perception_dim is not None:
+            named_inputs.insert(1, ("perception", torch.rand(1, perception_dim[0], perception_dim[1])))
+        output_names = [
+            "action",
+            "quat_xyzw_cmd",
+            "acc_norm"]
         if self.is_recurrent:
-            example_input.append(torch.rand(self.hidden_shape))
+            named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
+            output_names.append("hidden_out")
         export_path = os.path.join(path, "exported_actor.onnx")
-        torch.onnx.export(self, tuple(example_input), export_path)
+        
+        torch.onnx.export(self, list(zip(*named_inputs))[1], export_path, input_names=list(zip(*named_inputs))[0], output_names=output_names)
         print(f"The checkpoint is compiled and exported to {export_path}.")
         
-        if export_pnnx:
-            import pnnx
-            pnnx.convert(export_path, example_input)
+        # if export_pnnx:
+        #     import pnnx
+        #     pnnx.convert(export_path, example_input)

@@ -174,8 +174,14 @@ class TrainRunner:
         self.agent.save(ckpt_path)
         print(f"The checkpoint is saved to {ckpt_path}.")
         print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
-        if self.cfg.export:
-            PolicyExporter(self.agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
+        if any(dict(self.cfg.export).values()):
+            PolicyExporter(self.agent.policy_net).export(
+                path=ckpt_path,
+                verbose=True,
+                export_jit=self.cfg.export.jit,
+                export_onnx=self.cfg.export.onnx,
+                export_pnnx=False
+            )
         if self.env.renderer is not None:
             self.env.renderer.close()
 
@@ -280,7 +286,13 @@ class TestRunner:
     def close(self):
         if self.cfg.export:
             ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
-            PolicyExporter(self.agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
+            PolicyExporter(self.agent.policy_net).export(
+                path=ckpt_path,
+                verbose=True,
+                export_jit=self.cfg.export.jit,
+                export_onnx=self.cfg.export.onnx,
+                export_pnnx=False
+            )
         
         if self.env.renderer is not None:
             self.env.renderer.close()
