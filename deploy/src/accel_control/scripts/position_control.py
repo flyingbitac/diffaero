@@ -13,10 +13,6 @@ from accel_control.position_control_node import PositionControlNode
 
 def main():
     rospy.init_node('position_control_node', anonymous=True)
-    profiler = LineProfiler()
-    profiler.add_function(PositionControlNode.step)
-    logger = Logger()
-
     control_freq = rospy.get_param("~control_freq") # Hz
     use_cuda = rospy.get_param("~use_cuda") and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
@@ -35,17 +31,22 @@ def main():
         hover_thrust=rospy.get_param("~hover_thrust"),
         device=device)
     node.load_actor()
+    
+    profiler = LineProfiler()
+    profiler.add_function(node.inference_jit)
+    profiler.add_function(node.inference_onnx)
+    step = profiler(node.step)
+    logger = Logger()
     rate = rospy.Rate(control_freq)
     
     while not rospy.is_shutdown():
-        inference_time, terminated = node.step()
+        inference_time, terminated = step()
         logger.log(node)
         if node.offboard_setpoint_counter % (node.freq//5) == 0:
             print(f"|time= {node.offboard_setpoint_counter / node.freq:6.2f}", end=" |")
             print("pos= " + " ".join(map(lambda x: f"{x:5.2f}", [node.pos.x, node.pos.y, node.pos.z])), end=" |")
             print("vel= " + " ".join(map(lambda x: f"{x:5.2f}", [node.vel.x, node.vel.y, node.vel.z])), end=" |")
             print("action= " + " ".join(map(lambda x: f"{x:5.2f}", [node.acc_cmd.x, node.acc_cmd.y, node.acc_cmd.z])), end=" |")
-            # print("acc= " + " ".join(map(lambda x: f"{x:5.2f}", [node.acc.x, node.acc.y, node.acc.z]))", end=" |")
             print(f"thrust= {node.thrust_cmd:.2f} |inference_time= {inference_time*1000:6.2f}.ms |")
             if inference_time > 1/control_freq:
                 rospy.logwarn("Inference time exceeds control period.")

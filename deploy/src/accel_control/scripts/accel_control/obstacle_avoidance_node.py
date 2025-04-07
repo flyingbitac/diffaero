@@ -1,15 +1,14 @@
 import time
 
-import cv2
 import numpy as np
 import torch
-import torch.nn.functional as F
+import onnxruntime as ort
 
 import rospy
 from geometry_msgs.msg import Point, Quaternion
 from cv_bridge import CvBridge, CvBridgeError
 
-from accel_control.position_control_node import PositionControlNode
+from accel_control.position_control_node import PositionControlNode, lerp, normalize
 from accel_control.srv import DepthImage, DepthImageRequest, DepthImageResponse
 
 class ObstacleAvoidanceNode(PositionControlNode):
@@ -43,86 +42,144 @@ class ObstacleAvoidanceNode(PositionControlNode):
             hover_thrust=hover_thrust,
             device=device
         )
-        self.cv_bridge = CvBridge()
-        self.depth_client = rospy.ServiceProxy("/camera/get_depth_image", DepthImage)
-        self.depth_client.wait_for_service()
-        self.home = Point(x=home_x, y=home_y, z=height) # XXX: replace this with the actual start position
-        self.target = Point(x=target_x, y=target_y, z=height) # XXX: replace this with the actual target position
-
         self.max_dist = max_dist
         self.height = img_height
         self.width = img_width
-        
+        self.cv_bridge = CvBridge()
+        self.depth_client = rospy.ServiceProxy("/camera/get_depth_image", DepthImage)
+        self.depth_client.wait_for_service()
+    
     def load_actor(self):
+        if self.model_path.endswith(".onnx"):
+            self.load_actor_onnx()
+        elif self.model_path.endswith(".pt") or self.model_path.endswith(".pt2"):
+            self.load_actor_jit()
+        else:
+            raise ValueError("Unsupported model format. Please use .onnx or .pt/.pt2.")
+        self.actor_loaded = True
+    
+    def inference(self, state: np.ndarray, perception: np.ndarray, orientation: np.ndarray):
+        if self.model_path.endswith(".onnx"):
+            return self.inference_onnx(state, perception, orientation)
+        elif self.model_path.endswith(".pt") or self.model_path.endswith(".pt2"):
+            return self.inference_jit(state, perception, orientation)
+        self.actor_loaded = True
+    
+    def load_actor_onnx(self):
+        self.actor = ort.InferenceSession(
+            self.model_path,
+            providers=[("CUDA" if "cuda" in str(self.device) else "CPU") + "ExecutionProvider"],
+        )
+        input_names = [input.name for input in self.actor.get_inputs()]
+        self.need_hidden = "hidden_in" in input_names
+        warmup_inputs = {
+            input.name: np.random.rand(*input.shape).astype(np.float32) for input in self.actor.get_inputs()}
+        if self.need_hidden:
+            self.hidden = np.zeros(warmup_inputs["hidden_in"].shape, dtype=np.float32)
+        for _ in range(10):
+            self.actor.run(None, warmup_inputs)
+        rospy.loginfo("Actor warmed up.")
+    
+    def inference_onnx(self, state: np.ndarray, perception: np.ndarray, orientation: np.ndarray):
+        named_inputs = {
+            "state": state.astype(np.float32),
+            "perception": perception.astype(np.float32),
+            "orientation": orientation.astype(np.float32),
+            "min_action": self.min_action.astype(np.float32),
+            "max_action": self.max_action.astype(np.float32)}
+        if self.need_hidden:
+            named_inputs["hidden_in"] = self.hidden.astype(np.float32)
+            action, quat_xyzw_cmd, acc_norm, hidden = self.actor.run(None, named_inputs)
+            self.hidden = hidden
+        else:
+            action, quat_xyzw_cmd, acc_norm = self.actor.run(None, named_inputs)
+        return action.squeeze(0), quat_xyzw_cmd.squeeze(0), acc_norm.squeeze(0)
+        
+    def load_actor_jit(self):
         rospy.loginfo("Loading actor...")
-        self.actor = torch.jit.load(self.model_path, map_location=self.device)
+        self.actor = torch.jit.load(self.model_path, map_location=self.device).to(self.dtype)
         rospy.loginfo("Actor loaded, warming up...")
         self.actor.eval()
+        self.need_hidden = self.actor.is_recurrent
         warmup_input = [
-            torch.rand(1, 10, device=self.device),
-            torch.rand(1, self.height, self.width, device=self.device),
-            torch.rand(1, 3, device=self.device),
-            torch.rand(1, 3, device=self.device),
-            torch.rand(1, 3, device=self.device)]
-        if self.actor.is_recurrent:
-            warmup_input.append(torch.rand(self.actor.hidden_shape, device=self.device))
-            self.hidden = torch.zeros(self.actor.hidden_shape, device=self.device)
+            torch.rand(1, 10, **self.factory_kwargs),
+            torch.rand(1, self.height, self.width, **self.factory_kwargs),
+            torch.rand(1, 3, **self.factory_kwargs),
+            torch.rand(1, 3, **self.factory_kwargs),
+            torch.rand(1, 3, **self.factory_kwargs)]
+        if self.need_hidden:
+            warmup_input.append(torch.rand(self.actor.hidden_shape, **self.factory_kwargs))
+            self.hidden = torch.zeros(self.actor.hidden_shape, **self.factory_kwargs)
         for _ in range(10):
             self.actor(*warmup_input)
         rospy.loginfo("Actor warmed up.")
     
-    def acc_ctrl_cb(self, event: rospy.timer.TimerEvent):
-        self.offboard_setpoint_counter += 1
-        self.update_target()
-        if self.offboard_setpoint_counter == 5*self.freq:
-            if not (self.set_mode("OFFBOARD") and self.arm()):
-                rospy.logfatal("Failed to switch to OFFBOARD mode and arm the vehicle.")
-                exit(1)
-                
-        t = self.offboard_setpoint_counter / self.freq
-        if t < 20:
-            self.set_pos(self.home)
-        elif t < 110:
-            self.set_pose(quat=self.pose_cmd, thrust=self.thrust_cmd)
-        elif t < 120:
-            self.set_pos(self.home)
-        else:
-            self.terminated = True
+    def inference_jit(self, state: np.ndarray, perception: np.ndarray, orientation: np.ndarray):
+        state = torch.from_numpy(state).to(**self.factory_kwargs)
+        orientation = torch.from_numpy(orientation).to(**self.factory_kwargs)
+        min_action = torch.from_numpy(self.min_action).to(**self.factory_kwargs)
+        max_action = torch.from_numpy(self.max_action).to(**self.factory_kwargs)
+        with torch.no_grad():
+            if self.need_hidden:
+                action, quat_xyzw_cmd, acc_norm, hidden = self.actor(state, perception, orientation, min_action, max_action, self.hidden)
+                self.hidden = hidden
+            else:
+                action, quat_xyzw_cmd, acc_norm = self.actor(state, perception, orientation, min_action, max_action)
+        action = action.squeeze(0).cpu().numpy()
+        quat_xyzw_cmd = quat_xyzw_cmd.squeeze(0).cpu().numpy()
+        acc_norm = acc_norm.squeeze(0).cpu().numpy()
+        return action, quat_xyzw_cmd, acc_norm
     
     @torch.no_grad()
     def step(self):
         tic = time.time()
         target_vel, quat_xyzw, vel, perception = self.get_state()
-        self.vel_ema.lerp_(vel.to(self.device).unsqueeze(0), 0.4)
-        state = torch.cat([target_vel, quat_xyzw, vel], dim=-1).to(self.device).unsqueeze(0)
-        forward = F.normalize(self.vel_ema, dim=-1)
-        zero_yaw = torch.tensor([[1., 0., 0.]], device=self.device)
+        self.vel_ema = lerp(self.vel_ema, vel.reshape(1, 3), 0.2)
+        state = np.concatenate([target_vel, quat_xyzw, vel], axis=-1).reshape(1, -1)
+        target_direction = normalize(target_vel, axis=-1)
+        forward = normalize(self.vel_ema, axis=-1)
+        zero_yaw = np.array([[1., 0., 0.]])
         # XXX
-        orientation = forward
-        # orientation = forward.lerp(F.normalize(target_vel, dim=-1), 0.8)
-        # orientation = forward.lerp(zero_yaw, target_vel.norm(dim=-1).neg().exp().item()) # soft yaw switch
-        # orientation = self.vel_ema if target_vel.norm(dim=-1).item() > 1.5 else zero_yaw # hard yaw switc
-        if self.actor.is_recurrent:
-            action, quat_xyzw_cmd, acc_norm, hidden = self.actor(state, perception, orientation, self.min_action, self.max_action, self.hidden)
-            self.hidden = hidden
-        else:
-            action, quat_xyzw_cmd, acc_norm = self.actor(state, perception, orientation, self.min_action, self.max_action)
-        self.acc_cmd = Point(x=action[0, 0].item(), y=action[0, 1].item(), z=action[0, 2].item())
-        thrust = acc_norm.mul(self.thrust_factor).clamp(0, 1).item()
-        x, y, z, w = list(map(lambda x: x.item(), quat_xyzw_cmd[0].unbind(dim=-1)))
+        # orientation = forward
+        # orientation = lerp(forward, target_direction, 0.8)
+        orientation = lerp(forward, zero_yaw, np.exp(-np.linalg.norm(target_vel/5)))
+        # orientation = self.vel_ema if np.linalg.norm(target_vel) > 1.5 else zero_yaw # hard yaw switch
+        
+        action, quat_xyzw_cmd, acc_norm = self.inference(state, perception, orientation)
+        
+        self.acc_cmd = Point(x=action[0], y=action[1], z=action[2])
+        thrust = min(1, max(0, acc_norm * self.thrust_factor))
+        x, y, z, w = quat_xyzw_cmd
         terminated = self.command_pose(Quaternion(x=x, y=y, z=z, w=w), thrust)
         return time.time() - tic, terminated
     
+    def acc_ctrl_cb(self, event: rospy.timer.TimerEvent):
+        if self.actor_loaded:
+            self.offboard_setpoint_counter += 1
+        self.update_target()
+        if self.offboard_setpoint_counter == 5*self.freq:
+            if not (self.set_mode("OFFBOARD") and self.arm()):
+                rospy.logfatal("Failed to switch to OFFBOARD mode and arm the vehicle.")
+                exit(1)
+        
+        if self.t < 20:
+            self.set_pos(self.home)
+        elif self.t < 110:
+            self.set_pose(quat=self.pose_cmd, thrust=self.thrust_cmd)
+        elif self.t < 120:
+            self.set_pos(self.home)
+        else:
+            self.terminated = True
+    
     def update_target(self):
-        t = self.offboard_setpoint_counter / self.freq
-        if 20 <= t < 65:
+        if 20 <= self.t < 65:
             self.target = self.target
-        elif 65 <= t <= 110:
+        elif 65 <= self.t <= 110:
             self.target = self.home
     
     def get_state(self):
         target_vel, quat_xyzw, vel = super().get_state()
         response: DepthImageResponse = self.depth_client.call(DepthImageRequest(
             downsample=True, post_process=True))
-        perception = torch.from_numpy(self.cv_bridge.imgmsg_to_cv2(response.img)).to(self.device)
-        return target_vel, quat_xyzw, vel, perception.unsqueeze(0)
+        perception = np.array(self.cv_bridge.imgmsg_to_cv2(response.img)).astype(np.float32)
+        return target_vel, quat_xyzw, vel, np.expand_dims(perception, axis=0)
