@@ -1,4 +1,0 @@
-bool downsample
-bool post_process
----
-sensor_msgs/Image img
