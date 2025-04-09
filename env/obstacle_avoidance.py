@@ -153,7 +153,8 @@ class ObstacleAvoidance(BaseEnv):
         if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
+            vel_diff = self.dynamics._vel_ema - self.target_vel
+            vel_diff = torch.norm(vel_diff * torch.tensor([[1, 1, 2]], device=self.device), dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
