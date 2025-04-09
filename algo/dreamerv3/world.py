@@ -49,7 +49,7 @@ def train_agents(agent: ActorCriticAgent, state_env: DepthStateEnv, cfg: DictCon
     agent_info["reward_sum"] = reward_sum.item()
     return agent_info
 
-def train_worldmodel(world_model: DepthStateModel, replaybuffer: ReplayBuffer, opt: torch.optim.optimizer.Optimizer, training_hyper):
+def train_worldmodel(world_model: DepthStateModel, replaybuffer: ReplayBuffer, opt: torch.optim.Optimizer, training_hyper):
     for _ in range(training_hyper.worldmodel_update_freq):
         sample_state, sample_action, sample_reward, sample_termination, sample_perception = replaybuffer.sample(
             batch_size=training_hyper.batch_size,
