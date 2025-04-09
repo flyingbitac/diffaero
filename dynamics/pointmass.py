@@ -27,6 +27,7 @@ class PointMassModelBase:
         self.align_yaw_with_target_direction: bool = cfg.align_yaw_with_target_direction
         self.align_yaw_with_vel_ema: bool = cfg.align_yaw_with_vel_ema
         self._G = torch.tensor(cfg.g, device=device, dtype=torch.float32)
+        self._D = torch.tensor(cfg.D, device=device, dtype=torch.float32)
         self._G_vec = torch.tensor([0.0, 0.0, -self._G], device=device, dtype=torch.float32)
         self.min_action = torch.tensor([list(cfg.min_action)], device=device)
         self.max_action = torch.tensor([list(cfg.max_action)], device=device)
@@ -88,10 +89,13 @@ class ContinuousPointMassModel(PointMassModelBase):
         # Unpacking state and input variables
         p, v, a = X[..., :3], X[..., 3:6], X[..., 6:9]
         
+        fdrag = -self._D * v
+        v_dot = a + self._G_vec + fdrag
+        
         a_dot = self.lmbda * (U - a)
         
         # State derivatives
-        X_dot = torch.concat([v, a + self._G_vec, a_dot], dim=-1)
+        X_dot = torch.concat([v, v_dot, a_dot], dim=-1)
         
         return X_dot
 
