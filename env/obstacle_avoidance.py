@@ -158,7 +158,7 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.001 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.005 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
