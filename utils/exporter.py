@@ -1,3 +1,4 @@
+import trace
 from typing import Tuple, Dict, Union, Optional, List
 from copy import deepcopy
 import os
@@ -29,6 +30,26 @@ class PolicyExporter(nn.Module):
             self.forward = self.forward_RNN
         elif isinstance(self.actor, RCNN):
             self.forward = self.forward_RCNN
+        
+        self.input_dim = self.actor.input_dim
+        state_dim = self.input_dim[0] if isinstance(self.input_dim, tuple) else self.input_dim
+        perception_dim = self.input_dim[1] if isinstance(self.input_dim, tuple) else None
+        self.named_inputs = [
+            ("state", torch.rand(1, state_dim)),
+            ("orientation", torch.rand(1, 3)),
+            ("min_action", torch.rand(1, 3)),
+            ("max_action", torch.rand(1, 3))
+        ]
+        if perception_dim is not None:
+            self.named_inputs.insert(1, ("perception", torch.rand(1, perception_dim[0], perception_dim[1])))
+        self.output_names = [
+            "action",
+            "quat_xyzw_cmd",
+            "acc_norm"
+        ]
+        if self.is_recurrent:
+            self.named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
+            self.output_names.append("hidden_out")
     
     def post_process(self, raw_action, min_action, max_action, orientation):
         # type: (Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
@@ -67,46 +88,32 @@ class PolicyExporter(nn.Module):
         path: str,
         export_jit,
         export_onnx,
-        export_pnnx,
         verbose=False,
     ):
         if export_jit:
             self.export_jit(path, verbose)
         if export_onnx:
-            self.export_onnx(path, export_pnnx=export_pnnx)
+            self.export_onnx(path)
     
+    @torch.no_grad()
     def export_jit(self, path: str, verbose=False):
-        traced_script_module = torch.jit.script(self)
+        names, inputs = zip(*self.named_inputs)
+        shapes = [tuple(input.shape) for input in inputs]
+        traced_script_module = torch.jit.script(self, optimize=True, example_inputs=shapes)
         if verbose:
             print(traced_script_module.code)
         export_path = os.path.join(path, "exported_actor.pt2")
         traced_script_module.save(export_path)
         print(f"The checkpoint is compiled and exported to {export_path}.")
     
-    def export_onnx(self, path: str, export_pnnx: bool = True):
-        input_dim = self.actor.input_dim
-        state_dim = input_dim[0] if isinstance(input_dim, tuple) else input_dim
-        perception_dim = input_dim[1] if isinstance(input_dim, tuple) else None
-        named_inputs = [
-            ("state", torch.rand(1, state_dim)),
-            ("orientation", torch.rand(1, 3)),
-            ("min_action", torch.rand(1, 3)),
-            ("max_action", torch.rand(1, 3))
-        ]
-        if perception_dim is not None:
-            named_inputs.insert(1, ("perception", torch.rand(1, perception_dim[0], perception_dim[1])))
-        output_names = [
-            "action",
-            "quat_xyzw_cmd",
-            "acc_norm"]
-        if self.is_recurrent:
-            named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
-            output_names.append("hidden_out")
+    def export_onnx(self, path: str):
         export_path = os.path.join(path, "exported_actor.onnx")
-        
-        torch.onnx.export(self, list(zip(*named_inputs))[1], export_path, input_names=list(zip(*named_inputs))[0], output_names=output_names)
+        names, inputs = zip(*self.named_inputs)
+        torch.onnx.export(
+            model=self,
+            args=inputs,
+            f=export_path,
+            input_names=names,
+            output_names=self.output_names
+        )
         print(f"The checkpoint is compiled and exported to {export_path}.")
-        
-        # if export_pnnx:
-        #     import pnnx
-        #     pnnx.convert(export_path, example_input)

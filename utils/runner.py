@@ -179,8 +179,7 @@ class TrainRunner:
                 path=ckpt_path,
                 verbose=True,
                 export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx,
-                export_pnnx=False
+                export_onnx=self.cfg.export.onnx
             )
         if self.env.renderer is not None:
             self.env.renderer.close()
@@ -290,8 +289,7 @@ class TestRunner:
                 path=ckpt_path,
                 verbose=True,
                 export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx,
-                export_pnnx=False
+                export_onnx=self.cfg.export.onnx
             )
         
         if self.env.renderer is not None:
