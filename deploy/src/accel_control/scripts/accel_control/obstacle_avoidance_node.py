@@ -121,7 +121,7 @@ class ObstacleAvoidanceNode(PositionControlNode):
         self.acc_cmd = Point(x=action[0, 0].item(), y=action[0, 1].item(), z=action[0, 2].item())
         thrust = acc_norm.mul(self.thrust_factor).clamp(0, 1).item()
         x, y, z, w = list(map(lambda x: x.item(), quat_xyzw_cmd[0].unbind(dim=-1)))
-        terminated = self.command_pose(Quaternion(x=x, y=y, z=z, w=w), thrust)
+        terminated = self.update_command(Quaternion(x=x, y=y, z=z, w=w), thrust)
         return time.time() - tic, terminated
     
     def update_target(self):

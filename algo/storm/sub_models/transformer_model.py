@@ -29,7 +29,7 @@ class StochasticTransformer(nn.Module):
         self.head = nn.Linear(feat_dim, stoch_dim)
 
     def forward(self, samples, action, mask):
-        action = F.one_hot(action.long(), self.action_dim).float()
+        # action = F.one_hot(action.long(), self.action_dim).float()
         feats = self.stem(torch.cat([samples, action], dim=-1))
         feats = self.position_encoding(feats)
         feats = self.layer_norm(feats)
@@ -65,7 +65,7 @@ class StochasticTransformerKVCache(nn.Module):
         '''
         Normal forward pass
         '''
-        action = F.one_hot(action.long(), self.action_dim).float()
+        # action = F.one_hot(action.long(), self.action_dim).float()
         feats = self.stem(torch.cat([samples, action], dim=-1))
         feats = self.position_encoding(feats)
         feats = self.layer_norm(feats)
