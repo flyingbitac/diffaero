@@ -97,9 +97,7 @@ class PolicyExporter(nn.Module):
     
     @torch.no_grad()
     def export_jit(self, path: str, verbose=False):
-        names, inputs = zip(*self.named_inputs)
-        shapes = [tuple(input.shape) for input in inputs]
-        traced_script_module = torch.jit.script(self, optimize=True, example_inputs=shapes)
+        traced_script_module = torch.jit.script(self)
         if verbose:
             print(traced_script_module.code)
         export_path = os.path.join(path, "exported_actor.pt2")

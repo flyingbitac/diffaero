@@ -30,8 +30,8 @@ use_training_cfg: False
 runname: ""
 checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
 export:
-  jit: False
-  onnx: False
+  jit: True
+  onnx: True
 
 seed: 0
 torch_deterministic: False
