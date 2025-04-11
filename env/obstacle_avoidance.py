@@ -1,4 +1,5 @@
-from typing import Tuple, Dict, Union
+from typing import Tuple, Dict, Union, List
+import math
 
 from omegaconf import DictConfig
 import torch
@@ -225,6 +226,22 @@ class ObstacleAvoidance(BaseEnv):
             
         self.progress[env_idx] = 0
         self.arrive_time[env_idx] = 0
+        
+    # def grid(self, x_min:float, x_max:float, y_min:float, y_max:float, z_min:float, z_max:float, n_points:int):
+    #     x_range = torch.linspace(x_min, x_max, n_points, device=self.device)
+    #     y_range = torch.linspace(y_min, y_max, n_points, device=self.device)
+    #     z_range = torch.linspace(z_min, z_max, n_points, device=self.device)
+    #     grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1)
+    #     grid_xyz = self.p.unsqueeze(1).expand(-1, n_points**3, -1) + grid_xyz_range.reshape(-1, 3) # [n_envs, n_points**3, 3]
+    #     dist2sphere = torch.norm(grid_xyz.unsqueeze(2) - self.obstacle_manager.p_spheres.unsqueeze(1), dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(1) # [n_envs, n_points**3, n_spheres]
+    #     occupancy_sphere = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2sphere) # [n_envs, n_points**3]
+    #     nearest_point2cube = grid_xyz.unsqueeze(2).clamp(min=self.obstacle_manager.box_min.unsqueeze(1), max=self.obstacle_manager.box_max.unsqueeze(1)) # [n_envs, n_points**3, n_cubes, 3]
+    #     dist2cube = torch.norm(nearest_point2cube - grid_xyz.unsqueeze(2), dim=-1) # [n_envs, n_points**3, n_cubes]
+    #     occupancy_cube = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2cube) # [n_envs, n_points**3]
+    #     occupancy = occupancy_sphere | occupancy_cube # [n_envs, n_points**3]
+    #     if self.z_ground_plane is not None:
+    #         occupancy = occupancy | (grid_xyz[..., 2] - self.r_drone < self.z_ground_plane)
+    #     return occupancy # [n_envs, n_points**3]
     
     def reset(self):
         super().reset()
@@ -256,7 +273,40 @@ class ObstacleAvoidance(BaseEnv):
                        torch.any(self.p >  1.5*self.L, dim=-1)
         return (self.progress >= self.max_steps) | out_of_bound
 
-
+class ObstacleAvoidanceGrid(ObstacleAvoidance):
+    def __init__(self, cfg: DictConfig, device:torch.device):
+        super().__init__(cfg, device)
+        
+    def grid(self, x_min:float, x_max:float, y_min:float, y_max:float, z_min:float, z_max:float, n_points:List[int]):
+        x_range = torch.linspace(x_min, x_max, n_points[0], device=self.device)
+        y_range = torch.linspace(y_min, y_max, n_points[1], device=self.device)
+        z_range = torch.linspace(z_min, z_max, n_points[2], device=self.device)
+        grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1)
+        grid_xyz = self.p.unsqueeze(1).expand(-1, math.prod(n_points), -1) + grid_xyz_range.reshape(-1, 3) # [n_envs, n_points, 3]
+        dist2sphere = torch.norm(grid_xyz.unsqueeze(2) - self.obstacle_manager.p_spheres.unsqueeze(1), dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(1) # [n_envs, n_points, n_spheres]
+        occupancy_sphere = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2sphere) # [n_envs, n_points]
+        nearest_point2cube = grid_xyz.unsqueeze(2).clamp(min=self.obstacle_manager.box_min.unsqueeze(1), max=self.obstacle_manager.box_max.unsqueeze(1)) # [n_envs, n_points, n_cubes, 3]
+        dist2cube = torch.norm(nearest_point2cube - grid_xyz.unsqueeze(2), dim=-1) # [n_envs, n_points, n_cubes]
+        occupancy_cube = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2cube) # [n_envs, n_points]
+        occupancy = occupancy_sphere | occupancy_cube # [n_envs, n_points]
+        if self.z_ground_plane is not None:
+            occupancy = occupancy | (grid_xyz[..., 2] - self.r_drone < self.z_ground_plane)
+        return occupancy # [n_envs, n_points]
+    
+    def state(self, with_grad=False):
+        if self.dynamic_type == "pointmass":
+            state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
+        else:
+            state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+        grid = self.grid(x_min=self.cfg.grid.x_min, x_max=self.cfg.grid.x_max, 
+                         y_min=self.cfg.grid.y_min, y_max=self.cfg.grid.y_max, 
+                         z_min=self.cfg.grid.z_min, z_max=self.cfg.grid.z_max, 
+                         n_points=self.cfg.grid.n_points)
+        state = TensorDict({
+            "state": state, "perception": self.sensor_tensor.clone(), "grid":grid}, batch_size=self.n_envs)
+        state = state if with_grad else state.detach()
+        return state
+    
 class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)

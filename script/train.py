@@ -54,16 +54,16 @@ def main(cfg: DictConfig):
     
     logger = Logger(cfg, run_name=cfg.runname)
     
-    profiler = LineProfiler()
-    if hasattr(env, "update_sensor_data"):
-        profiler.add_function(env_class.update_sensor_data)
-    if env.renderer is not None:
-        profiler.add_function(env.renderer.render)
-    profiler.add_function(env_class.step)
-    profiler.add_function(env_class.state)
-    profiler.add_function(env_class.loss_fn)
-    profiler.add_function(agent_class.step)
-    @profiler
+    # profiler = LineProfiler()
+    # if hasattr(env, "update_sensor_data"):
+    #     profiler.add_function(env_class.update_sensor_data)
+    # if env.renderer is not None:
+    #     profiler.add_function(env.renderer.render)
+    # profiler.add_function(env_class.step)
+    # profiler.add_function(env_class.state)
+    # profiler.add_function(env_class.loss_fn)
+    # profiler.add_function(agent_class.step)
+    # @profiler
     def learn(
         on_step_cb: Optional[Callable] = None
     ):
@@ -123,8 +123,8 @@ def main(cfg: DictConfig):
     
     global logdir
     logdir = logger.logdir
-    with open(os.path.join(logdir, "runtime_profile.txt"), "w", encoding="utf-8") as f:
-        profiler.print_stats(stream=f, output_unit=1e-3)
+    # with open(os.path.join(logdir, "runtime_profile.txt"), "w", encoding="utf-8") as f:
+    #     profiler.print_stats(stream=f, output_unit=1e-3)
 
 if __name__ == "__main__":
     main()
