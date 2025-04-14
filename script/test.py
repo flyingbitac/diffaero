@@ -146,7 +146,10 @@ def main(cfg: DictConfig):
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
     env_class = ENV_ALIAS[cfg.env.name]
-    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
+    if cfg.env.name== 'obstacle_avoidance_grid':
+        env = RecordEpisodeStatistics(env_class(cfg.env, device=device,test=True))
+    else:
+        env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
     
     agent_class = AGENT_ALIAS[cfg.algo.name]
     agent = agent_class.build(cfg, env, device)

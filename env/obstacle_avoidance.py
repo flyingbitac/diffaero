@@ -147,7 +147,7 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 4 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = vel_loss + 4 * oa_loss + 0.03 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -274,8 +274,9 @@ class ObstacleAvoidance(BaseEnv):
         return (self.progress >= self.max_steps) | out_of_bound
 
 class ObstacleAvoidanceGrid(ObstacleAvoidance):
-    def __init__(self, cfg: DictConfig, device:torch.device):
+    def __init__(self, cfg: DictConfig, device:torch.device, test:bool=False):
         super().__init__(cfg, device)
+        self.test = test
         
     def grid(self, x_min:float, x_max:float, y_min:float, y_max:float, z_min:float, z_max:float, n_points:List[int]):
         x_range = torch.linspace(x_min, x_max, n_points[0], device=self.device)
@@ -298,10 +299,13 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
         else:
             state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
-        grid = self.grid(x_min=self.cfg.grid.x_min, x_max=self.cfg.grid.x_max, 
-                         y_min=self.cfg.grid.y_min, y_max=self.cfg.grid.y_max, 
-                         z_min=self.cfg.grid.z_min, z_max=self.cfg.grid.z_max, 
-                         n_points=self.cfg.grid.n_points)
+        if not self.test:
+            grid = self.grid(x_min=self.cfg.grid.x_min, x_max=self.cfg.grid.x_max, 
+                            y_min=self.cfg.grid.y_min, y_max=self.cfg.grid.y_max, 
+                            z_min=self.cfg.grid.z_min, z_max=self.cfg.grid.z_max, 
+                            n_points=self.cfg.grid.n_points)
+        else:
+            grid = None
         state = TensorDict({
             "state": state, "perception": self.sensor_tensor.clone(), "grid":grid}, batch_size=self.n_envs)
         state = state if with_grad else state.detach()
