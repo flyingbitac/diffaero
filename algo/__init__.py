@@ -25,4 +25,4 @@ AGENT_ALIAS = {
 }
 
 def build_agent(cfg: DictConfig, env, device: torch.device):
-    return AGENT_ALIAS[cfg.name].build(cfg, env, device)
+    return AGENT_ALIAS[cfg.algo.name].build(cfg, env, device)

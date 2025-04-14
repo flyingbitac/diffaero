@@ -13,3 +13,7 @@ ENV_ALIAS = {
     "obstacle_avoidance_yopo": ObstacleAvoidanceYOPO,
     "obstacle_avoidance_grid": ObstacleAvoidanceGrid,
 }
+
+def build_env(cfg, device):
+    # type: (DictConfig, torch.device) -> Union[PositionControl, MultiAgentPositionControl, ObstacleAvoidance, ObstacleAvoidanceYOPO]
+    return ENV_ALIAS[cfg.name](cfg, device)

@@ -76,8 +76,7 @@ def train_worldmodel(world_model: DepthStateModel, replaybuffer: ReplayBuffer, o
 
 class World_Agent:
     def __init__(self, cfg, env, device):
-        device_idx = f"{cfg.device}"
-        device = torch.device(f"cuda:{device_idx}" if torch.cuda.is_available() else "cpu")
+        device_idx = device.index
         world_agent_cfg = getattr(cfg, "algo")
         world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
         world_agent_cfg.replaybuffer.num_envs = cfg.n_envs
@@ -134,7 +133,7 @@ class World_Agent:
         self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden, True)[2]
         return action, None
 
-    def step(self, cfg, env, obs, logger):
+    def step(self, cfg, env, obs, on_step_cb):
         policy_info = {}
         with torch.no_grad():
             if type(obs)!=torch.Tensor:
