@@ -93,13 +93,7 @@ class ImageDecoder(nn.Module):
 class ImageDecoderMLP(nn.Module):
     def __init__(self, feat_dim:int, hidden_dim:int, image_width:int, image_height:int):
         super().__init__()
-        self.backbone = nn.Sequential(nn.Linear(feat_dim, hidden_dim, bias=False),
-                                 nn.LayerNorm(hidden_dim),
-                                 nn.SiLU(inplace=True),
-                                 nn.Linear(hidden_dim,hidden_dim),
-                                 nn.LayerNorm(hidden_dim),
-                                 nn.SiLU(inplace=True))
-        # self.backbone = MLP(feat_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
+        self.backbone = MLP(feat_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim,image_height*image_width)
         self.image_height = image_height
 
@@ -142,15 +136,7 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
 class RewardDecoder(nn.Module):
     def __init__(self, num_classes, hidden_dim, latent_dim) -> None:
         super().__init__()
-        self.backbone = nn.Sequential(
-            nn.Linear(latent_dim+hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-        )
-        # self.backbone = MLP(latent_dim+hidden_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
+        self.backbone = MLP(latent_dim+hidden_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, feat, hidden):
@@ -161,15 +147,7 @@ class RewardDecoder(nn.Module):
 class EndDecoder(nn.Module):
     def __init__(self, hidden_dim, latent_dim) -> None:
         super().__init__()
-        self.backbone = nn.Sequential(
-            nn.Linear(hidden_dim+latent_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-        )
-        # self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
+        self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, 1)
     
     def forward(self, feat, hidden):
@@ -180,15 +158,7 @@ class EndDecoder(nn.Module):
 class GridDecoder(nn.Module):
     def __init__(self, hidden_dim, latent_dim, grid_dim) -> None:
         super().__init__()
-        self.backbone = nn.Sequential(
-            nn.Linear(hidden_dim+latent_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-        )
-        # self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
+        self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, grid_dim)
     
     def forward(self, feat, hidden):
@@ -225,41 +195,30 @@ class DepthStateModel(nn.Module):
             self.image_decoder = ImageDecoderMLP(feat_dim=cfg.latent_dim+cfg.hidden_dim,hidden_dim=cfg.hidden_dim,
                                                 image_width=cfg.image_width,image_height=cfg.image_height)
             state_emb_dim = 64
-            self.state_encoder = nn.Sequential(nn.Linear(cfg.state_dim,64,bias=False),
-                                            nn.LayerNorm(64),nn.SiLU())
+            self.state_encoder = MLP(cfg.state_dim, state_emb_dim, state_emb_dim, 1, 'SiLU', 'LayerNorm', bias=False)
             depth_flatten_dim = self.image_encoder.flatten_dim
         else:
             self.state_encoder = nn.Identity()
             state_emb_dim = 10
             depth_flatten_dim = 0
 
-
-        self.inp_proj = nn.Sequential(
-            nn.Linear(state_emb_dim + depth_flatten_dim + cfg.hidden_dim,cfg.latent_dim),
-            nn.LayerNorm(cfg.latent_dim),
-            nn.SiLU(),
-            nn.Linear(cfg.latent_dim,cfg.latent_dim)
-        )
+        self.inp_proj = nn.Sequential(MLP(state_emb_dim + depth_flatten_dim + cfg.hidden_dim, cfg.latent_dim, 
+                                          cfg.latent_dim, 1, 'SiLU', 'LayerNorm', bias=False),
+                                      nn.Linear(cfg.latent_dim, cfg.latent_dim))
         
         self.act_state_proj = nn.Sequential(
-            nn.Linear(cfg.latent_dim+cfg.action_dim,cfg.hidden_dim),
-            nn.LayerNorm(cfg.hidden_dim),
-            nn.SiLU(),
-            nn.Linear(cfg.hidden_dim,cfg.hidden_dim)
+            MLP(cfg.latent_dim+cfg.action_dim, cfg.hidden_dim, cfg.hidden_dim, 1, 'SiLU', 'LayerNorm', bias=False),
+            nn.Linear(cfg.hidden_dim, cfg.hidden_dim)
         )
         
         self.state_decoder = nn.Sequential(
-            nn.Linear(cfg.latent_dim+cfg.hidden_dim,cfg.latent_dim),
-            nn.LayerNorm(cfg.latent_dim),
-            nn.SiLU(),
+            MLP(cfg.latent_dim+cfg.hidden_dim, cfg.latent_dim, cfg.hidden_dim, 1, 'SiLU', 'LayerNorm', bias=False),
             nn.Linear(cfg.latent_dim,cfg.state_dim)
         )
         
         self.prior_proj = nn.Sequential(
-            nn.Linear(cfg.hidden_dim,cfg.latent_dim),
-            nn.LayerNorm(cfg.latent_dim),
-            nn.SiLU(),
-            nn.Linear(cfg.latent_dim,cfg.latent_dim)
+            MLP(cfg.hidden_dim, cfg.latent_dim, cfg.hidden_dim, 1, 'SiLU', 'LayerNorm', bias=False),
+            nn.Linear(cfg.latent_dim, cfg.latent_dim)
         )
 
         self.reward_predictor = RewardDecoder(cfg.num_classes,cfg.hidden_dim,cfg.latent_dim)
