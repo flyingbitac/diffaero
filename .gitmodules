@@ -1,0 +1,4 @@
+[submodule "deploy"]
+	path = deploy
+	url = git@github.com:zxh0916/quaddif-deploy.git
+	branch = master

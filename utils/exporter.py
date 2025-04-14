@@ -1,6 +1,8 @@
+import trace
 from typing import Tuple, Dict, Union, Optional, List
 from copy import deepcopy
 import os
+from collections import OrderedDict
 
 import torch
 from torch import Tensor
@@ -18,7 +20,7 @@ class PolicyExporter(nn.Module):
         actor_net = actor.actor_mean if self.is_stochastic else actor.actor
         if self.is_recurrent:
             actor_net.hidden_state = torch.empty(0)
-            self.hidden_shape = (actor_net.n_layers, 1, actor_net.rnn_hidden_dim)
+            self.hidden_shape = (actor_net.rnn_n_layers, 1, actor_net.rnn_hidden_dim)
         self.actor = deepcopy(actor_net).cpu()
         if isinstance(self.actor, MLP):
             self.forward = self.forward_MLP
@@ -28,6 +30,26 @@ class PolicyExporter(nn.Module):
             self.forward = self.forward_RNN
         elif isinstance(self.actor, RCNN):
             self.forward = self.forward_RCNN
+        
+        self.input_dim = self.actor.input_dim
+        state_dim = self.input_dim[0] if isinstance(self.input_dim, tuple) else self.input_dim
+        perception_dim = self.input_dim[1] if isinstance(self.input_dim, tuple) else None
+        self.named_inputs = [
+            ("state", torch.rand(1, state_dim)),
+            ("orientation", torch.rand(1, 3)),
+            ("min_action", torch.rand(1, 3)),
+            ("max_action", torch.rand(1, 3))
+        ]
+        if perception_dim is not None:
+            self.named_inputs.insert(1, ("perception", torch.rand(1, perception_dim[0], perception_dim[1])))
+        self.output_names = [
+            "action",
+            "quat_xyzw_cmd",
+            "acc_norm"
+        ]
+        if self.is_recurrent:
+            self.named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
+            self.output_names.append("hidden_out")
     
     def post_process(self, raw_action, min_action, max_action, orientation):
         # type: (Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
@@ -61,34 +83,37 @@ class PolicyExporter(nn.Module):
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
         return action, quat_xyzw, acc_norm, hidden
     
-    def export(self, path: str, verbose=False, export_onnx=False, export_pnnx=False):
-        self.export_jit(path, verbose)
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        verbose=False,
+    ):
+        if export_jit:
+            self.export_jit(path, verbose)
         if export_onnx:
-            self.export_onnx(path, export_pnnx=export_pnnx)
+            self.export_onnx(path)
     
+    @torch.no_grad()
     def export_jit(self, path: str, verbose=False):
-        traced_script_module = torch.jit.script(self)
+        names, inputs = zip(*self.named_inputs)
+        shapes = [tuple(input.shape) for input in inputs]
+        traced_script_module = torch.jit.script(self, optimize=True, example_inputs=shapes)
         if verbose:
             print(traced_script_module.code)
         export_path = os.path.join(path, "exported_actor.pt2")
         traced_script_module.save(export_path)
         print(f"The checkpoint is compiled and exported to {export_path}.")
     
-    def export_onnx(self, path: str, export_pnnx: bool = True):
-        example_input = [
-            torch.rand(1, 3),
-            torch.rand(1, 3),
-            torch.rand(1, 3)]
-        if isinstance(self.actor, (CNN, RCNN)):
-            example_input = [torch.rand(1, 10), torch.rand(1, 9, 16)] + example_input
-        else:
-            example_input.insert(0, torch.rand(1, 10))
-        if self.is_recurrent:
-            example_input.append(torch.rand(self.hidden_shape))
+    def export_onnx(self, path: str):
         export_path = os.path.join(path, "exported_actor.onnx")
-        torch.onnx.export(self, tuple(example_input), export_path)
+        names, inputs = zip(*self.named_inputs)
+        torch.onnx.export(
+            model=self,
+            args=inputs,
+            f=export_path,
+            input_names=names,
+            output_names=self.output_names
+        )
         print(f"The checkpoint is compiled and exported to {export_path}.")
-        
-        if export_pnnx:
-            import pnnx
-            pnnx.convert(export_path, example_input)

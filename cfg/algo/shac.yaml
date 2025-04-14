@@ -1,7 +1,7 @@
 name: shac
 network: ${network}
 
-l_rollout: 24
+l_rollout: 32
 
 actor_lr: 0.001
 critic_lr: 0.003

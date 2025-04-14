@@ -1,0 +1,7 @@
+set(accel_control_SETUP_PY_SETUP_MODULE "distutils.core")
+set(accel_control_SETUP_PY_VERSION "0.0.0")
+set(accel_control_SETUP_PY_SCRIPTS "")
+set(accel_control_SETUP_PY_PACKAGES "accel_control")
+set(accel_control_SETUP_PY_PACKAGE_DIRS "scripts/accel_control")
+set(accel_control_SETUP_PY_MODULES "")
+set(accel_control_SETUP_PY_MODULE_DIRS "")

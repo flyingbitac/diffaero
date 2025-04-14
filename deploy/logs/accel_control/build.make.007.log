@@ -1,0 +1,19 @@
+[  0%] Built target sensor_msgs_generate_messages_lisp
+[ 18%] Built target accel_control
+[ 18%] Built target sensor_msgs_generate_messages_cpp
+[ 18%] Built target std_msgs_generate_messages_nodejs
+[ 18%] Built target std_msgs_generate_messages_lisp
+[ 18%] Built target sensor_msgs_generate_messages_nodejs
+[ 18%] Built target sensor_msgs_generate_messages_py
+[ 18%] Built target sensor_msgs_generate_messages_eus
+[ 18%] Built target std_msgs_generate_messages_py
+[ 36%] Built target accel_control_sim
+[ 36%] Built target std_msgs_generate_messages_cpp
+[ 36%] Built target std_msgs_generate_messages_eus
+[ 36%] Built target _accel_control_generate_messages_check_deps_DepthImage
+[ 45%] Built target accel_control_generate_messages_lisp
+[ 63%] Built target accel_control_generate_messages_eus
+[ 72%] Built target accel_control_generate_messages_cpp
+[ 90%] Built target accel_control_generate_messages_py
+[100%] Built target accel_control_generate_messages_nodejs
+[100%] Built target accel_control_generate_messages

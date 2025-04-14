@@ -1,0 +1,25 @@
+[  0%] Built target std_msgs_generate_messages_lisp
+[  9%] Built target sensor_msgs_generate_messages_lisp
+[ 18%] Built target accel_control
+[ 18%] Built target std_msgs_generate_messages_eus
+[ 18%] Built target sensor_msgs_generate_messages_eus
+[ 18%] Built target sensor_msgs_generate_messages_cpp
+[ 18%] Built target sensor_msgs_generate_messages_nodejs
+[ 18%] Built target sensor_msgs_generate_messages_py
+[ 18%] Built target std_msgs_generate_messages_nodejs
+[ 36%] Built target accel_control_sim
+[ 36%] Built target std_msgs_generate_messages_cpp
+[ 36%] Built target std_msgs_generate_messages_py
+[ 36%] Built target _accel_control_generate_messages_check_deps_DepthImage
+[ 45%] [34m[1mGenerating Lisp code from accel_control/DepthImage.srv[0m
+[ 54%] [34m[1mGenerating EusLisp code from accel_control/DepthImage.srv[0m
+[ 63%] [34m[1mGenerating C++ code from accel_control/DepthImage.srv[0m
+[ 72%] [34m[1mGenerating Python code from SRV accel_control/DepthImage[0m
+[ 81%] [34m[1mGenerating Javascript code from accel_control/DepthImage.srv[0m
+[ 81%] Built target accel_control_generate_messages_lisp
+[ 81%] Built target accel_control_generate_messages_nodejs
+[ 90%] Built target accel_control_generate_messages_eus
+[100%] [34m[1mGenerating Python srv __init__.py for accel_control[0m
+[100%] Built target accel_control_generate_messages_cpp
+[100%] Built target accel_control_generate_messages_py
+[100%] Built target accel_control_generate_messages

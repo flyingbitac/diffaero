@@ -1,0 +1,8 @@
+prefix=/home/zxh/ws/wrqws/quaddif/deploy/devel
+
+Name: accel_control
+Description: Description of accel_control
+Version: 0.0.0
+Cflags: -I/home/zxh/ws/wrqws/quaddif/deploy/devel/include -I/home/zxh/ws/wrqws/quaddif/deploy/src/accel_control/include
+Libs: -L${prefix}/lib -laccel_control
+Requires: flight_control geometry_msgs mavros_msgs roscpp rospy std_msgs

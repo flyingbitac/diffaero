@@ -1,10 +1,5 @@
 **/__pycache__
+run.sh
 outputs/
-deploy/*
-!deploy/src/
-!deploy/px4_setup.bash
-!deploy/README.md
 imgui.ini
 quaddif.egg-info/
-deploy/src/accel_control/launch/cylinder_positions.txt
-deploy/src/accel_control/launch/testworld.world

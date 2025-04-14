@@ -1,5 +1,8 @@
 name: quadrotor
 
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+dt: ${env.dt}
 m: 1.0                  # total mass
 arm_l: 0.23             # arm length
 c_tau: 0.0133           # torque constant
@@ -13,6 +16,7 @@ min_T: 0.0              # min thrust
 lmbda: 0.1              # acc exp smoothing
 
 solver_type: "rk4" # "rk4" or "euler"
+n_substeps: 1
 
 controller:
   compensate_gravity: False

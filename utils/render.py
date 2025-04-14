@@ -146,6 +146,7 @@ def add_sphere(xyz: Tensor, radius: Tensor, color: Tensor, lat_segments: int = 8
 class BaseRenderer:
     def __init__(self, cfg: DictConfig, device: torch.device, z_ground_plane: Optional[float] = None, headless: bool = False):
         self.n_envs: int = min(cfg.n_envs, cfg.render_n_envs)
+        self.n_agents: int = cfg.n_agents
         self.L: int = cfg.env_spacing
         self.dt: float = cfg.dt
         self.ground_plane: bool = cfg.ground_plane
@@ -154,8 +155,9 @@ class BaseRenderer:
         self.headless = headless
         self.device = device
         
-        # if self.record_video:
-        #     ti.init(arch=ti.vulkan)
+        if self.record_video:
+            assert str(self.device) in ["cpu", "cuda:0"], "Video recording is only supported on cpu and cuda:0."
+        
         if "cpu" in str(self.device):
             print("Using CPU to render the GUI.")
             ti.init(arch=ti.cpu)
@@ -165,28 +167,28 @@ class BaseRenderer:
         
         N = torch.ceil(torch.sqrt(torch.tensor(self.n_envs, device=self.device))).int()
         assert N * N >= self.n_envs
-        x = y = torch.arange(N, device=self.device, dtype=torch.float32) * self.L
+        x = y = torch.arange(N, device=self.device, dtype=torch.float32) * self.L * 2
         xy = torch.stack(torch.meshgrid(x, y, indexing="ij"), dim=-1).reshape(-1, 2)
-        xy -= (N-1) * self.L / 2
+        xy -= (N-1) * self.L
         xyz = torch.cat([xy, torch.zeros_like(xy[:, :1])], dim=-1)
-        self.env_origin = xyz[:self.n_envs]
+        self.env_origin = xyz[:self.n_envs] # [n_envs, 3]
         
         n_boxes_per_drone = 4 # use 4 boxes to represent a drone simply
         self.drone_mesh_dict = {
-            "vertices":         ti.Vector.field(3, ti.f32, shape=(self.n_envs *  8*n_boxes_per_drone)),
-            "indices":                 ti.field(   ti.i32, shape=(self.n_envs * 36*n_boxes_per_drone)),
-            "per_vertex_color": ti.Vector.field(3, ti.f32, shape=(self.n_envs *  8*n_boxes_per_drone))
+            "vertices":         ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_agents *  8*n_boxes_per_drone)),
+            "indices":                 ti.field(   ti.i32, shape=(self.n_envs * self.n_agents * 36*n_boxes_per_drone)),
+            "per_vertex_color": ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_agents *  8*n_boxes_per_drone))
         }
         self.drone_mesh_dict_one_env = {
-            "vertices":         ti.Vector.field(3, ti.f32, shape=( 8*n_boxes_per_drone, )),
-            "indices":                 ti.field(   ti.i32, shape=(36*n_boxes_per_drone, )),
-            "per_vertex_color": ti.Vector.field(3, ti.f32, shape=( 8*n_boxes_per_drone, ))
+            "vertices":         ti.Vector.field(3, ti.f32, shape=(self.n_agents *  8*n_boxes_per_drone, )),
+            "indices":                 ti.field(   ti.i32, shape=(self.n_agents * 36*n_boxes_per_drone, )),
+            "per_vertex_color": ti.Vector.field(3, ti.f32, shape=(self.n_agents *  8*n_boxes_per_drone, ))
         }
-        self.drone_vertices_tensor = torch.empty(self.n_envs, 32, 3, device=self.device)
+        self.drone_vertices_tensor = torch.empty(self.n_envs, self.n_agents, 32, 3, device=self.device)
         self._init_drone_model()
         
         if self.ground_plane:
-            ground_plane_size = int(N.item() * self.L + self.L)
+            ground_plane_size = int(N.item() * self.L * 2 + self.L)
             edge_length = 5
             self.n_plane: int = torch.ceil(torch.tensor(ground_plane_size / edge_length)).int().item()
             n_ground_faces = self.n_plane * self.n_plane
@@ -205,11 +207,14 @@ class BaseRenderer:
             "enable_lightsource": True,
             "brightness": 1.0,
             "display_basis": False,
+            "display_target_line": True,
             "display_groundplane": True,
             "tracking_view": False,
+            "render_one_env": False,
             "fpp_view": False,
             "lookat_target": False,
-            "tracking_env_idx": 0
+            "tracking_env_idx": 0,
+            "tracking_agent_idx": 0
         }
         if self.record_video:
             self.video_H, self.video_W, self.video_fov = cfg.video_camera.height, cfg.video_camera.width, cfg.video_camera.fov
@@ -223,8 +228,7 @@ class BaseRenderer:
             "lookat": self.gui_camera.curr_lookat,
             "up": self.gui_camera.curr_up,
         }
-    
-    def _init_viewer(self):
+        
         end_points = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
         self.axis_lines = [(ti.Vector.field(3, ti.f32, shape=2), tuple(end_points[i])) for i in range(3)]
         for i, end_point in enumerate(end_points):
@@ -232,7 +236,13 @@ class BaseRenderer:
                 [0, 0, 0],
                 end_point
             ], dtype=torch.float32, device=self.device)))
-        
+        self.target_line_vertices         = ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_agents * 2))
+        self.target_line_colors           = ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.n_agents * 2))
+        self.target_line_vertices_one_env = ti.Vector.field(3, ti.f32, shape=(self.n_agents * 2))
+        self.target_line_colors_one_env   = ti.Vector.field(3, ti.f32, shape=(self.n_agents * 2))
+        self.target_line_color_tensor = torch.zeros(self.n_envs, self.n_agents, 3, device=self.device)
+    
+    def _init_viewer(self):
         self.gui_window = ti.ui.Window(
             name='Renderer Running at',
             res=(1280, 900),
@@ -247,12 +257,12 @@ class BaseRenderer:
         self.gui_camera.position(-1.5*env_bound, 0.5*env_bound, -1.8*env_bound)  # x, y, z
         self.gui_camera.lookat(0, -0.1*env_bound, 0)
         self.gui_camera.up(0, 1, 0) 
-        self.gui_camera.z_far(200)
+        # self.gui_camera.z_far(200)
         self.gui_camera.projection_mode(ti.ui.ProjectionMode.Perspective)
         self.gui_canvas = self.gui_window.get_canvas()
         
         if self.record_video:
-            self.video_window = ti.ui.Window(name=f"Env {i}", res=(self.video_W, self.video_H), fps_limit=int(1/self.dt), show_window=False)
+            self.video_window = ti.ui.Window(name=f"Env", res=(self.video_W, self.video_H), fps_limit=int(1/self.dt), show_window=False)
             self.video_gui    = self.video_window.get_gui()
             self.video_scene  = self.video_window.get_scene()
             self.video_camera = ti.ui.make_camera()
@@ -310,24 +320,24 @@ class BaseRenderer:
                 [-D,  D, 0],
                 [ D, -D, 0],
                 [-D, -D, 0]], device=self.device
-            ).unsqueeze(0).expand(self.n_envs, -1, -1),
+            ).reshape(1, 1, 4, 3).expand(self.n_envs, self.n_agents, -1, -1),
             lwh=torch.tensor([
                 [L, l, l],
                 [l, L, l],
                 [l, L, l],
                 [L, l, l]], device=self.device
-            ).unsqueeze(0).expand(self.n_envs, -1, -1),
+            ).reshape(1, 1, 4, 3).expand(self.n_envs, self.n_agents, -1, -1),
             rpy=torch.tensor([
                 [0, 0, torch.pi/4]
-            ], device=self.device).unsqueeze(0).expand(self.n_envs, 4, -1),
+            ], device=self.device).reshape(1, 1, 1, 3).expand(self.n_envs, self.n_agents, 4, -1),
             color=torch.tensor([
                 [0.8867, 0.9219, 0.1641],
                 [0.5156, 0.1016, 0.5391],
                 [0.8867, 0.9219, 0.1641],
                 [0.5156, 0.1016, 0.5391]], device=self.device
-            ).unsqueeze(0).expand(self.n_envs, -1, -1)
+            ).reshape(1, 1, 4, 3).expand(self.n_envs, self.n_agents, -1, -1)
         )
-        self.drone_vertices_tensor.copy_(vertices_tensor.reshape(self.n_envs, -1, 3))
+        self.drone_vertices_tensor.copy_(vertices_tensor.reshape(self.n_envs, self.n_agents, -1, 3))
         self.drone_mesh_dict["vertices"].from_torch(torch2ti(self.drone_vertices_tensor.flatten(end_dim=-2)))
         self.drone_mesh_dict["indices"].from_torch(indices_tensor.flatten())
         self.drone_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
@@ -337,13 +347,13 @@ class BaseRenderer:
     
     def _update_drone_pose(
         self,
-        pos: Tensor,      # [n_envs, 3]
-        quat_xyzw: Tensor # [n_envs, 4]
+        pos: Tensor,      # [n_envs, n_agents, 3]
+        quat_xyzw: Tensor # [n_envs, n_agents, 4]
     ):
         rotation_matrix = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
-        drone_vertices_tensor = torch.bmm(self.drone_vertices_tensor, rotation_matrix.transpose(-2, -1))
-        absolute_pos = pos + self.env_origin
-        drone_vertices_tensor = drone_vertices_tensor + absolute_pos.unsqueeze(-2)
+        drone_vertices_tensor = torch.matmul(self.drone_vertices_tensor, rotation_matrix.transpose(-2, -1))
+        absolute_pos = pos + self.env_origin.unsqueeze(1)
+        drone_vertices_tensor = drone_vertices_tensor + absolute_pos.unsqueeze(-2) # [n_envs, n_agents, 32, 3]
         if self.enable_rendering:
             self.drone_mesh_dict["vertices"].from_torch(torch2ti(drone_vertices_tensor.flatten(end_dim=-2)))
         
@@ -352,31 +362,37 @@ class BaseRenderer:
 
     def _update_camera_pose(
         self,
-        pos: Tensor,        # [n_envs, 3]
-        quat_xyzw: Tensor,  # [n_envs, 4]
-        target_pos: Tensor, # [n_envs, 3]
+        pos: Tensor,        # [n_envs, n_agents, 3]
+        quat_xyzw: Tensor,  # [n_envs, n_agents, 4]
+        target_pos: Tensor, # [n_envs, n_agents, 3]
     ):
         rotation_matrix = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
-        absolute_pos = pos + self.env_origin
-        idx = self.gui_states["tracking_env_idx"]
+        absolute_pos = pos + self.env_origin.unsqueeze(1)
         unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
         
         if self.gui_states["tracking_view"]:
-            idx = self.gui_states["tracking_env_idx"]
+            env_idx = self.gui_states["tracking_env_idx"]
+            agent_idx = self.gui_states["tracking_agent_idx"]
+            pos_tracked = pos[env_idx, agent_idx]
+            absolute_pos_tracked = absolute_pos[env_idx, agent_idx]
+            rotation_matrix_tracked = rotation_matrix[env_idx, agent_idx]
+            target_pos_tracked = target_pos[env_idx, agent_idx]
+            quat_xyzw_tracked = quat_xyzw[env_idx, agent_idx]
+            
             if self.gui_states["fpp_view"]:
-                campos_w = absolute_pos[idx]
-                lookat = torch.mm(rotation_matrix[idx], torch.tensor([[1., 0., 0.]], device=self.device).T).T + absolute_pos[idx]
+                campos_w = absolute_pos_tracked
+                lookat = torch.mm(rotation_matrix_tracked, torch.tensor([[1., 0., 0.]], device=self.device).T).T + absolute_pos_tracked
                 up_b = torch.tensor([[0., 0., 1.]], device=self.device)
-                up_w = torch.mm(rotation_matrix[idx], up_b.T).T
+                up_w = torch.mm(rotation_matrix_tracked, up_b.T).T
             else:
                 if self.gui_states["lookat_target"]:
-                    target_relpos = target_pos[idx] - pos[idx]
+                    target_relpos = target_pos_tracked - pos_tracked
                     yaw_rotmat = axis_rotmat("Z", torch.atan2(target_relpos[1], target_relpos[0]))
                 else:
-                    yaw_rotmat = axis_rotmat("Z", quaternion_to_euler(quat_xyzw[idx])[..., -1])
+                    yaw_rotmat = axis_rotmat("Z", quaternion_to_euler(quat_xyzw_tracked)[..., -1])
                 campos_b = torch.tensor([[-1., 0., 0.5]], device=self.device)
-                campos_w = torch.mm(yaw_rotmat, campos_b.T).T + absolute_pos[idx]
-                lookat = absolute_pos[idx]
+                campos_w = torch.mm(yaw_rotmat, campos_b.T).T + absolute_pos_tracked
+                lookat = absolute_pos_tracked
                 up_w = torch.tensor([[0., 0., 1.]], device=self.device)
             cam_state = {
                 "position": unbind(campos_w),
@@ -385,16 +401,39 @@ class BaseRenderer:
             self._set_camera_state(self.gui_camera, cam_state, fov=90.)
         
         if self.record_video:
-            self.video_cam_pos.copy_(absolute_pos)
+            self.video_cam_pos.copy_(absolute_pos[:, 0])
             lookat_b = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.n_envs, -1, -1)
-            lookat_w = torch.bmm(lookat_b, rotation_matrix.transpose(-2, -1)).squeeze(1) + absolute_pos
+            lookat_w = torch.bmm(lookat_b, rotation_matrix[:, 0].transpose(-2, -1)).squeeze(1) + absolute_pos[:, 0]
             self.video_cam_lookat.copy_(lookat_w)
             up_b = torch.tensor([[0., 0., 1.]], device=self.device).expand(self.n_envs, -1, -1)
-            up_w = torch.bmm(up_b, rotation_matrix.transpose(-2, -1)).squeeze(1)
+            up_w = torch.bmm(up_b, rotation_matrix[:, 0].transpose(-2, -1)).squeeze(1)
             self.video_cam_up.copy_(up_w)
     
-    def step(self, state: Tensor):
-        return NotImplementedError
+    def _update_lines(self, drone_pos: Tensor, target_pos: Tensor):
+        idx = self.gui_states["tracking_env_idx"]
+        target_line_vertices_tensor = torch.stack([drone_pos, target_pos], dim=-2) + self.env_origin.reshape(self.n_envs, 1, 1, 3)
+        self.target_line_vertices.from_torch(torch2ti(target_line_vertices_tensor.flatten(end_dim=-2)))
+        self.target_line_vertices_one_env.from_torch(torch2ti(target_line_vertices_tensor[idx].flatten(end_dim=-2)))
+        factory_kwargs = {"dtype": torch.float32, "device": self.device}
+        near_target = (drone_pos-target_pos).norm(dim=-1).lt(0.5).unsqueeze(-1).expand(-1, -1, 3)
+        white = torch.tensor([[[1., 1., 1.]]], **factory_kwargs).expand(self.n_envs, self.n_agents, -1)
+        # red = torch.tensor([[1., 0., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        # yellow = torch.tensor([[0.7, 0.7, 0.2]], **factory_kwargs).expand_as(self.target_line_color_tensor)
+        green = torch.tensor([[[0., 1., 0.]]], **factory_kwargs).expand(self.n_envs, self.n_agents, -1)
+        self.target_line_color_tensor = torch.where(near_target, green, white)
+        target_line_color_tensor = self.target_line_color_tensor.unsqueeze(-2).expand(-1, -1, 2, -1)
+        self.target_line_colors.from_torch(target_line_color_tensor.flatten(end_dim=-2))
+        self.target_line_colors_one_env.from_torch(target_line_color_tensor[idx].flatten(end_dim=-2))
+    
+    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
+        if self.enable_rendering:
+            if self.n_agents == 1:
+                drone_pos.unsqueeze_(1)
+                drone_quat_xyzw.unsqueeze_(1)
+                target_pos.unsqueeze_(1)
+            self._update_drone_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
+            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs], target_pos[:self.n_envs])
+            self._update_lines(drone_pos[:self.n_envs], target_pos[:self.n_envs])
     
     def _render_subwindow(self):
         self.gui_states["reset_all"] = False
@@ -407,22 +446,32 @@ class BaseRenderer:
                 self.enable_rendering = False
                 sub_window.text("Rendering paused. Press \"V\" to resume.")
                 tqdm.write("Rendering paused. Press \"V\" to resume.")
-            self.gui_states["enable_lightsource"] = sub_window.checkbox("(L) Enable Light Source", self.gui_states["enable_lightsource"])
+            self.gui_states["enable_lightsource"] = sub_window.checkbox("Enable Light Source", self.gui_states["enable_lightsource"])
             if self.gui_states["enable_lightsource"]:
                 self.gui_states["brightness"] = sub_window.slider_float("Brightness", self.gui_states["brightness"], minimum=0, maximum=1)
             self.gui_states["display_basis"] = sub_window.checkbox("(B) Display Axis Basis", self.gui_states["display_basis"])
+            self.gui_states["display_target_line"] = sub_window.checkbox("(L) Display Target Line", self.gui_states["display_target_line"])
             if self.ground_plane:
                 self.gui_states["display_groundplane"] = sub_window.checkbox("(G) Display Ground Plane", self.gui_states["display_groundplane"])
             prev_tracking_mode = self.gui_states["tracking_view"]
-            self.gui_states["tracking_view"] = sub_window.checkbox("(T) Tracking View", self.gui_states["tracking_view"])
-            if self.gui_states["tracking_view"]:
-                self.gui_states["fpp_view"] = sub_window.checkbox("(F) First Person View", self.gui_states["fpp_view"])
-                self.gui_states["lookat_target"] = sub_window.checkbox("Look at Target", self.gui_states["lookat_target"])
+            self.gui_states["render_one_env"] = sub_window.checkbox("(O) Render selected env only", self.gui_states["render_one_env"])
+            if self.gui_states["render_one_env"]:
                 self.gui_states["tracking_env_idx"] = sub_window.slider_int(
                     "Tracking Env Index",
                     self.gui_states["tracking_env_idx"],
                     minimum=0,
                     maximum=self.n_envs-1)
+                self.gui_states["tracking_agent_idx"] = sub_window.slider_int(
+                    "Tracking Agent Index",
+                    self.gui_states["tracking_agent_idx"],
+                    minimum=0,
+                    maximum=self.n_agents-1)
+            self.gui_states["tracking_view"] = sub_window.checkbox("(T) Tracking View", self.gui_states["tracking_view"])
+            if self.gui_states["tracking_view"]:
+                if not self.gui_states["render_one_env"]:
+                    self.gui_states["render_one_env"] = True
+                self.gui_states["fpp_view"] = sub_window.checkbox("(F) First Person View", self.gui_states["fpp_view"])
+                self.gui_states["lookat_target"] = sub_window.checkbox("Look at Target", self.gui_states["lookat_target"])
         
         # Track user inputs
         if self.gui_window.get_event(ti.ui.PRESS):
@@ -433,19 +482,26 @@ class BaseRenderer:
             if self.gui_window.event.key == 'r':
                 self.gui_states["reset_all"] = True
             if self.gui_window.event.key == 'l':
-                self.gui_states["enable_lightsource"] = not self.gui_states["enable_lightsource"]
+                self.gui_states["display_target_line"] = not self.gui_states["display_target_line"]
             if self.gui_window.event.key == 'b':
                 self.gui_states["display_basis"] = not self.gui_states["display_basis"]
             if self.gui_window.event.key == 'g':
                 self.gui_states["display_groundplane"] = not self.gui_states["display_groundplane"]
+            if self.gui_window.event.key == 'o':
+                self.gui_states["render_one_env"] = not self.gui_states["render_one_env"]
             if self.gui_window.event.key == 't':
                 self.gui_states["tracking_view"] = not self.gui_states["tracking_view"]
             if self.gui_window.event.key == 'f':
                 self.gui_states["fpp_view"] = not self.gui_states["fpp_view"]
-            if self.gui_states["tracking_view"] and self.gui_window.is_pressed(ti.ui.RIGHT):
-                self.gui_states["tracking_env_idx"] = (self.gui_states["tracking_env_idx"] + 1) % self.n_envs
-            elif self.gui_states["tracking_view"] and self.gui_window.is_pressed(ti.ui.LEFT):
-                self.gui_states["tracking_env_idx"] = (self.gui_states["tracking_env_idx"] + self.n_envs - 1) % self.n_envs
+            if self.gui_states["render_one_env"]:
+                if self.gui_window.is_pressed(ti.ui.RIGHT):
+                    self.gui_states["tracking_env_idx"] = (self.gui_states["tracking_env_idx"] + 1) % self.n_envs
+                elif self.gui_window.is_pressed(ti.ui.LEFT):
+                    self.gui_states["tracking_env_idx"] = (self.gui_states["tracking_env_idx"] + self.n_envs - 1) % self.n_envs
+                elif self.gui_window.is_pressed(ti.ui.UP):
+                    self.gui_states["tracking_agent_idx"] = (self.gui_states["tracking_agent_idx"] + 1) % self.n_agents
+                elif self.gui_window.is_pressed(ti.ui.DOWN):
+                    self.gui_states["tracking_agent_idx"] = (self.gui_states["tracking_agent_idx"] + self.n_agents - 1) % self.n_agents
         
         if prev_tracking_mode != self.gui_states["tracking_view"]:
             if not self.gui_states["tracking_view"]:
@@ -495,7 +551,7 @@ class BaseRenderer:
                 self.gui_scene.mesh(**self.ground_plane_mesh_dict)
             
             # render drones
-            if self.gui_states["tracking_view"]:
+            if self.gui_states["render_one_env"]:
                 self.gui_scene.mesh(**self.drone_mesh_dict_one_env)
             else:
                 self.gui_scene.mesh(**self.drone_mesh_dict)
@@ -525,23 +581,27 @@ class BaseRenderer:
         if self.gui_states["display_basis"]:
             for line, color in self.axis_lines:
                 self.gui_scene.lines(line, color=color, width=5.0)
+        if self.gui_states["display_target_line"]:
+            if self.gui_states["render_one_env"]:
+                vertices, colors = self.target_line_vertices_one_env, self.target_line_colors_one_env
+            else:
+                vertices, colors = self.target_line_vertices, self.target_line_colors
+            self.gui_scene.lines(vertices=vertices, per_vertex_color=colors, width=1.0)
     
     def _render_obstacles(self):
         pass
     
     def close(self):
-        self.gui_window.destroy()
+        if not self.headless:
+            self.gui_window.destroy()
         if self.record_video:
             self.video_window.destroy()
+
 
 class PositionControlRenderer(BaseRenderer):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
-    
-    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
-        if self.enable_rendering:
-            self._update_drone_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
-            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs], target_pos[:self.n_envs])
+            
 
 class ObstacleAvoidanceRenderer(BaseRenderer):
     def __init__(
@@ -552,7 +612,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         z_ground_plane: float,
         headless: bool
     ):
-        cfg.env_spacing = cfg.env_spacing + 3
         super().__init__(cfg, device, z_ground_plane=z_ground_plane, headless=headless)
         self.obstacle_manager = obstacle_manager
         self.cube_color = [0.8, 0.3, 0.1]
@@ -626,27 +685,9 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.sphere_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
     
     def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
+        super().step(drone_pos, drone_quat_xyzw, target_pos)
         if self.enable_rendering:
-            self._update_drone_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs])
-            self._update_camera_pose(drone_pos[:self.n_envs], drone_quat_xyzw[:self.n_envs], target_pos[:self.n_envs])
             self._update_obstacles()
-            self._update_lines(drone_pos[:self.n_envs], target_pos[:self.n_envs])
-    
-    def _update_lines(self, drone_pos: Tensor, target_pos: Tensor):
-        idx = self.gui_states["tracking_env_idx"]
-        target_line_vertices_tensor = torch.stack([drone_pos, target_pos], dim=-2) + self.env_origin.unsqueeze(-2)
-        self.target_line_vertices.from_torch(torch2ti(target_line_vertices_tensor.flatten(end_dim=-2)))
-        self.target_line_vertices_one_env.from_torch(torch2ti(target_line_vertices_tensor[idx].flatten(end_dim=-2)))
-        factory_kwargs = {"dtype": torch.float32, "device": self.device}
-        white = torch.tensor([[1., 1., 1.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
-        # red = torch.tensor([[1., 0., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
-        # yellow = torch.tensor([[0.7, 0.7, 0.2]], **factory_kwargs).expand_as(self.target_line_color_tensor)
-        green = torch.tensor([[0., 1., 0.]], **factory_kwargs).expand_as(self.target_line_color_tensor)
-        near_target = (drone_pos-target_pos).norm(dim=-1).lt(0.5).unsqueeze(-1).expand(-1, 3)
-        self.target_line_color_tensor = torch.where(near_target, green, white)
-        target_line_color_tensor = self.target_line_color_tensor.unsqueeze(-2).expand(-1, 2, -1)
-        self.target_line_colors.from_torch(target_line_color_tensor.flatten(end_dim=-2))
-        self.target_line_colors_one_env.from_torch(target_line_color_tensor[idx].flatten(end_dim=-2))
     
     def _update_obstacles(self):
         idx = self.gui_states["tracking_env_idx"]
@@ -673,19 +714,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         else:
             self.gui_scene.mesh(**self.cube_mesh_dict)
             self.gui_scene.mesh(**self.sphere_mesh_dict)
-
-    def _render_lines(self):
-        super()._render_lines()
-        if self.gui_states["tracking_view"]:
-            self.gui_scene.lines(
-                self.target_line_vertices_one_env,
-                per_vertex_color=self.target_line_colors_one_env,
-                width=1.0)
-        else:
-            self.gui_scene.lines(
-                self.target_line_vertices,
-                per_vertex_color=self.target_line_colors,
-                width=1.0)
     
     def render_fpp(self):
         assert self.record_video

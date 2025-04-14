@@ -1,0 +1,38 @@
+[35m[1mScanning dependencies of target accel_control_sim[0m
+[35m[1mScanning dependencies of target _accel_control_generate_messages_check_deps_DepthImage[0m
+[35m[1mScanning dependencies of target std_msgs_generate_messages_lisp[0m
+[35m[1mScanning dependencies of target accel_control[0m
+[35m[1mScanning dependencies of target std_msgs_generate_messages_eus[0m
+[35m[1mScanning dependencies of target std_msgs_generate_messages_py[0m
+[35m[1mScanning dependencies of target std_msgs_generate_messages_cpp[0m
+[35m[1mScanning dependencies of target std_msgs_generate_messages_nodejs[0m
+[  0%] Built target sensor_msgs_generate_messages_lisp
+[  0%] Built target sensor_msgs_generate_messages_eus
+[  0%] Built target std_msgs_generate_messages_lisp
+[  0%] Built target std_msgs_generate_messages_eus
+[  0%] Built target sensor_msgs_generate_messages_cpp
+[  9%] [32mBuilding CXX object CMakeFiles/accel_control.dir/src/AccelControlSim.cpp.o[0m
+[  9%] Built target std_msgs_generate_messages_py
+[ 18%] [32mBuilding CXX object CMakeFiles/accel_control_sim.dir/src/AccelControlSim.cpp.o[0m
+[ 18%] Built target sensor_msgs_generate_messages_py
+[ 18%] Built target std_msgs_generate_messages_cpp
+[ 18%] Built target sensor_msgs_generate_messages_nodejs
+[ 18%] Built target std_msgs_generate_messages_nodejs
+[ 18%] Built target _accel_control_generate_messages_check_deps_DepthImage
+[ 54%] [34m[1mGenerating EusLisp code from accel_control/DepthImage.srv[0m
+[ 54%] [34m[1mGenerating Lisp code from accel_control/DepthImage.srv[0m
+[ 54%] [34m[1mGenerating C++ code from accel_control/DepthImage.srv[0m
+[ 54%] [34m[1mGenerating EusLisp manifest code for accel_control[0m
+[ 63%] [34m[1mGenerating Javascript code from accel_control/DepthImage.srv[0m
+[ 72%] [34m[1mGenerating Python code from SRV accel_control/DepthImage[0m
+[ 72%] Built target accel_control_generate_messages_lisp
+[ 72%] Built target accel_control_generate_messages_nodejs
+[ 81%] [34m[1mGenerating Python srv __init__.py for accel_control[0m
+[ 81%] Built target accel_control_generate_messages_cpp
+[ 81%] Built target accel_control_generate_messages_py
+[ 81%] Built target accel_control_generate_messages_eus
+[ 81%] Built target accel_control_generate_messages
+[100%] [32m[1mLinking CXX executable /home/zxh/ws/quaddif/deploy/devel/.private/accel_control/lib/accel_control/accel_control_sim[0m
+[100%] [32m[1mLinking CXX shared library /home/zxh/ws/quaddif/deploy/devel/.private/accel_control/lib/libaccel_control.so[0m
+[100%] Built target accel_control
+[100%] Built target accel_control_sim

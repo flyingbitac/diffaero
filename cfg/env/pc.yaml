@@ -4,8 +4,10 @@ dynamics: ${dynamics}
 dt: 0.0333
 length: 10
 n_envs: ${n_envs}
+n_agents: ${n_agents}
 max_time: 20
-max_vel: 5.
+max_target_vel: 10.
+min_target_vel: 5.
 
 solver_type: 
 n_substeps: 1

@@ -11,6 +11,7 @@ from quaddif.env.base_env import BaseEnv
 from quaddif.utils.sensor import Camera, LiDAR
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.assets import ObstacleManager
+from quaddif.utils.runner import timeit
 
 class ObstacleAvoidance(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -33,10 +34,10 @@ class ObstacleAvoidance(BaseEnv):
             # relative position of obstacles as additional observation
             H, W = self.n_obstacles, 3
         
-        self.state_dim = (10, (H, W)) # flattened depth image as additional observation
+        self.obs_dim = (10, (H, W)) # flattened depth image as additional observation
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
-        need_renderer = (not cfg.render.headless) or cfg.render.record_video
+        need_renderer = (not cfg.render.headless) or (hasattr(cfg.render, "record_video") and cfg.render.record_video)
         if need_renderer:
             self.renderer = ObstacleAvoidanceRenderer(
                 cfg=cfg.render,
@@ -47,19 +48,21 @@ class ObstacleAvoidance(BaseEnv):
         else:
             self.renderer = None
         
-        self.action_dim = self.model.action_dim
+        self.action_dim = self.dynamics.action_dim
         self.r_drone: float = cfg.r_drone
     
-    def state(self, with_grad=False):
+    @timeit
+    def get_observations(self, with_grad=False):
         if self.dynamic_type == "pointmass":
-            state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
+            obs = torch.cat([self.target_vel, self.q, self._v], dim=-1)
         else:
-            state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
-        state = TensorDict({
-            "state": state, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
-        state = state if with_grad else state.detach()
-        return state
+            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+        obs = TensorDict({
+            "state": obs, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
+        obs = obs if with_grad else obs.detach()
+        return obs
     
+    @timeit
     def update_sensor_data(self):
         if self.sensor_type == "camera" or self.sensor_type == "lidar":
             H, W = self.sensor_tensor.shape[1:]
@@ -80,9 +83,10 @@ class ObstacleAvoidance(BaseEnv):
             sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
             self.sensor_tensor.copy_(obst_relpos.gather(dim=1, index=sorted_idx))
     
-    def step(self, action):
-        # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-        self.model.step(action)
+    @timeit
+    def step(self, action, need_obs_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+        self.dynamics.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
         if self.renderer is not None:
@@ -103,17 +107,25 @@ class ObstacleAvoidance(BaseEnv):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            "next_state_before_reset": self.state(with_grad=True),
             "loss_components": loss_components,
-            "sensor": self.sensor_tensor.clone(),
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
+            "sensor": self.sensor_tensor.clone()
         }
+        if need_obs_before_reset:
+            extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.state(), loss, terminated, extra
+        return self.get_observations(), loss, terminated, extra
     
     def state_for_render(self):
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
+    @timeit
     def loss_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
         virtual_radius = 0.2
@@ -137,17 +149,18 @@ class ObstacleAvoidance(BaseEnv):
         avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
         oa_loss = approaching_penalty - 0.5 * avoiding_reward
         
-        collision_loss = self.collision().float() * 100.
+        collision_loss = self.collision().float() * 10.
         
         if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            vel_diff = (self.model._vel_ema - self.target_vel).norm(dim=-1)
+            vel_diff = self.dynamics._vel_ema - self.target_vel
+            vel_diff = torch.norm(vel_diff * torch.tensor([[1, 1, 2]], device=self.device), dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 4 * oa_loss + 0.03 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.005 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -175,9 +188,10 @@ class ObstacleAvoidance(BaseEnv):
             }
         return total_loss, loss_components
 
+    @timeit
     def reset_idx(self, env_idx):
         n_resets = len(env_idx)
-        state_mask = torch.zeros_like(self.model._state, dtype=torch.bool)
+        state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
         
         xy_min, xy_max = -self.L+0.5, self.L-0.5
@@ -186,13 +200,13 @@ class ObstacleAvoidance(BaseEnv):
             torch.rand((self.n_envs, 2), device=self.device) * (xy_max - xy_min) + xy_min,
             torch.rand((self.n_envs, 1), device=self.device) * (z_max - z_min) + z_min
         ], dim=-1)
-        new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.model.state_dim-3, device=self.device)], dim=-1)
+        new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.dynamics.state_dim-3, device=self.device)], dim=-1)
         if self.dynamic_type == "quadrotor":
             new_state[:, 6] = 1 # real part of the quaternion
         elif self.dynamic_type == "pointmass":
             new_state[:, -1] = 9.8
-        self.model._state = torch.where(state_mask, new_state, self.model._state)
-        self.model.reset_idx(env_idx)
+        self.dynamics._state = torch.where(state_mask, new_state, self.dynamics._state)
+        self.dynamics.reset_idx(env_idx)
         
         min_init_dist = 1.3 * self.L
         # randomly select a target position that meets the minimum distance constraint
@@ -221,34 +235,21 @@ class ObstacleAvoidance(BaseEnv):
             env_idx=env_idx,
             drone_init_pos=self.p[env_idx],
             target_pos=self.target_pos[env_idx],
-            safety_range=self.r_drone+0.3
+            safety_range=self.r_drone+1.5
         )
             
         self.progress[env_idx] = 0
         self.arrive_time[env_idx] = 0
-        
-    # def grid(self, x_min:float, x_max:float, y_min:float, y_max:float, z_min:float, z_max:float, n_points:int):
-    #     x_range = torch.linspace(x_min, x_max, n_points, device=self.device)
-    #     y_range = torch.linspace(y_min, y_max, n_points, device=self.device)
-    #     z_range = torch.linspace(z_min, z_max, n_points, device=self.device)
-    #     grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1)
-    #     grid_xyz = self.p.unsqueeze(1).expand(-1, n_points**3, -1) + grid_xyz_range.reshape(-1, 3) # [n_envs, n_points**3, 3]
-    #     dist2sphere = torch.norm(grid_xyz.unsqueeze(2) - self.obstacle_manager.p_spheres.unsqueeze(1), dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(1) # [n_envs, n_points**3, n_spheres]
-    #     occupancy_sphere = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2sphere) # [n_envs, n_points**3]
-    #     nearest_point2cube = grid_xyz.unsqueeze(2).clamp(min=self.obstacle_manager.box_min.unsqueeze(1), max=self.obstacle_manager.box_max.unsqueeze(1)) # [n_envs, n_points**3, n_cubes, 3]
-    #     dist2cube = torch.norm(nearest_point2cube - grid_xyz.unsqueeze(2), dim=-1) # [n_envs, n_points**3, n_cubes]
-    #     occupancy_cube = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2cube) # [n_envs, n_points**3]
-    #     occupancy = occupancy_sphere | occupancy_cube # [n_envs, n_points**3]
-    #     if self.z_ground_plane is not None:
-    #         occupancy = occupancy | (grid_xyz[..., 2] - self.r_drone < self.z_ground_plane)
-    #     return occupancy # [n_envs, n_points**3]
+        self.max_vel[env_idx] = torch.rand(
+            n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
     
     def reset(self):
         super().reset()
         if self.renderer is not None:
             self.renderer.step(**self.state_for_render())
-        return self.state()
+        return self.get_observations()
     
+    @timeit
     def collision(self) -> Tensor:
         # check if the distance between the drone's mass center and the sphere's center is less than the sum of their radius
         dist2sphere = torch.norm(self.p.unsqueeze(1) - self.obstacle_manager.p_spheres, dim=-1) - self.obstacle_manager.r_spheres # [n_envs, n_spheres]
@@ -315,12 +316,13 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
     
-    def state(self):
+    def get_observations(self):
         return self.p, self.q, self.v, self.a, self.target_vel, self.sensor_tensor.unsqueeze(1)
     
+    @timeit
     def step(self, action):
         # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-        self.model.step(action)
+        self.dynamics.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
         if self.renderer is not None:
@@ -342,18 +344,26 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             "success": success,
             "arrive_time": self.arrive_time.clone(),
             "loss_components": loss_components,
-            "sensor": self.sensor_tensor.clone(),
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
+            "sensor": self.sensor_tensor.clone()
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.state(), loss, terminated, extra
+        return self.get_observations(), loss, terminated, extra
     
+    @timeit
     def loss_fn(self, _p, _v, _a):
         # type: (ObstacleAvoidance, Tensor, Tensor, Tensor) -> Tuple[Tensor, Dict[str, float], Tensor]
         p, v, a = _p.detach(), _v.detach(), _a.detach()
-        target_relpos = self.target_pos.unsqueeze(1) - p
+        target_relpos = self.target_pos.unsqueeze(1) - _p
         target_dist = target_relpos.norm(dim=-1)
-        target_vel = target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
+        target_vel = target_relpos / torch.max(target_dist / self.max_vel.unsqueeze(-1), torch.ones_like(target_dist)).unsqueeze(-1)
+        target_vel.detach_()
         virtual_radius = 0.2
         # calculating the closest point on each sphere to the quadrotor
         sphere_relpos = self.obstacle_manager.p_spheres.unsqueeze(2) - p.unsqueeze(1) # [n_envs, n_spheres, 3]
@@ -375,7 +385,8 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dist2surface.neg().exp()).max(dim=1) # [n_envs]
         avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dist2surface.neg().exp() # [n_envs, n_obstacles]
         avoiding_reward = avoiding_reward.gather(dim=1, index=most_dangerous.unsqueeze(1)).squeeze(1) # [n_envs]
-        oa_loss = approaching_penalty - 0.5 * avoiding_reward
+        oa_loss = approaching_penalty - 0.2 * avoiding_reward
+        # oa_loss = approaching_penalty
         
         pos_loss = 1 - target_relpos.norm(dim=-1).neg().exp()
         
@@ -386,7 +397,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         collision = collision | (p[..., 2] - self.r_drone < self.z_ground_plane)
         # out_of_bound = torch.any(p < -1.5*self.L, dim=-1) | torch.any(p > 1.5*self.L, dim=-1)
         
-        total_loss = vel_loss + 4 * oa_loss + 5 * pos_loss + collision.float() * 0
+        total_loss = vel_loss + 4 * oa_loss + 0 * pos_loss + collision.float() * 0
         loss_components = {
             "vel_loss": vel_loss.mean().item(),
             "pos_loss": pos_loss.mean().item(),

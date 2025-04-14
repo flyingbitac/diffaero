@@ -3,10 +3,7 @@ import copy
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
-import torch
 from torch.utils.tensorboard import SummaryWriter
-
-from quaddif import QUADDIF_ROOT_DIR
 
 class Logger:
     def __init__(
@@ -18,9 +15,7 @@ class Logger:
         assert type.lower() in ['tensorboard', 'wandb']
         self.cfg = copy.deepcopy(cfg)
         self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-        if run_name != "":
-            run_name = "__" + run_name
-        run_name = f"{cfg.dynamics.name}__{cfg.env.name[:4]}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
+        run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         if type.lower() == 'tensorboard':
             print("Using Tensorboard Logger.")
             self.writer = SummaryWriter(
@@ -42,10 +37,6 @@ class Logger:
             self.writer = wandb
         print(f"Output directory  : {self.logdir}")
         self.steps = {}
-        link_path = os.path.join(QUADDIF_ROOT_DIR, "outputs", "latest")
-        if os.path.exists(link_path):
-            os.remove(link_path)
-        os.symlink(self.logdir, link_path)
     
     def log(self,tag,value):
         if tag not in self.steps:
@@ -103,41 +94,3 @@ class Logger:
                 with open(overrides_path, "r") as f:
                     overrides = [line.strip('- ') for line in f.readlines()]
                     self.writer.add_text("Overrides", ' '.join(overrides), 0)
-
-class RecordEpisodeStatistics:
-    def __init__(self, env):
-        self.env = env
-        self.n_envs = getattr(env, "n_envs", 1)
-        self.device = env.device
-        self.success = torch.zeros(self.n_envs, dtype=torch.float, device=self.device)
-        self.survive = torch.zeros(self.n_envs, dtype=torch.float, device=self.device)
-        self.arrive_time = torch.full((self.n_envs,), env.max_steps*env.dt, dtype=torch.float, device=self.device)
-        self.episode_length = torch.zeros(self.n_envs, dtype=torch.long, device=self.device)
-        
-    def __getattr__(self, name: str):
-        """Returns an attribute with ``name``, unless ``name`` starts with an underscore."""
-        if name.startswith("_"):
-            raise AttributeError(f"accessing private attribute '{name}' is prohibited")
-        return getattr(self.env, name)
-    
-    def step(self, action):
-        state, loss, terminated, extra = self.env.step(action)
-        n_resets = extra["reset_indicies"].size(0)
-        if n_resets > 0:
-            n_success = int(extra["success"].sum().item())
-            if n_success > 0:
-                self.arrive_time = torch.roll(self.arrive_time, -n_success, 0)
-                self.arrive_time[-n_success:] = extra["arrive_time"][extra["success"]]
-            self.success = torch.roll(self.success, -n_resets, 0)
-            self.success[-n_resets:] = extra["success"][extra["reset"]]
-            self.survive = torch.roll(self.survive, -n_resets, 0)
-            self.survive[-n_resets:] = extra["truncated"][extra["reset"]]
-            self.episode_length = torch.roll(self.episode_length, -n_resets, 0)
-            self.episode_length[-n_resets:] = extra["l"][extra["reset"]]
-        extra["stats"] = {
-            "success_rate": self.success.mean().item(),
-            "survive_rate": self.survive.mean().item(),
-            "l": self.episode_length.float().mean().item(),
-            "arrive_time": self.arrive_time.mean().item()
-        }
-        return state, loss, terminated, extra

@@ -1,41 +1,26 @@
-from typing import *
-import os
 import random
+from time import sleep
 import sys
 sys.path.append('..')
 
 import hydra
 from omegaconf import DictConfig
 
-@hydra.main(config_path="../cfg", config_name="config", version_base="1.3")
+@hydra.main(config_path="../cfg", config_name="config_train", version_base="1.3")
 def main(cfg: DictConfig):
     
     import torch
     import numpy as np
-    from line_profiler import LineProfiler
-    from tqdm import tqdm
-    import cv2
     
-    from quaddif.env import ENV_ALIAS
-    from quaddif.algo import AGENT_ALIAS
-    from quaddif.utils.exporter import PolicyExporter
+    from quaddif.env import build_env
+    from quaddif.algo import build_agent
     from quaddif.utils.device import get_idle_device
-    from quaddif.utils.logger import RecordEpisodeStatistics, Logger
-    
-    def display_image(state, action, policy_info, env_info):
-        # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
-        if "sensor" in env_info.keys():
-            N, C = min(64, state.size(0)), 1
-            H, W = env_info["sensor"].shape[-2:]
-            NH = NW = int(N**0.5)
-            scale = 4
-            disp_image = env_info["sensor"][:N].reshape(NH, NW, C, H, W).permute(2, 0, 3, 1, 4).reshape(C, NH*H, NW*W).cpu().numpy().transpose(1, 2, 0)
-            disp_image = cv2.normalize(disp_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            disp_image = cv2.resize(cv2.cvtColor(disp_image, cv2.COLOR_GRAY2BGR), (int(NW*W*scale), int(NH*H*scale)), interpolation=cv2.INTER_NEAREST)
-            cv2.imshow('image', disp_image)
-            cv2.waitKey(1)
+    from quaddif.utils.logger import Logger
+    from quaddif.utils.runner import TrainRunner
 
-    device_idx = f"{get_idle_device()}" if cfg.device is None else f"{cfg.device}"
+    if cfg.device is None and cfg.n_jobs > 1:
+        sleep(random.random() * 3)
+    device_idx = get_idle_device() if cfg.device is None else cfg.device
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
     print(f"Using device {device}.")
     device = torch.device(device)
@@ -45,14 +30,13 @@ def main(cfg: DictConfig):
         np.random.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
+
+    env = build_env(cfg.env, device=device)
     
-    env_class = ENV_ALIAS[cfg.env.name]
-    env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
+    agent = build_agent(cfg.algo, env, device)
     
-    agent_class = AGENT_ALIAS[cfg.algo.name]
-    agent = agent_class.build(cfg, env, device)
-    
-    logger = Logger(cfg, run_name=cfg.runname)
+    runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
+    logger = Logger(cfg, run_name=runname)
     
     # profiler = LineProfiler()
     # if hasattr(env, "update_sensor_data"):
@@ -108,18 +92,11 @@ def main(cfg: DictConfig):
                 agent.save(os.path.join(logger.logdir, "best"))
     
     try:
-        # learn(on_step_cb=display_image)
-        learn()
+        runner.run()
     except KeyboardInterrupt:
-        tqdm.write("Interrupted.")
-    
-    ckpt_path = os.path.join(logger.logdir, "checkpoints")
-    agent.save(ckpt_path)
-    print(f"The checkpoint is saved to {ckpt_path}.")
-    if cfg.export:
-        PolicyExporter(agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
-    if env.renderer is not None:
-        env.renderer.close()
+        print("Interrupted.")
+    finally:
+        max_success_rate = runner.close()
     
     global logdir
     logdir = logger.logdir
