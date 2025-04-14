@@ -112,45 +112,13 @@ class ActorCriticAgent(nn.Module):
 
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
 
-        # self.actor_mean_std = nn.Sequential(
-        #     MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm',bias=False),
-        #     nn.Linear(hidden_dim, action_dim*2),
-        # )
-        # self.critic = nn.Sequential(
-        #     MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm', bias=False),
-        #     nn.Linear(hidden_dim, 255),
-        # )
-        actor_mean = [
-            nn.Linear(feat_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU()
-        ]
-        for i in range(num_layers - 1):
-            actor_mean.extend([
-                nn.Linear(hidden_dim, hidden_dim, bias=False),
-                nn.LayerNorm(hidden_dim),
-                nn.ReLU()
-            ])
         self.actor_mean_std = nn.Sequential(
-            *actor_mean,
-            nn.Linear(hidden_dim, action_dim*2)
+            MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm',bias=False),
+            nn.Linear(hidden_dim, action_dim*2),
         )
-
-        critic = [
-            nn.Linear(feat_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU()
-        ]
-        for i in range(num_layers - 1):
-            critic.extend([
-                nn.Linear(hidden_dim, hidden_dim, bias=False),
-                nn.LayerNorm(hidden_dim),
-                nn.ReLU()
-            ])
-
         self.critic = nn.Sequential(
-            *critic,
-            nn.Linear(hidden_dim, 255)
+            MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm', bias=False),
+            nn.Linear(hidden_dim, 255),
         )
         self.slow_critic = copy.deepcopy(self.critic)
 
