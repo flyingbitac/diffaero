@@ -16,6 +16,7 @@ AGENT_ALIAS = {
     "shac": SHAC,
     "mashac": MASHAC,
     "shac_q": SHAC_Q,
+    "shac_ppo": SHAC_PPO,
     "shac_rpl": SHAC_RPL,
     "apg": APG,
     "apg_sto": APG_stochastic,

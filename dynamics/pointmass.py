@@ -2,14 +2,16 @@ import warnings
 
 import torch
 from torch import Tensor
+import torch.autograd as autograd
 from torch.nn import functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
 from quaddif.utils.math import *
 
-class PointMassModel:
+class PointMassModelBase:
     def __init__(self, cfg: DictConfig, device: torch.device):
+        self.type = "pointmass"
         self.device = device
         self.state_dim = 9
         self.action_dim = 3
@@ -22,43 +24,22 @@ class PointMassModel:
             self._vel_ema.squeeze_(1)
         self.vel_ema_factor: float = cfg.vel_ema_factor
         self.dt: float = cfg.dt
-        self.n_substeps: int = cfg.n_substeps
         self.align_yaw_with_target_direction: bool = cfg.align_yaw_with_target_direction
         self.align_yaw_with_vel_ema: bool = cfg.align_yaw_with_vel_ema
+        self._G = torch.tensor(cfg.g, device=device, dtype=torch.float32)
+        self._D = torch.tensor(cfg.D, device=device, dtype=torch.float32)
+        self._G_vec = torch.tensor([0.0, 0.0, -self._G], device=device, dtype=torch.float32)
         self.min_action = torch.tensor([list(cfg.min_action)], device=device)
         self.max_action = torch.tensor([list(cfg.max_action)], device=device)
-        
-        assert cfg.solver_type in ["euler", "rk4"]
-        if cfg.solver_type == "euler":
-            self.solver = EulerIntegral
-        elif cfg.solver_type == "rk4":
-            self.solver = rk4
-        
-        wrap = lambda x: torch.tensor(x, device=device, dtype=torch.float32)
-        
-        self._G = wrap(cfg.g)
-        self._G_vec = wrap([0.0, 0.0, self._G])
-        self.lmbda = cfg.lmbda # soft control latency
+        if self.n_agents > 1:
+            self._G_vec.unsqueeze_(0)
+            self.min_action.unsqueeze_(0)
+            self.max_action.unsqueeze_(0)
+        self.lmbda: float = cfg.lmbda # soft control latency
     
     def detach(self):
         self._state.detach_()
         self._vel_ema.detach_()
-    
-    def dynamics(self, X: Tensor, U: Tensor) -> Tensor:
-        # Unpacking state and input variables
-        p, v, a = X[..., :3], X[..., 3:6], X[..., 6:9]
-        
-        a_dot = self.lmbda * (U - a)
-        
-        # State derivatives
-        X_dot = torch.concat([v, a - self._G_vec, a_dot], dim=-1)
-        
-        return X_dot
-
-    def step(self, U: Tensor) -> None:
-        new_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
-        self._state = new_state
-        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
     
     def reset_idx(self, env_idx: Tensor) -> None:
         mask = torch.zeros_like(self._vel_ema, dtype=torch.bool)
@@ -93,6 +74,99 @@ class PointMassModel:
     def _w(self) -> Tensor:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")
         return torch.zeros_like(self.p)
+
+class ContinuousPointMassModel(PointMassModelBase):
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        super().__init__(cfg, device)
+        self.n_substeps: int = cfg.n_substeps
+        assert cfg.solver_type in ["euler", "rk4"]
+        if cfg.solver_type == "euler":
+            self.solver = EulerIntegral
+        elif cfg.solver_type == "rk4":
+            self.solver = rk4
+    
+    def dynamics(self, X: Tensor, U: Tensor) -> Tensor:
+        # Unpacking state and input variables
+        p, v, a = X[..., :3], X[..., 3:6], X[..., 6:9]
+        
+        fdrag = -self._D * v
+        v_dot = a + self._G_vec + fdrag
+        
+        a_dot = self.lmbda * (U - a)
+        
+        # State derivatives
+        X_dot = torch.concat([v, v_dot, a_dot], dim=-1)
+        
+        return X_dot
+
+    def step(self, U: Tensor) -> None:
+        new_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
+        self._state = new_state
+        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
+
+
+class PointMassStep(autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        pos: Tensor,
+        vel: Tensor,
+        acc: Tensor,
+        cmd: Tensor,
+        dt: float,
+        lmbda: float,
+        G: Tensor,
+        alpha: float = 1.
+    ):
+        ctx.save_for_backward(
+            torch.tensor(dt, device=pos.device),
+            torch.tensor(-alpha * dt, device=pos.device).exp(),
+            torch.tensor(lmbda, device=pos.device)
+        )
+        pos_ = pos + dt * (vel + 0.5 * (acc + G) * dt)
+        acc_ = torch.lerp(acc, cmd, lmbda)
+        vel_ = vel + dt * (0.5 * (acc + acc_) + G)
+        return pos_, vel_, acc_
+    
+    @staticmethod
+    def backward(ctx, grad_pos_, grad_vel_, grad_acc_):
+        dt, decay_factor, lmbda = ctx.saved_tensors
+        grad_pos = grad_vel = grad_acc = grad_cmd = None
+        # variables with underline are gradients
+        # propagated back from downstream operations
+        grad_pos = grad_pos_
+        grad_vel = grad_vel_ + dt * grad_pos_
+        grad_acc = (
+            0.5 * grad_pos_ * dt ** 2 +
+            0.5 * (2 - lmbda) * dt * grad_vel_ +
+            (1 - lmbda) * grad_acc_
+        )
+        grad_cmd = lmbda * (0.5 * dt * grad_vel_ + grad_acc_)
+        
+        decayed_grad_pos = decay_factor * grad_pos if ctx.needs_input_grad[0] else None
+        decayed_grad_vel = decay_factor * grad_vel if ctx.needs_input_grad[1] else None
+        decayed_grad_acc = decay_factor * grad_acc if ctx.needs_input_grad[2] else None
+        decayed_grad_cmd = decay_factor * grad_cmd if ctx.needs_input_grad[3] else None
+        
+        return decayed_grad_pos, decayed_grad_vel, decayed_grad_acc, decayed_grad_cmd, None, None, None, None
+
+
+class DiscretePointMassModel(PointMassModelBase):
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        super().__init__(cfg, device)
+        self.alpha: float = cfg.alpha
+    
+    def detach(self):
+        self._state.detach_()
+        self._vel_ema.detach_()
+
+    def step(self, U: Tensor) -> None:
+        pos, vel, acc = self._state.chunk(3, dim=-1)
+        pos, vel, acc = PointMassStep.apply(
+            pos, vel, acc, U, self.dt, self.lmbda, self._G_vec, self.alpha)
+        self._state = torch.cat([pos, vel, acc], dim=-1)
+        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
+
 
 @torch.jit.script
 def point_mass_quat(a: Tensor, orientation: Tensor) -> Tensor:

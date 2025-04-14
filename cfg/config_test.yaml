@@ -1,7 +1,7 @@
 defaults:
   - algo: apg_sto
   - env: pc
-  - dynamics: pointmass # [pointmass, quadrotor]
+  - dynamics: pointmass_c # [pointmass, quadrotor]
   - network: mlp # [mlp, cnn]
   - sensor: camera # [camera, lidar, relpos]
   - _self_
@@ -11,6 +11,8 @@ defaults:
   - override hydra/hydra_logging: colorlog
   # - override hydra/sweeper: optuna_sweep
 
+# use rollout length specified by specific algorithm
+# since different algorithm need different rollout length to perform well
 l_rollout: ${algo.l_rollout}
 n_agents: 1
 n_envs: 4096
@@ -27,7 +29,9 @@ use_training_cfg: False
 
 runname: ""
 checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
-export: False
+export:
+  jit: False
+  onnx: False
 
 seed: 0
 torch_deterministic: False
@@ -38,7 +42,9 @@ env:
   max_target_vel: ${max_vel}
 
 hydra:
+  run:
+    dir: ./outputs/test/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: ./outputs/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}
+    dir: ./outputs/test/${now:%Y-%m-%d}/multirun/${now:%H-%M-%S}
   launcher:
     n_jobs: ${n_jobs}

@@ -33,7 +33,7 @@ class SHAC:
             self.rnn_state_buffer = RNNStateBuffer(l_rollout, n_envs, cfg.network.rnn_hidden_dim, cfg.network.rnn_n_layers, device)
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
-        self.buffer = RolloutBufferSHAC(l_rollout, n_envs, obs_dim, device)
+        self.buffer = RolloutBufferSHAC(l_rollout, n_envs, obs_dim, action_dim, device)
         self._critic_target = deepcopy(self.agent.critic)
         for p in self._critic_target.parameters():
             p.requires_grad_(False)
@@ -70,7 +70,7 @@ class SHAC:
         # value of the next obs should be zero if the next obs is a terminal obs
         next_values = self.buffer.next_values * (1 - self.buffer.next_terminated)
         if self.lmbda == 0.:
-            target_values = self.buffer.rewards + self.discount * next_values
+            target_values = self.buffer.losses + self.discount * next_values
         else:
             target_values = torch.zeros_like(next_values).to(self.device)
             Ai = torch.zeros(self.n_envs, dtype=torch.float32, device=self.device)
@@ -81,16 +81,16 @@ class SHAC:
                 lam = lam * self.lmbda * (1. - self.buffer.next_dones[i]) + self.buffer.next_dones[i]
                 Ai = (1. - self.buffer.next_dones[i]) * (
                     self.discount * (self.lmbda * Ai + next_values[i]) + \
-                    (1. - lam) / (1. - self.lmbda) * self.buffer.rewards[i])
+                    (1. - lam) / (1. - self.lmbda) * self.buffer.losses[i])
                 Bi = self.discount * (next_values[i] * self.buffer.next_dones[i] + Bi * (1. - self.buffer.next_dones[i])) + \
-                     self.buffer.rewards[i]
+                     self.buffer.losses[i]
                 # Bi = self.discount * torch.where(self.buffer.next_dones[i], next_values[i], Bi) + self.buffer.rewards[i]
                 target_values[i] = (1.0 - self.lmbda) * Ai + lam * Bi
-        return target_values.view(-1)
+        return None, target_values.view(-1)
     
     @torch.no_grad()
     def bootstrap_gae(self):
-        advantages = torch.zeros_like(self.buffer.rewards)
+        advantages = torch.zeros_like(self.buffer.losses)
         lastgaelam = 0
         for t in reversed(range(self.l_rollout)):
             nextnonterminal = 1.0 - self.buffer.next_terminated[t]
@@ -98,11 +98,11 @@ class SHAC:
             # nextnonterminal = 1.0 - self.buffer.next_dones[t]
             nextvalues = self.buffer.next_values[t]
             # TD-error / vanilla advantage function.
-            delta = self.buffer.rewards[t] + self.discount * nextvalues * nextnonterminal - self.buffer.values[t]
+            delta = self.buffer.losses[t] + self.discount * nextvalues * nextnonterminal - self.buffer.values[t]
             # Generalized Advantage Estimation bootstraping formula.
             advantages[t] = lastgaelam = delta + self.discount * self.lmbda * nextnonreset * lastgaelam
         target_values = advantages + self.buffer.values
-        return target_values.view(-1)
+        return advantages.view(-1), target_values.view(-1)
     
     def record_loss(self, loss, policy_info, env_info, last_step=False):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor], Optional[bool]) -> Tensor
@@ -151,11 +151,8 @@ class SHAC:
         for start in range(0, T*N, mb_size):
             end = start + mb_size
             mb_indices = batch_indices[start:end]
-            if self.agent.is_rnn_based:
-                values = self.agent.get_value(tensordict2tuple(obs[mb_indices]),
-                                              critic_hidden_state[mb_indices].permute(1, 0, 2))
-            else:
-                values = self.agent.get_value(tensordict2tuple(obs[mb_indices]))
+            hidden = critic_hidden_state[mb_indices].permute(1, 0, 2) if self.agent.is_rnn_based else None
+            values = self.agent.get_value(tensordict2tuple(obs[mb_indices]), hidden=hidden)
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()
@@ -178,7 +175,15 @@ class SHAC:
             next_obs, loss, terminated, env_info = env.step(env.rescale_action(action))
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
-            self.buffer.add(obs, loss/10, policy_info["value"], env_info["reset"], terminated, next_value)
+            self.buffer.add(
+                obs=obs,
+                sample=policy_info["sample"],
+                logprob=policy_info["logprob"],
+                loss=loss/10,
+                value=policy_info["value"],
+                next_done=env_info["reset"],
+                next_terminated=terminated,
+                next_value=next_value)
             self.reset(env_info["reset"])
             obs = next_obs
             if on_step_cb is not None:
@@ -187,7 +192,7 @@ class SHAC:
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
-        target_values = self.bootstrap_gae()
+        _, target_values = self.bootstrap_gae()
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic(target_values)
         self.detach()
@@ -226,6 +231,111 @@ class SHAC:
     def policy_net(self):
         return self.agent.actor
 
+
+class SHAC_PPO(SHAC):
+    def __init__(
+        self,
+        cfg: DictConfig,
+        obs_dim: int,
+        action_dim: int,
+        n_envs: int,
+        l_rollout: int,
+        device: torch.device
+    ):
+        super().__init__(cfg, obs_dim, action_dim, n_envs, l_rollout, device)
+        self.norm_adv: bool = cfg.norm_adv
+        self.clip_coef: float = cfg.clip_coef
+    
+    def record_loss(self, loss, policy_info, env_info, last_step=False):
+        # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor], Optional[bool]) -> Tensor
+        reset = torch.ones_like(env_info["reset"]) if last_step else env_info["reset"]
+        # add cumulated loss if rollout ends or trajectory ends (terminated or truncated)
+        self.actor_loss += torch.mean(self.rollout_gamma * loss)
+        # add terminal value if rollout ends or truncated
+        next_value = self.value_target(tensordict2tuple(env_info["next_obs_before_reset"]))
+        # reset the discount factor, clear the cumulated loss if trajectory ends
+        self.rollout_gamma = torch.where(reset, 1, self.rollout_gamma * self.discount)
+        return next_value.detach()
+    
+    @timeit
+    def step(self, cfg, env, obs, on_step_cb=None):
+        self.buffer.clear()
+        if self.agent.is_rnn_based:
+            self.rnn_state_buffer.clear()
+        self.clear_loss()
+        for t in range(cfg.l_rollout):
+            action, policy_info = self.act(obs)
+            next_obs, loss, terminated, env_info = env.step(env.rescale_action(action))
+            next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
+            # divide by 10 to avoid disstability
+            self.buffer.add(
+                obs=obs,
+                sample=policy_info["sample"],
+                logprob=policy_info["logprob"],
+                loss=loss/10,
+                value=policy_info["value"],
+                next_done=env_info["reset"],
+                next_terminated=terminated,
+                next_value=next_value)
+            self.reset(env_info["reset"])
+            obs = next_obs
+            if on_step_cb is not None:
+                on_step_cb(
+                    obs=obs,
+                    action=action,
+                    policy_info=policy_info,
+                    env_info=env_info)
+        advantages, target_values = self.bootstrap_gae()
+        actor_losses, actor_grad_norms = self.update_actor(advantages)
+        critic_losses, critic_grad_norms = self.update_critic(target_values)
+        self.detach()
+        losses = {**actor_losses, **critic_losses}
+        grad_norms = {**actor_grad_norms, **critic_grad_norms}
+        return obs, policy_info, env_info, losses, grad_norms
+    
+    def update_actor(self, advantages: Tensor) -> Dict[str, float]:
+        self.actor_loss /= self.l_rollout
+        
+        obs = self.buffer.obs.flatten(0, 1)
+        samples = self.buffer.samples.flatten(0, 1)
+        logprobs = self.buffer.logprobs.flatten(0, 1)
+        if self.agent.is_rnn_based:
+            actor_hidden_state = self.rnn_state_buffer.actor_rnn_state.flatten(0, 1)
+        if self.norm_adv:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
+        hidden = actor_hidden_state.permute(1, 0, 2) if self.agent.is_rnn_based else None
+        _, _, newlogprob, entropy = self.agent.get_action(tensordict2tuple(obs), samples, hidden=hidden)
+        
+        entropy_loss = -entropy.mean()
+        logratio = newlogprob - logprobs
+        ratio = logratio.exp()
+        pg_loss1 = -advantages * ratio
+        pg_loss2 = -advantages * torch.clamp(ratio, 1 - self.clip_coef, 1 + self.clip_coef)
+        pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+        
+        total_loss = self.actor_loss - pg_loss + self.entropy_weight * entropy_loss
+        # total_loss = self.actor_loss + self.entropy_weight * entropy_loss
+        self.actor_optim.zero_grad()
+        total_loss.backward()
+        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
+        if self.actor_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+        self.actor_optim.step()
+        return {"actor_loss": self.actor_loss.item(),
+                "entropy_loss": entropy_loss.item(),
+                "pg_loss": pg_loss.item()
+               }, {"actor_grad_norm": grad_norm}
+    
+    @staticmethod
+    def build(cfg, env, device):
+        return SHAC_PPO(
+            cfg=cfg,
+            obs_dim=env.obs_dim,
+            action_dim=env.action_dim,
+            n_envs=env.n_envs,
+            l_rollout=cfg.l_rollout,
+            device=device)
 
 class SHAC_RPL(SHAC):
     def __init__(
@@ -359,15 +469,11 @@ class SHAC_Q:
         for start in range(0, T*N, mb_size):
             end = start + mb_size
             mb_indices = batch_indices[start:end]
-            if self.agent.is_rnn_based:
-                values = self.agent.get_value(
-                    tensordict2tuple(obs[mb_indices]),
-                    actions[mb_indices],
-                    critic_hidden_state[mb_indices].permute(1, 0, 2))
-            else:
-                values = self.agent.get_value(
-                    tensordict2tuple(obs[mb_indices]),
-                    actions[mb_indices])
+            hidden = critic_hidden_state[mb_indices].permute(1, 0, 2) if self.agent.is_rnn_based else None
+            values = self.agent.get_value(
+                tensordict2tuple(obs[mb_indices]),
+                actions[mb_indices],
+                hidden=hidden)
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()

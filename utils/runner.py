@@ -1,4 +1,5 @@
 from typing import *
+from collections import defaultdict
 import os
 
 import torch
@@ -10,8 +11,9 @@ import cv2
 import imageio
 from omegaconf import DictConfig
 
+from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
 from quaddif.utils.exporter import PolicyExporter
-from quaddif.utils.logger import RecordEpisodeStatistics, Logger
+from quaddif.utils.logger import Logger
 
 def display_image(state, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
@@ -51,29 +53,90 @@ def timeit(fn):
         return fn(*args, **kwargs)
     return wrapper
 
+
+class RecordEpisodeStatistics:
+    def __init__(self, env: Union[BaseEnv, BaseEnvMultiAgent], max_window_length: Optional[int] = None):
+        self.env = env
+        self.n_envs = getattr(env, "n_envs", 1)
+        self.device = env.device
+        self.max_window_length = self.n_envs if max_window_length is None else max_window_length
+        # dictionary to be used to store statistical metrics
+        # metric will be calculated in a sliding-window manner
+        # with length of the window = n_envs
+        self.stats = defaultdict(lambda: torch.zeros(self.max_window_length, dtype=torch.float, device=self.device))
+        self.window_length = defaultdict(lambda: 0)
+    
+    def __getattr__(self, name: str):
+        """Returns an attribute with ``name``, unless ``name`` starts with an underscore."""
+        if name.startswith("_"):
+            raise AttributeError(f"accessing private attribute '{name}' is prohibited")
+        return getattr(self.env, name)
+    
+    def step(self, *args, **kwargs):
+        state, loss, terminated, extra = self.env.step(*args, **kwargs)
+        # dictionary to be used to store scalar metrics
+        extra["stats"] = {} # Dict[str, float]
+        # traverse through all metrics to be sliding-window-averaged
+        for k, v in extra["stats_raw"].items(): # Dict[str, Tensor]
+            assert v.ndim == 1
+            # construct a queue to record new data and discard old ones
+            l = v.size(0)
+            if l > 0:
+                self.stats[k] = torch.roll(self.stats[k], shifts=-l, dims=0)
+                self.stats[k][-l:] = v
+            # write the scalar metrics back to the extra info provided by the environment
+            l_window = min(self.max_window_length, self.window_length[k] + l)
+            if l_window > 0:
+                extra["stats"][k] = self.stats[k][-l_window:].mean().item()
+            self.window_length[k] = l_window
+        return state, loss, terminated, extra
+
+
 class TrainRunner:
     profiler = LineProfiler()
-    def __init__(self, cfg: DictConfig, logger: Logger, env: RecordEpisodeStatistics, agent):
+    def __init__(self, cfg: DictConfig, logger: Logger, env: Union[BaseEnv, BaseEnvMultiAgent], agent):
         self.cfg = cfg
         self.logger = logger
-        self.env = env
+        self.env = RecordEpisodeStatistics(env)
         self.agent = agent
         self.run = self.profiler(self.run)
         self.max_success_rate = 0.
+        
+        if cfg.torch_profile:
+            self.torch_profiler = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU, 
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                record_shapes=False,
+                profile_memory=True,
+                with_stack=True,
+                with_flops=True,
+                schedule=torch.profiler.schedule(wait=0, warmup=1, active=cfg.n_updates-1, repeat=1, skip_first=0),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    dir_name=os.path.join(self.logger.logdir, "profiling_data"),
+                    use_gzip=True
+                ),
+            )
+        else: 
+            self.torch_profiler = None
     
     def run(self):
         """Start training."""
         obs = self.env.reset()
         pbar = tqdm(range(self.cfg.n_updates))
         on_step_cb = display_image if self.cfg.display_image else None
+        if self.torch_profiler is not None:
+            self.torch_profiler.start()
         for i in pbar:
+            if self.torch_profiler is not None:
+                self.torch_profiler.step()
             t1 = pbar._time()
             self.env.detach()
             obs, policy_info, env_info, losses, grad_norms = self.agent.step(self.cfg, self.env, obs, on_step_cb=on_step_cb)
-            l_episode = (env_info["stats"]["l"] - 1) * self.env.dt
-            success_rate = env_info["stats"]["success_rate"]
-            survive_rate = env_info["stats"]["survive_rate"]
-            arrive_time = env_info["stats"]["arrive_time"]
+            l_episode = env_info["stats"].get("l_episode", 0.)
+            success_rate = env_info["stats"].get("success_rate", 0.)
+            survive_rate = env_info["stats"].get("survive_rate", 0.)
             if self.cfg.algo.name != 'world':
                 pbar.set_postfix({
                     # "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
@@ -86,11 +149,7 @@ class TrainRunner:
                 "env_loss": env_info["loss_components"],
                 "agent_loss": losses,
                 "agent_grad_norm": grad_norms,
-                "metrics": {
-                    "l_episode": l_episode,
-                    "success_rate": success_rate,
-                    "survive_rate": survive_rate,
-                    "arrive_time": arrive_time}
+                "metrics": env_info["stats"]
             }
             if "value" in policy_info.keys():
                 log_info["value"] = policy_info["value"].mean().item()
@@ -109,12 +168,19 @@ class TrainRunner:
         close the environment renderer, 
         and write the profiled data to the disk.
         """
+        if self.torch_profiler is not None and self.torch_profiler.step_num == self.cfg.n_updates:
+            self.torch_profiler.stop()
         ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
         self.agent.save(ckpt_path)
         print(f"The checkpoint is saved to {ckpt_path}.")
         print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
-        if self.cfg.export:
-            PolicyExporter(self.agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
+        if any(dict(self.cfg.export).values()):
+            PolicyExporter(self.agent.policy_net).export(
+                path=ckpt_path,
+                verbose=True,
+                export_jit=self.cfg.export.jit,
+                export_onnx=self.cfg.export.onnx
+            )
         if self.env.renderer is not None:
             self.env.renderer.close()
 
@@ -125,10 +191,10 @@ class TrainRunner:
 
 
 class TestRunner:
-    def __init__(self, cfg: DictConfig, logger: Logger, env: RecordEpisodeStatistics, agent):
+    def __init__(self, cfg: DictConfig, logger: Logger, env: Union[BaseEnv, BaseEnvMultiAgent], agent):
         self.cfg = cfg
         self.logger = logger
-        self.env = env
+        self.env = RecordEpisodeStatistics(env, max_window_length=cfg.n_steps)
         self.agent = agent
         self.success_rate = 0.
 
@@ -137,13 +203,13 @@ class TestRunner:
         path = os.path.join(self.logger.logdir, "video")
         if not os.path.exists(path):
             os.makedirs(path)
-        with imageio.get_writer(os.path.join(path, name), fps=1/self.dt) as video:
+        with imageio.get_writer(os.path.join(path, name), fps=1/self.env.dt) as video:
             for frame_index in range(video_array.shape[0]):
                 frame = video_array[frame_index]
                 video.append_data(frame)
 
     def save_video_tensorboard(self, video_array: np.ndarray, tag: str, step: int):
-        self.logger.log_video(tag, video_array, step=step, fps=1/self.dt)
+        self.logger.log_video(tag, video_array, step=step, fps=1/self.env.dt)
     
     @torch.no_grad()
     def run(self):
@@ -170,24 +236,17 @@ class TestRunner:
             obs, loss, terminated, env_info = self.env.step(action)
             if self.cfg.algo.name != 'world' and hasattr(self.agent, "reset"):
                 self.agent.reset(env_info["reset"])
-            l_episode = (env_info["stats"]["l"] - 1) * self.env.dt
-            n_resets += env_info["reset"].sum().item()
-            n_survive += env_info["truncated"].sum().item()
-            n_success += env_info["success"].sum().item()
-            arrive_time = env_info["stats"]["arrive_time"]
+            l_episode = env_info["stats"].get("l_episode", 0.)
+            success_rate = env_info["stats"].get("success_rate", 0.)
+            survive_rate = env_info["stats"].get("survive_rate", 0.)
             pbar.set_postfix({
                 "l_episode": f"{l_episode:.1f}",
-                "success_rate": f"{n_success / n_resets:.2f}",
-                "survive_rate": f"{n_survive / n_resets:.2f}",
+                "success_rate": f"{success_rate:.2f}",
+                "survive_rate": f"{survive_rate:.2f}",
                 "fps": f"{int(self.cfg.env.n_envs/(pbar._time()-t1)):,d}"})
-            
             log_info = {
-                "env_loss": env_info["loss_components"],
-                "metrics": {
-                    "l_episode": l_episode,
-                    "success_rate": n_success / n_resets,
-                    "survive_rate": n_survive / n_resets,
-                    "arrive_time": arrive_time}}
+                "env_loss": env_info["loss_components"], 
+                "metrics": env_info["stats"]}
             self.logger.log_scalars(log_info, i+1)
             self.success_rate = n_success / n_resets
             
@@ -200,11 +259,10 @@ class TestRunner:
                 depth_image = (depth_image * 255).to(torch.uint8).unsqueeze(-1).expand(-1, -1, -1, 3).cpu().numpy()
                 image = np.concatenate([rgb_image, depth_image], axis=-2)
                 video_array[index] = image
-                
                 if env_info["reset"][:n_envs].sum().item() > env_info["success"][:n_envs].sum().item(): # some episodes failed
                     failed = torch.logical_and(env_info["reset"], ~env_info["success"])[:n_envs]
                     idx = failed.nonzero().flatten()[0]
-                    video_length = env_info["l"][idx] - 1
+                    video_length = env_info["l"][idx].item() - 1
                     if self.cfg.video_saveas == "mp4":
                         self.save_video_mp4(video_array[idx, :video_length], f"failed_{i+1}.mp4")
                     elif self.cfg.video_saveas == "tensorboard":
@@ -227,7 +285,12 @@ class TestRunner:
     def close(self):
         if self.cfg.export:
             ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
-            PolicyExporter(self.agent.policy_net).export(path=ckpt_path, verbose=True, export_pnnx=False)
+            PolicyExporter(self.agent.policy_net).export(
+                path=ckpt_path,
+                verbose=True,
+                export_jit=self.cfg.export.jit,
+                export_onnx=self.cfg.export.onnx
+            )
         
         if self.env.renderer is not None:
             self.env.renderer.close()

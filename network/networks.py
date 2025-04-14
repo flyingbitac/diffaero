@@ -1,4 +1,5 @@
 from typing import Tuple, Dict, Union, Optional, List
+from math import ceil
 
 from omegaconf import DictConfig
 import torch
@@ -13,8 +14,16 @@ def obs_action_concat(state: Union[Tensor, Tuple[Tensor, Tensor]], action: Optio
         return torch.cat([state[0], state[1].flatten(-2)] + ([] if action is None else [action]), dim=-1)
 
 class BaseNetwork(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        input_dim: Union[int, Tuple[int, Tuple[int, int]]],
+        rnn_n_layers: int = 0,
+        rnn_hidden_dim: int = 0
+    ):
         super().__init__()
+        self.input_dim = input_dim
+        self.rnn_n_layers = rnn_n_layers
+        self.rnn_hidden_dim = rnn_hidden_dim
     
     def reset(self, indices: Tensor) -> None:
         pass
@@ -30,7 +39,7 @@ class MLP(BaseNetwork):
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
-        super().__init__()
+        super().__init__(input_dim)
         if not isinstance(input_dim, int):
             D, (H, W) = input_dim
             input_dim = D + H * W
@@ -54,7 +63,8 @@ class MLP(BaseNetwork):
 
 class CNNBackbone(nn.Sequential):
     def __init__(self, input_dim: Tuple[int, Tuple[int, int]]):
-        super().__init__(
+        D, (H, W) = input_dim
+        layers = [
             nn.Conv2d(1, 8, kernel_size=5, stride=1, padding=2),
             nn.ELU(),
             nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
@@ -62,12 +72,18 @@ class CNNBackbone(nn.Sequential):
             nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
             nn.Conv2d(8, 8, kernel_size=3, stride=2, padding=1),
-            nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(start_dim=-3)
-        )
-        D, (H, W) = input_dim
-        # self.out_dim = D + 8 * (H // 4) * (W // 4)
-        self.out_dim = D + 8 * 4 * 4
+        ]
+        ds_rate = 4
+        if any([H % ds_rate != 0, W % ds_rate != 0]):
+            hpad = ceil(H / ds_rate) * ds_rate - H
+            wpad = ceil(W / ds_rate) * ds_rate - W
+            top, left = hpad // 2, wpad // 2
+            bottom, right = hpad - top, wpad - left
+            layers.insert(0, nn.ZeroPad2d((left, right, top, bottom)))
+        hout, wout = ceil(H / ds_rate), ceil(W / ds_rate)
+        super().__init__(*layers)
+        self.out_dim = D + 8 * hout * wout
 
 class CNN(BaseNetwork):
     def __init__(
@@ -77,7 +93,7 @@ class CNN(BaseNetwork):
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
-        super().__init__()
+        super().__init__(input_dim)
         self.cnn = CNNBackbone(input_dim)
         self.head = mlp(self.cnn.out_dim, cfg.hidden_dim, output_dim, output_act=output_act)
     
@@ -113,16 +129,14 @@ class RNN(BaseNetwork):
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
-        super().__init__()
+        super().__init__(input_dim, cfg.rnn_n_layers, cfg.rnn_hidden_dim)
         if not isinstance(input_dim, int):
             D, (H, W) = input_dim
             input_dim = D + H * W
-        self.rnn_hidden_dim = cfg.rnn_hidden_dim
-        self.n_layers = cfg.rnn_n_layers
         self.gru = torch.nn.GRU(
             input_size=input_dim,
             hidden_size=self.rnn_hidden_dim,
-            num_layers=self.n_layers,
+            num_layers=self.rnn_n_layers,
             bias=True,
             batch_first=True,
             dropout=0.0,
@@ -144,7 +158,7 @@ class RNN(BaseNetwork):
         use_own_hidden = hidden is None
         if use_own_hidden:
             if self.hidden_state is None:
-                hidden = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
+                hidden = torch.zeros(self.rnn_n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
             else:
                 hidden = self.hidden_state
         
@@ -178,14 +192,12 @@ class RCNN(BaseNetwork):
         output_dim: int,
         output_act: Optional[nn.Module] = None
     ):
-        super().__init__()
-        self.rnn_hidden_dim = cfg.rnn_hidden_dim
-        self.n_layers = cfg.rnn_n_layers
+        super().__init__(input_dim, cfg.rnn_n_layers, cfg.rnn_hidden_dim)
         self.cnn = CNNBackbone(input_dim)
         self.gru = torch.nn.GRU(
             input_size=self.cnn.out_dim,
             hidden_size=self.rnn_hidden_dim,
-            num_layers=self.n_layers,
+            num_layers=self.rnn_n_layers,
             bias=True,
             batch_first=True,
             dropout=0.0,
@@ -211,7 +223,7 @@ class RCNN(BaseNetwork):
         use_own_hidden = hidden is None
         if use_own_hidden:
             if self.hidden_state is None:
-                hidden = torch.zeros(self.n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
+                hidden = torch.zeros(self.rnn_n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
             else:
                 hidden = self.hidden_state
         

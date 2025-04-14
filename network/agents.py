@@ -127,10 +127,10 @@ class CriticQ(AgentBase):
     ):
         super().__init__(cfg, obs_dim)
         if not isinstance(obs_dim, int):
-            obs_dim = (obs_dim[0] + action_dim, obs_dim[1])
+            input_dim = (obs_dim[0] + action_dim, obs_dim[1])
         else:
-            obs_dim = obs_dim + action_dim
-        self.critic = build_network(cfg, obs_dim, 1)
+            input_dim = obs_dim + action_dim
+        self.critic = build_network(cfg, input_dim, 1)
     
     def forward(self, obs: Union[Tensor, Tuple[Tensor, Tensor]], action: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
         return self.critic(obs, action, hidden=hidden).squeeze(-1)
@@ -296,7 +296,11 @@ class RPLActorCritic(StochasticActorCriticV):
         self.critic.detach()
         self.anchor_agent.detach()
 
-def tensordict2tuple(state: Union[Tensor, TensorDict]):
+def tensordict2tuple(state: Union[Tensor, TensorDict]) -> Union[Tuple[Tensor, Tensor], Tensor]:
+    """
+    Split TensorDict into Tuple of Tensors, in order to export the trained policy,
+    since policy nets with TensorDict input are not supported by TorchScript.
+    """
     if isinstance(state, TensorDict):
         return (state["state"], state["perception"])
     else:

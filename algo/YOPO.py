@@ -174,6 +174,7 @@ class YOPO:
         self.grad_norm: Optional[float] = cfg.grad_norm
         self.optimized_inference: bool = cfg.optimized_inference
         self.real_dynamics_rollout: bool = cfg.real_dynamics_rollout
+        self.update_best_traj_only: bool = cfg.update_best_traj_only
         self.t_next = torch.tensor(cfg.t_next, device=device) if cfg.t_next is not None else self.t_vec[1]
         self.device = device
         
@@ -285,11 +286,19 @@ class YOPO:
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
             score, coef_xyz = self.inference(p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image)
-            pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, HW, -1)
             
-            cumulative_loss = torch.zeros(N, HW, device=self.device)
-            survive = torch.ones(N, HW, device=self.device, dtype=torch.bool)
-            survive_steps = torch.ones(N, HW, device=self.device)
+            if self.update_best_traj_only:
+                best_idx = score.argmin(dim=-1).reshape(N, 1, 1, 1).expand(-1, -1, 6, 3)
+                coef_xyz = torch.gather(coef_xyz, 1, best_idx)
+                cumulative_loss = torch.zeros(N, 1, device=self.device)
+                survive = torch.ones(N, 1, device=self.device, dtype=torch.bool)
+                survive_steps = torch.ones(N, 1, device=self.device)
+                pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2)
+            else:
+                cumulative_loss = torch.zeros(N, HW, device=self.device)
+                survive = torch.ones(N, HW, device=self.device, dtype=torch.bool)
+                survive_steps = torch.ones(N, HW, device=self.device)
+                pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, HW, -1)
             
             for i, t in enumerate(self.t_vec[1:]):
                 p_t_b, v_t_b, a_t_b = get_traj_point(t, coef_xyz) # [N, 3]

@@ -16,11 +16,8 @@ def main(cfg: DictConfig):
     from quaddif.env import build_env
     from quaddif.algo import build_agent
     from quaddif.utils.device import get_idle_device
-    from quaddif.utils.logger import RecordEpisodeStatistics, Logger
+    from quaddif.utils.logger import Logger
     from quaddif.utils.runner import TestRunner
-
-    runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
-    logger = Logger(cfg, run_name=f"__test{runname}")
 
     if cfg.device is None and cfg.n_jobs > 1:
         sleep(random.random() * 3)
@@ -45,9 +42,15 @@ def main(cfg: DictConfig):
     if cfg.use_training_cfg:
         cfg.dynamics = ckpt_cfg.dynamics
         cfg.sensor = ckpt_cfg.sensor
+        ckpt_cfg.env.max_target_vel = cfg.env.max_target_vel
+        ckpt_cfg.env.min_target_vel = cfg.env.min_target_vel
+        ckpt_cfg.env.n_envs = cfg.env.n_envs
         cfg.env = ckpt_cfg.env
+
+    runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
+    logger = Logger(cfg, run_name=runname)
     
-    env = RecordEpisodeStatistics(build_env(cfg.env, device=device))
+    env = build_env(cfg.env, device=device)
     
     agent = build_agent(cfg.algo, env, device)
     agent.load(cfg.checkpoint)

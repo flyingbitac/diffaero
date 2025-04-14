@@ -1,0 +1,31 @@
+[36m--[0m Using CATKIN_DEVEL_PREFIX: /home/zxh/ws/quaddif/deploy/devel/.private/accel_control
+[36m--[0m Using CMAKE_PREFIX_PATH: /home/zxh/ws/quaddif/deploy/devel;/opt/ros/noetic
+[36m--[0m This workspace overlays: /home/zxh/ws/quaddif/deploy/devel;/opt/ros/noetic
+[36m--[0m Using PYTHON_EXECUTABLE: /home/zxh/miniconda3/envs/ros1/bin/python
+[36m--[0m Using Debian Python package layout
+[36m--[0m Using empy: /home/zxh/.local/lib/python3.8/site-packages/em.py
+[36m--[0m Using CATKIN_ENABLE_TESTING: False
+[36m--[0m catkin 0.8.10
+[36m--[0m BUILD_SHARED_LIBS is on
+[36m--[0m Using these message generators: gencpp;geneus;genlisp;gennodejs;genpy
+[33m[1mCMake Warning[0m at /home/zxh/ws/quaddif/deploy/build/accel_control/cmake/accel_control-genmsg.cmake:3 (message):
+  Invoking generate_messages() without having added any message or service
+  file before.
+
+  You should either add add_message_files() and/or add_service_files() calls
+  or remove the invocation of generate_messages().
+[36mCall Stack (most recent call first):[0m
+  /opt/ros/noetic/share/genmsg/cmake/genmsg-extras.cmake:307 (include)
+  CMakeLists.txt:59 (generate_messages)
+
+
+[36m--[0m accel_control: 0 messages, 0 services
+[31m[1mCMake Error[0m at /opt/ros/noetic/share/genmsg/cmake/genmsg-extras.cmake:155 (message):
+  generate_messages() must be called after add_service_files()
+[36mCall Stack (most recent call first):[0m
+  CMakeLists.txt:67 (add_service_files)
+
+
+[36m--[0m Configuring incomplete, errors occurred!
+See also "/home/zxh/ws/quaddif/deploy/build/accel_control/CMakeFiles/CMakeOutput.log".
+make: *** [Makefile:985: cmake_check_build_system] Error 1

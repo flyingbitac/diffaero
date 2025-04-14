@@ -3,15 +3,15 @@ from typing import Tuple, Dict, Union
 from omegaconf import DictConfig
 import torch
 from torch import Tensor
+from tensordict import TensorDict
 
 from quaddif.dynamics import build_dynamics
 from quaddif.dynamics.pointmass import point_mass_quat
 
 class BaseEnv:
     def __init__(self, cfg: DictConfig, device: torch.device):
-        self.dynamic_type: str = cfg.dynamics.name
-        assert self.dynamic_type in ["pointmass", "quadrotor"]
         self.dynamics = build_dynamics(cfg.dynamics, device)
+        self.dynamic_type: str = self.dynamics.type
         self.n_agents: int = cfg.n_agents
         self.dt: float = cfg.dt
         self.L: float = cfg.length
@@ -71,8 +71,12 @@ class BaseEnv:
         target_dist = target_relpos.norm(dim=-1) # [n_envs]
         return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
 
-    def step(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+    def step(self, action, need_obs_before_reset=True) -> Tuple[
+        Union[Tensor, TensorDict],
+        Tensor,
+        Tensor,
+        Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]
+    ]:
         raise NotImplementedError
     
     def state_for_render(self):
@@ -106,9 +110,21 @@ class BaseEnvMultiAgent(BaseEnv):
         self.target_pos_base = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
         self.target_pos_rel  = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
 
+    def step(self, action, need_global_state_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+        raise NotImplementedError
+
     @property
     def target_pos(self):
         return self.target_pos_base + self.target_pos_rel
+
+    def step(self, action, need_global_state_before_reset=True) -> Tuple[
+        Union[Tuple[Tensor, Tensor], Tuple[TensorDict, Tensor]],
+        Tensor,
+        Tensor,
+        Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]
+    ]:
+        raise NotImplementedError
 
     @property
     def target_vel(self): # TODO

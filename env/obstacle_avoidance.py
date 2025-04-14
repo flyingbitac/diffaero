@@ -83,8 +83,8 @@ class ObstacleAvoidance(BaseEnv):
             self.sensor_tensor.copy_(obst_relpos.gather(dim=1, index=sorted_idx))
     
     @timeit
-    def step(self, action):
-        # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+    def step(self, action, need_obs_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         self.dynamics.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -106,10 +106,17 @@ class ObstacleAvoidance(BaseEnv):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            "next_obs_before_reset": self.get_observations(with_grad=True),
             "loss_components": loss_components,
-            "sensor": self.sensor_tensor.clone(),
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
+            "sensor": self.sensor_tensor.clone()
         }
+        if need_obs_before_reset:
+            extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_observations(), loss, terminated, extra
@@ -141,17 +148,18 @@ class ObstacleAvoidance(BaseEnv):
         avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
         oa_loss = approaching_penalty - 0.5 * avoiding_reward
         
-        collision_loss = self.collision().float() * 100.
+        collision_loss = self.collision().float() * 10.
         
         if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
+            vel_diff = self.dynamics._vel_ema - self.target_vel
+            vel_diff = torch.norm(vel_diff * torch.tensor([[1, 1, 2]], device=self.device), dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = vel_loss + 4 * oa_loss + 0.003 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.005 * jerk_loss + 5 * pos_loss + collision_loss
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -226,7 +234,7 @@ class ObstacleAvoidance(BaseEnv):
             env_idx=env_idx,
             drone_init_pos=self.p[env_idx],
             target_pos=self.target_pos[env_idx],
-            safety_range=self.r_drone+0.3
+            safety_range=self.r_drone+1.5
         )
             
         self.progress[env_idx] = 0
@@ -298,7 +306,13 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             "success": success,
             "arrive_time": self.arrive_time.clone(),
             "loss_components": loss_components,
-            "sensor": self.sensor_tensor.clone(),
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
+            "sensor": self.sensor_tensor.clone()
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
@@ -310,7 +324,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         p, v, a = _p.detach(), _v.detach(), _a.detach()
         target_relpos = self.target_pos.unsqueeze(1) - _p
         target_dist = target_relpos.norm(dim=-1)
-        target_vel = target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
+        target_vel = target_relpos / torch.max(target_dist / self.max_vel.unsqueeze(-1), torch.ones_like(target_dist)).unsqueeze(-1)
         target_vel.detach_()
         virtual_radius = 0.2
         # calculating the closest point on each sphere to the quadrotor

@@ -27,8 +27,8 @@ class PositionControl(BaseEnv):
         return obs if with_grad else obs.detach()
     
     @timeit
-    def step(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
+    def step(self, action, need_obs_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
         self.dynamics.step(action)
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -49,9 +49,19 @@ class PositionControl(BaseEnv):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            "next_obs_before_reset": self.get_observations(with_grad=True),
-            "loss_components": loss_components
+            "loss_components": loss_components,
+            # Ddata dictionary that contains all the statistical metrics
+            # need to be calculated and logged in a sliding-window manner
+            # Note: all items in dictionary "stats_raw" should have ndim=1
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success]
+            },
         }
+        if need_obs_before_reset:
+            extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_observations(), loss, terminated, extra
@@ -195,8 +205,8 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         return global_state if with_grad else global_state.detach()
     
     @timeit
-    def step(self, action):
-        # type: (Tensor) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
+    def step(self, action, need_global_state_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         self.dynamics.step(action)
         (terminated, collision, out_of_bound), truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -206,7 +216,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        arrived = torch.norm(self.p - self.target_pos, dim=-1).lt(0.25).all(dim=-1) # [n_envs, ]
+        arrived = torch.norm(self.p - self.target_pos, dim=-1).lt(0.5).all(dim=-1) # [n_envs, ]
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
         success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
@@ -218,12 +228,22 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             "reset_indicies": reset_indices,
             "success": success,
             "arrive_time": self.arrive_time.clone(),
-            # "next_obs_before_reset": self.get_observations(with_grad=True),
-            "next_global_state_before_reset": self.get_global_state(with_grad=True),
             "loss_components": loss_components,
-            "collision": collision,
-            "out_of_bound": out_of_bound
+            # Ddata dictionary that contains all the statistical metrics
+            # need to be calculated and logged in a sliding-window manner
+            # Note: all items in dictionary "stats_raw" should have ndim=1
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "collision_rate": collision[reset],
+                "out_of_bound_rate": out_of_bound[reset],
+                "arrive_time": self.arrive_time.clone()[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "arrive_time": self.arrive_time.clone()[success],
+            },
         }
+        if need_global_state_before_reset:
+            extra["next_global_state_before_reset"] = self.get_global_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_obs_and_state(), loss, terminated, extra
@@ -239,7 +259,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         self.target_pos_rel[env_idx] = 0.
         self.target_pos_rel[env_idx, 1, 0] = 1.
         self.target_pos_rel[env_idx, 2, 1] = 1.
-        self.target_pos_rel[env_idx, 3, :2] = 1.
+        # self.target_pos_rel[env_idx, 3, :2] = 1.
         # 随机初始化新的位置
         N = 5
         assert N**3 > self.n_agents
@@ -251,11 +271,9 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         random_idx = random_idx[:, :self.n_agents, None].expand(-1, -1, 3) # [n_resets, n_agents, 3]
         new_pos = torch.zeros(self.n_envs, self.n_agents, 3, device=self.device)
         new_pos[env_idx] = xyz.gather(dim=1, index=random_idx)
-        new_vel = torch.randn_like(new_pos) # [n_envs, n_agents, 3]
         new_state = torch.cat([
             new_pos,
-            new_vel,
-            torch.zeros(self.n_envs, self.n_agents, self.dynamics.state_dim-6, device=self.device)
+            torch.zeros(self.n_envs, self.n_agents, self.dynamics.state_dim-3, device=self.device)
         ], dim=-1)
         
         if self.dynamic_type == "pointmass":
@@ -298,7 +316,6 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
                 "jerk_loss": jerk_loss.mean().item(),
                 "collide_loss": collide_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
-                
                 "mean_distance_to_nearest_target": mean_distance_to_nearest_target.mean().item()
             }
         else:
