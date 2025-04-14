@@ -48,10 +48,10 @@ def train_agents(agent:ActorCriticAgent,state_env:DepthStateEnv,cfg):
     
 def train_worldmodel(world_model:DepthStateModel,replaybuffer:ReplayBuffer,opt,training_hyper):
     for _ in range(training_hyper.worldmodel_update_freq):
-        sample_state, sample_action, sample_reward, sample_termination,sample_perception = \
+        sample_state, sample_action, sample_reward, sample_termination,sample_perception,sample_grid = \
                                             replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
-        total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss = \
-            world_model.compute_loss(sample_state, sample_perception, sample_action, sample_reward, sample_termination)
+        total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss,grid_loss = \
+            world_model.compute_loss(sample_state, sample_perception, sample_action, sample_reward, sample_termination, sample_grid)
     
     total_loss.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(world_model.parameters(),training_hyper.max_grad_norm)
@@ -65,7 +65,8 @@ def train_worldmodel(world_model:DepthStateModel,replaybuffer:ReplayBuffer,opt,t
         'WorldModel/state_rec_loss':rec_loss.item(),
         'WorldModel/grad_norm':grad_norm.item(),
         'WorldModel/state_rew_loss':rew_loss.item(),
-        'WorldModel/state_end_loss':end_loss.item()
+        'WorldModel/state_end_loss':end_loss.item(),
+        'WorldModel/state_grid_loss':grid_loss.item(),
     }
     
     return world_info
@@ -99,6 +100,11 @@ class World_Agent:
             buffercfg.use_perception = False
             statemodelcfg.state_dim = 10
             world_agent_cfg.replaybuffer.state_dim = 10
+        if cfg.env.name=='obstacle_avoidance_grid':
+            statemodelcfg.grid_dim = math.prod(cfg.env.grid.n_points)
+            buffercfg.grid_dim = math.prod(cfg.env.grid.n_points)
+            statemodelcfg.use_grid = True
+            buffercfg.use_grid = True
         
         self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
         self.state_model = DepthStateModel(statemodelcfg).to(device)
@@ -130,8 +136,12 @@ class World_Agent:
         with torch.no_grad():
             if type(obs)!=torch.Tensor:
                 state,perception = obs['state'],obs['perception'].unsqueeze(1)
+                if 'grid' in obs:
+                    grid = obs['grid']
+                else:
+                    grid = None
             else:
-                state,perception = obs,None
+                state,perception,grid = obs,None,None
             if self.world_agent_cfg.common.use_symlog:
                 state = symlog(state)
             if self.replaybuffer.ready() or self.world_agent_cfg.common.checkpoint_path!=None:
@@ -142,7 +152,7 @@ class World_Agent:
                 action = torch.randn(self.cfg.n_envs,3,device=state.device)
             next_obs,rewards,terminated,env_info = env.step(env.rescale_action(action))
             rewards = 10.*(1-rewards*0.1)
-            self.replaybuffer.append(state,action,rewards,terminated,perception)
+            self.replaybuffer.append(state,action,rewards,terminated,perception,grid)
             
             if terminated.any():
                 for i in range(cfg.n_envs):
@@ -186,7 +196,7 @@ class WorldExporter(nn.Module):
         self.inp_proj = deepcopy(agent.state_model.inp_proj)
         self.seq_model = deepcopy(agent.state_model.seq_model)
         self.act_state_proj = deepcopy(agent.state_model.act_state_proj)
-        self.actor = deepcopy(agent.agent.actor_mean)
+        self.actor = deepcopy(agent.agent.actor_mean_std)
         
         self.register_buffer("hidden_state",torch.zeros(1,agent.state_model.cfg.hidden_dim))
         self.hidden_state = self.get_buffer("hidden_state")
@@ -217,7 +227,8 @@ class WorldExporter(nn.Module):
             image_feat = self.image_encoder(perception.unsqueeze(0))
             feat = torch.cat([state_feat, image_feat], dim=-1)
             latent = self.sample_with_post(feat).flatten(1)
-            action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            mean_std = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            action, _ = torch.chunk(mean_std, 2, dim=-1)
             action = torch.tanh(action)
             self.sample_with_prior(latent, action)
             action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
@@ -229,7 +240,8 @@ class WorldExporter(nn.Module):
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
             state_feat = self.state_encoder(state.unsqueeze(0))
             latent = self.sample_with_post(state_feat).flatten(1)
-            action = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            mean_std = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            action, _ = torch.chunk(mean_std, 2, dim=-1)
             action = torch.tanh(action)
             self.sample_with_prior(latent,action)
             action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)

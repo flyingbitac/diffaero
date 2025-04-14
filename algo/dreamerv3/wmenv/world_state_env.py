@@ -42,7 +42,7 @@ class DepthStateEnv:
     def make_generator_init(self,):
         batch_size = self.cfg.batch_size
         batch_length = self.cfg.batch_length
-        states, actions, _ , _, perceptions = self.replaybuffer.sample(batch_size, batch_length)
+        states, actions, _ , _, perceptions, grid = self.replaybuffer.sample(batch_size, batch_length)
         hidden = None
             
         for i in range(batch_length):

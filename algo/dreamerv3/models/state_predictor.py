@@ -20,8 +20,10 @@ class DepthStateModelCfg:
     latent_dim: int
     categoricals: int
     num_classes: int
+    grid_dim: int=4000
     use_simnorm: bool=False
     only_state: bool=False
+    use_grid: bool=False
 
 @dataclass
 class Batch:
@@ -172,6 +174,24 @@ class EndDecoder(nn.Module):
         end = self.head(feat)
         return end.squeeze(-1)
 
+class GridDecoder(nn.Module):
+    def __init__(self, hidden_dim, latent_dim, grid_dim) -> None:
+        super().__init__()
+        self.backbone = nn.Sequential(
+            nn.Linear(hidden_dim+latent_dim, hidden_dim, bias=False),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim, bias=False),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(inplace=True),
+        )
+        self.head = nn.Linear(hidden_dim, grid_dim)
+    
+    def forward(self, feat, hidden):
+        feat = self.backbone(torch.cat([feat,hidden],dim=-1))
+        grid = self.head(feat)
+        return grid
+
 class MSELoss(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -240,6 +260,8 @@ class DepthStateModel(nn.Module):
 
         self.reward_predictor = RewardDecoder(cfg.num_classes,cfg.hidden_dim,cfg.latent_dim)
         self.end_predictor = EndDecoder(cfg.hidden_dim,cfg.latent_dim)
+        if cfg.use_grid:
+            self.grid_gredictor = GridDecoder(cfg.hidden_dim,cfg.latent_dim,cfg.grid_dim)
     
     def straight_with_gradient(self,logits:Tensor):
         probs = F.softmax(logits,dim=-1)
@@ -320,7 +342,7 @@ class DepthStateModel(nn.Module):
         pred_end = end_logit>0
         return prior_sample,pred_reward,pred_end,hidden
 
-    def compute_loss(self,states:Tensor, depth_images:Tensor, actions:Tensor, rewards:Tensor, terminations:Tensor):
+    def compute_loss(self,states:Tensor, depth_images:Tensor, actions:Tensor, rewards:Tensor, terminations:Tensor, grid:Tensor=None):
         b,l,d = states.shape
 
         hidden = torch.zeros(b,self.cfg.hidden_dim,device=states.device)
@@ -329,6 +351,7 @@ class DepthStateModel(nn.Module):
         prior_logits = []
         reward_logits = []
         end_logits = []
+        grid_logits = []
         rec_states = []
         rec_images = []
 
@@ -344,6 +367,9 @@ class DepthStateModel(nn.Module):
             flattened_prior_sample = self.flatten(prior_sample)
             reward_logit = self.reward_predictor(flattened_prior_sample,hidden)
             end_logit = self.end_predictor(flattened_prior_sample,hidden)
+            if hasattr(self, 'grid_gredictor'):
+                grid_logit = self.grid_gredictor(flattened_prior_sample,hidden)
+                grid_logits.append(grid_logit)
 
             rec_states.append(rec_state) 
             rec_images.append(rec_image)
@@ -364,12 +390,18 @@ class DepthStateModel(nn.Module):
         dyn_loss,_ = self.kl_loss(post_logits[:,1:].detach(),prior_logits[:,:-1])
         rew_loss = self.symlogtwohotloss(reward_logits,rewards)
         end_loss = self.endloss(end_logits,terminations)
+        if hasattr(self, 'grid_gredictor'):
+            grid_logits = torch.stack(grid_logits,dim=1)
+            grid_loss = self.endloss(grid_logits,grid.float())
+        else:
+            grid_loss = torch.zeros(())
+            
         if depth_images!=None:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()+self.mse_loss(rec_images,depth_images)
         else:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
-        total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss
-        return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss
+        total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss + grid_loss
+        return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss,grid_loss
 
 if __name__=='__main__':
 

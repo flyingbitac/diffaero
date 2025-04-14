@@ -69,7 +69,7 @@ def main(cfg: DictConfig):
     ):
         state = env.reset()
         max_success_rate = 0
-        pbar = tqdm(range(cfg.n_updates))
+        pbar = tqdm(range(cfg.n_updates), ncols=100)
         for i in pbar:
             t1 = pbar._time()
             env.detach()

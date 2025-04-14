@@ -23,12 +23,14 @@ replaybuffer:
   perception_height: 9
   state_dim: 13
   action_dim: 3
+  grid_dim: 4000
   num_envs: 64
-  max_length: 4194304
+  max_length: 1048576
   warmup_length: 5000
   store_on_gpu: True
   device: "cuda:1"
   use_perception: True
+  use_grid: False
 
 state_predictor:
   state_model:
@@ -43,6 +45,8 @@ state_predictor:
     num_classes: 255
     use_simnorm: False
     only_state: False
+    use_grid: False
+    grid_dim: 4000
 
   training:
     max_grad_norm: 100.0
@@ -61,7 +65,7 @@ actor_critic:
     __target__: algo.dreamerv3.models.agent.ActorCriticConfig
     feat_dim: 1536 # hidden + latent
     num_layers: 2
-    hidden_dim: 512
+    hidden_dim: 256
     action_dim: 3
     gamma: 0.985
     lambd: 0.95
