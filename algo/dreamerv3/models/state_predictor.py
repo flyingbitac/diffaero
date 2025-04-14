@@ -8,7 +8,7 @@ from typing import Optional
 from einops import rearrange,reduce
 from einops.layers.torch import Rearrange
 
-from .blocks import SymLogTwoHotLoss
+from .blocks import SymLogTwoHotLoss, MLP
 
 @dataclass
 class DepthStateModelCfg:
@@ -99,6 +99,7 @@ class ImageDecoderMLP(nn.Module):
                                  nn.Linear(hidden_dim,hidden_dim),
                                  nn.LayerNorm(hidden_dim),
                                  nn.SiLU(inplace=True))
+        # self.backbone = MLP(feat_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim,image_height*image_width)
         self.image_height = image_height
 
@@ -149,6 +150,7 @@ class RewardDecoder(nn.Module):
             nn.LayerNorm(hidden_dim),
             nn.SiLU(inplace=True),
         )
+        # self.backbone = MLP(latent_dim+hidden_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, feat, hidden):
@@ -167,6 +169,7 @@ class EndDecoder(nn.Module):
             nn.LayerNorm(hidden_dim),
             nn.SiLU(inplace=True),
         )
+        # self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, 1)
     
     def forward(self, feat, hidden):
@@ -185,6 +188,7 @@ class GridDecoder(nn.Module):
             nn.LayerNorm(hidden_dim),
             nn.SiLU(inplace=True),
         )
+        # self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, grid_dim)
     
     def forward(self, feat, hidden):

@@ -8,7 +8,7 @@ import copy
 from dataclasses import dataclass
 from torch.cuda.amp import autocast
 
-from .blocks import SymLogTwoHotLoss
+from .blocks import SymLogTwoHotLoss, MLP
 
 class EMAScalar():
     def __init__(self, decay) -> None:
@@ -112,6 +112,14 @@ class ActorCriticAgent(nn.Module):
 
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
 
+        # self.actor_mean_std = nn.Sequential(
+        #     MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm',bias=False),
+        #     nn.Linear(hidden_dim, action_dim*2),
+        # )
+        # self.critic = nn.Sequential(
+        #     MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm', bias=False),
+        #     nn.Linear(hidden_dim, 255),
+        # )
         actor_mean = [
             nn.Linear(feat_dim, hidden_dim, bias=False),
             nn.LayerNorm(hidden_dim),
