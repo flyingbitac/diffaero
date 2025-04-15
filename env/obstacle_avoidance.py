@@ -278,37 +278,58 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device:torch.device, test:bool=False):
         super().__init__(cfg, device)
         self.test = test
-        
-    def grid(self, x_min:float, x_max:float, y_min:float, y_max:float, z_min:float, z_max:float, n_points:List[int]):
-        x_range = torch.linspace(x_min, x_max, n_points[0], device=self.device)
-        y_range = torch.linspace(y_min, y_max, n_points[1], device=self.device)
-        z_range = torch.linspace(z_min, z_max, n_points[2], device=self.device)
-        grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1)
-        grid_xyz = self.p.unsqueeze(1).expand(-1, math.prod(n_points), -1) + grid_xyz_range.reshape(-1, 3) # [n_envs, n_points, 3]
-        dist2sphere = torch.norm(grid_xyz.unsqueeze(2) - self.obstacle_manager.p_spheres.unsqueeze(1), dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(1) # [n_envs, n_points, n_spheres]
-        occupancy_sphere = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2sphere) # [n_envs, n_points]
-        nearest_point2cube = grid_xyz.unsqueeze(2).clamp(min=self.obstacle_manager.box_min.unsqueeze(1), max=self.obstacle_manager.box_max.unsqueeze(1)) # [n_envs, n_points, n_cubes, 3]
-        dist2cube = torch.norm(nearest_point2cube - grid_xyz.unsqueeze(2), dim=-1) # [n_envs, n_points, n_cubes]
-        occupancy_cube = torch.vmap(lambda x:torch.any(x < self.r_drone, dim=-1), in_dims=1, out_dims=1)(dist2cube) # [n_envs, n_points]
-        occupancy = occupancy_sphere | occupancy_cube # [n_envs, n_points]
-        if self.z_ground_plane is not None:
-            occupancy = occupancy | (grid_xyz[..., 2] - self.r_drone < self.z_ground_plane)
-        return occupancy # [n_envs, n_points]
+        self.n_grid_points = math.prod(cfg.grid.n_points)
+        self.cube_size = min(
+            (cfg.grid.x_max - cfg.grid.x_min) / cfg.grid.n_points[0],
+            (cfg.grid.y_max - cfg.grid.y_min) / cfg.grid.n_points[1],
+            (cfg.grid.z_max - cfg.grid.z_min) / cfg.grid.n_points[2],
+        )
+        x_range = torch.linspace(cfg.grid.x_min, cfg.grid.x_max - self.cube_size, cfg.grid.n_points[0], device=self.device) + self.cube_size / 2
+        y_range = torch.linspace(cfg.grid.y_min, cfg.grid.y_max - self.cube_size, cfg.grid.n_points[1], device=self.device) + self.cube_size / 2
+        z_range = torch.linspace(cfg.grid.z_min, cfg.grid.z_max - self.cube_size, cfg.grid.n_points[2], device=self.device) + self.cube_size / 2
+        grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1) # [x_points, y_points, z_points, 3]
+        self.local_grid_centers = grid_xyz_range.reshape(1, -1, 3) # [1, n_points, 3]
+        n_segments = math.ceil(self.camera.max_dist / self.cube_size)
+        self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device).reshape(1, n_segments, 1, 1)
     
-    def state(self, with_grad=False):
+    @timeit
+    def get_occupancy_map(self, quat_xyzw):
+        # get occupancy map
+        grid_xyz = self.p.unsqueeze(1) + self.local_grid_centers # [n_envs, n_points, 3]
+        dist2sphere = torch.norm(grid_xyz.unsqueeze(2) - self.obstacle_manager.p_spheres.unsqueeze(1), p=1, dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(1) # [n_envs, n_points, n_spheres]
+        occupancy_sphere = torch.any(dist2sphere < self.cube_size / 2, dim=-1) # [n_envs, n_points]
+        nearest_point2cube = grid_xyz.unsqueeze(2).clamp(min=self.obstacle_manager.box_min.unsqueeze(1), max=self.obstacle_manager.box_max.unsqueeze(1)) # [n_envs, n_points, n_cubes, 3]
+        dist2cube = torch.norm(nearest_point2cube - grid_xyz.unsqueeze(2), p=1, dim=-1) # [n_envs, n_points, n_cubes]
+        occupancy_cube = torch.any(dist2cube < self.cube_size / 2, dim=-1) # [n_envs, n_points]
+        occupancy_map = occupancy_sphere | occupancy_cube # [n_envs, n_points]
+        if self.z_ground_plane is not None:
+            occupancy_map = occupancy_map | ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane)
+        
+        # get visiability map
+        N, H, W = self.sensor_tensor.shape
+        start = self.p.unsqueeze(1).expand(-1, H*W, -1)
+        contact_point = self.camera.get_contact_point( # [n_envs, n_rays, 3]
+            depth=self.sensor_tensor,
+            start=start,
+            quat_xyzw=quat_xyzw)
+        visible_points = torch.lerp(start.unsqueeze(1), contact_point.unsqueeze(1), self.ray_segment_weight).reshape(N, -1, 3) # [n_envs, n_segments * n_rays, 3]
+        dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_segments * n_rays]
+        visible_map = torch.any(dist2visible_points < self.cube_size / 2, dim=-1)
+        return occupancy_map # [n_envs, n_points]
+    
+    @timeit
+    def get_observations(self, with_grad=False):
+        quat_xyzw = self.q
         if self.dynamic_type == "pointmass":
-            state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
+            state = torch.cat([self.target_vel, quat_xyzw, self._v], dim=-1)
         else:
             state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         if not self.test:
-            grid = self.grid(x_min=self.cfg.grid.x_min, x_max=self.cfg.grid.x_max, 
-                            y_min=self.cfg.grid.y_min, y_max=self.cfg.grid.y_max, 
-                            z_min=self.cfg.grid.z_min, z_max=self.cfg.grid.z_max, 
-                            n_points=self.cfg.grid.n_points)
+            grid = self.get_occupancy_map(quat_xyzw)
         else:
             grid = None
         state = TensorDict({
-            "state": state, "perception": self.sensor_tensor.clone(), "grid":grid}, batch_size=self.n_envs)
+            "state": state, "perception": self.sensor_tensor.clone(), "grid": grid}, batch_size=self.n_envs)
         state = state if with_grad else state.detach()
         return state
     
