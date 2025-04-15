@@ -29,6 +29,7 @@ class ReplayBuffer():
             self.reward_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
             self.grid_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.bool, device=device, requires_grad=False)
+            self.visible_map_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.bool, device=device, requires_grad=False)
         else:
             raise ValueError("Only support gpu!!!")
 
@@ -48,7 +49,7 @@ class ReplayBuffer():
         if batch_size < self.num_envs:
             batch_size = self.num_envs
         if self.store_on_gpu:
-            state, action, reward, termination, perception, grid = [], [], [], [], [], []
+            state, action, reward, termination, perception, grid, visible_map = [], [], [], [], [], [], []
             if batch_size > 0:
                 for i in range(self.num_envs):
                     indexes = np.random.randint(0, self.length+1-batch_length, size=batch_size//self.num_envs)
@@ -60,6 +61,7 @@ class ReplayBuffer():
                         perception.append(torch.stack([self.perception_buffer[idx:idx+batch_length, i] for idx in indexes]))
                     if self.use_grid:
                         grid.append(torch.stack([self.grid_buffer[idx:idx+batch_length, i] for idx in indexes]))
+                        visible_map.append(torch.stack([self.visible_map_buffer[idx:idx+batch_length, i] for idx in indexes]))
 
             state = torch.cat(state, dim=0)
             action = torch.cat(action, dim=0)
@@ -71,15 +73,17 @@ class ReplayBuffer():
                 perception = None
             if self.use_grid:
                 grid = torch.cat(grid, dim=0)
+                visible_map = torch.cat(visible_map, dim=0)
             else:
                 grid = None
+                visible_map = None
             
         else:
             raise ValueError("Only support gpu!!!")
 
-        return state, action, reward, termination, perception, grid
+        return state, action, reward, termination, perception, grid, visible_map
 
-    def append(self, state, action, reward, termination, perception=None, grid=None):
+    def append(self, state, action, reward, termination, perception=None, grid=None, visible_map=None):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length//self.num_envs)
         if self.store_on_gpu:
             self.state_buffer[self.last_pointer] = state
@@ -90,6 +94,7 @@ class ReplayBuffer():
                 self.perception_buffer[self.last_pointer] = perception
             if self.use_grid and grid is not None:
                 self.grid_buffer[self.last_pointer] = grid
+                self.visible_map_buffer[self.last_pointer] = visible_map
         else:
             raise ValueError("Only support gpu!!!")
 

@@ -290,7 +290,34 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1) # [x_points, y_points, z_points, 3]
         self.local_grid_centers = grid_xyz_range.reshape(1, -1, 3) # [1, n_points, 3]
         n_segments = math.ceil(self.camera.max_dist / self.cube_size)
-        self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device).reshape(1, n_segments, 1, 1)
+        self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device)
+        
+        self.prev_pos = torch.zeros(self.n_envs, 3, device=self.device)
+        self.visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
+    
+    def visualize_grid(self, grid: Tensor):
+        import matplotlib.pyplot as plt
+        fig = plt.figure(figsize=(8, 7))
+        ax = fig.add_subplot(111, projection='3d')
+        # ax.set_xlim3d([self.cfg.grid.x_min, self.cfg.grid.x_max])
+        # ax.set_ylim3d([self.cfg.grid.y_min, self.cfg.grid.y_max])
+        # ax.set_zlim3d([self.cfg.grid.z_min, self.cfg.grid.z_max])
+        grid = grid.view(*self.cfg.grid.n_points).float()
+        voxel = grid.cpu().numpy()
+        colors = torch.stack([
+            grid * 1.0,
+            grid * 0.,
+            grid * 0.,
+            1 - grid * 0.1
+        ], dim=-1).cpu().numpy()
+        print(colors.shape, colors.dtype)
+        ax.voxels(
+            self.local_grid_centers[0, :, 0].cpu().numpy(),
+            self.local_grid_centers[0, :, 1].cpu().numpy(),
+            self.local_grid_centers[0, :, 2].cpu().numpy(),
+            voxel, facecolors=colors, edgecolors="grey")
+        # ax.voxels(np.ones_like(voxel, dtype=bool), facecolors=colors)
+        plt.show()
     
     @timeit
     def get_occupancy_map(self, quat_xyzw):
@@ -312,10 +339,21 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             depth=self.sensor_tensor,
             start=start,
             quat_xyzw=quat_xyzw)
-        visible_points = torch.lerp(start.unsqueeze(1), contact_point.unsqueeze(1), self.ray_segment_weight).reshape(N, -1, 3) # [n_envs, n_segments * n_rays, 3]
-        dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_segments * n_rays]
-        visible_map = torch.any(dist2visible_points < self.cube_size / 2, dim=-1)
-        return occupancy_map # [n_envs, n_points]
+        
+        # visible_points = torch.lerp(start.unsqueeze(1), contact_point.unsqueeze(1), self.ray_segment_weight.reshape(1, n_segments, 1, 1)).reshape(N, -1, 3) # [n_envs, n_segments * n_rays, 3]
+        # dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_segments * n_rays]
+        # visible_map = torch.any(dist2visible_points < self.cube_size / 2, dim=-1)
+        
+        visible_map = torch.zeros_like(occupancy_map, dtype=torch.bool)
+        for w in self.ray_segment_weight:
+            visible_points = torch.lerp(start, contact_point, w)
+            dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_rays]
+            visible_map.logical_or_(torch.any(dist2visible_points < self.cube_size / 2, dim=-1))
+        
+        # prev_visible_points = self.local_grid_centers.gather(dim=1, index=self.visible_map.unsqueeze(-1).expand(-1, -1, 3)) + self.prev_pos.unsqueeze(1)
+        # dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - prev_visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_rays]
+        
+        return occupancy_map, visible_map # [n_envs, n_points]
     
     @timeit
     def get_observations(self, with_grad=False):
@@ -325,13 +363,19 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         else:
             state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         if not self.test:
-            grid = self.get_occupancy_map(quat_xyzw)
+            grid, visible_map = self.get_occupancy_map(quat_xyzw)
         else:
-            grid = None
+            grid, visible_map = None
         state = TensorDict({
-            "state": state, "perception": self.sensor_tensor.clone(), "grid": grid}, batch_size=self.n_envs)
+            "state": state, "perception": self.sensor_tensor.clone(), "grid": grid, "visible_map": visible_map}, batch_size=self.n_envs)
         state = state if with_grad else state.detach()
         return state
+    
+    @timeit
+    def reset_idx(self, env_idx):
+        super().reset_idx(env_idx)
+        self.visible_map[env_idx] = False
+        self.prev_pos[env_idx] = self.p[env_idx]
     
 class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device: torch.device):

@@ -185,6 +185,7 @@ class DepthStateModel(nn.Module):
         self.mse_loss = MSELoss()
         self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
         self.endloss = nn.BCEWithLogitsLoss()
+        # self.endloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(3))
 
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         if not cfg.only_state:
@@ -305,8 +306,17 @@ class DepthStateModel(nn.Module):
         pred_end = end_logit>0
         return prior_sample,pred_reward,pred_end,hidden
 
-    def compute_loss(self,states:Tensor, depth_images:Tensor, actions:Tensor, rewards:Tensor, terminations:Tensor, grid:Tensor=None):
-        b,l,d = states.shape
+    def compute_loss(
+        self,
+        states: Tensor,
+        depth_images: Tensor,
+        actions: Tensor,
+        rewards: Tensor,
+        terminations: Tensor,
+        grid: Optional[Tensor] = None,
+        visible_map: Optional[Tensor] = None,
+    ):
+        b, l, d = states.shape
 
         hidden = torch.zeros(b,self.cfg.hidden_dim,device=states.device)
 
@@ -320,18 +330,18 @@ class DepthStateModel(nn.Module):
 
         for i in range(l):
             if depth_images!=None:
-                post_sample,post_logit = self.sample_with_post(states[:,i],depth_images[:,i],hidden)
+                post_sample,post_logit = self.sample_with_post(states[:, i], depth_images[:, i], hidden)
             else:
-                post_sample,post_logit = self.sample_with_post(states[:,i],None,hidden)
+                post_sample,post_logit = self.sample_with_post(states[:, i], None, hidden)
             flattend_post_sample = self.flatten(post_sample)
             rec_state,rec_image = self.decode(flattend_post_sample,hidden)
-            action = actions[:,i]
-            prior_sample,prior_logit,hidden = self.sample_with_prior(flattend_post_sample,action,hidden)
+            action = actions[:, i]
+            prior_sample, prior_logit, hidden = self.sample_with_prior(flattend_post_sample, action, hidden)
             flattened_prior_sample = self.flatten(prior_sample)
-            reward_logit = self.reward_predictor(flattened_prior_sample,hidden)
-            end_logit = self.end_predictor(flattened_prior_sample,hidden)
+            reward_logit = self.reward_predictor(flattened_prior_sample, hidden)
+            end_logit = self.end_predictor(flattened_prior_sample, hidden)
             if hasattr(self, 'grid_gredictor'):
-                grid_logit = self.grid_gredictor(flattened_prior_sample,hidden)
+                grid_logit = self.grid_gredictor(flattened_prior_sample, hidden)
                 grid_logits.append(grid_logit)
 
             rec_states.append(rec_state) 
@@ -354,17 +364,21 @@ class DepthStateModel(nn.Module):
         rew_loss = self.symlogtwohotloss(reward_logits,rewards)
         end_loss = self.endloss(end_logits,terminations)
         if hasattr(self, 'grid_gredictor'):
-            grid_logits = torch.stack(grid_logits,dim=1)
-            grid_loss = self.endloss(grid_logits,grid.float())
+            grid_logits = torch.stack(grid_logits,dim=1)[visible_map]
+            ground_truth_grid = grid[visible_map]
+            # grid_loss = self.endloss(grid_logits, grid.float())
+            # print(grid_logits.shape, grid.shape, visible_map.shape)
+            grid_loss = self.endloss(grid_logits, ground_truth_grid.float())
+            grid_pred = grid_logits > 0
+            grid_acc = (grid_pred == ground_truth_grid).float().mean()
         else:
-            grid_loss = torch.zeros(())
-            
+            grid_loss, grid_acc = torch.zeros(()), torch.zeros(())
         if depth_images!=None:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()+self.mse_loss(rec_images,depth_images)
         else:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss + grid_loss
-        return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss,grid_loss
+        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc
 
 if __name__=='__main__':
 
