@@ -1,4 +1,0 @@
-onnxruntime-gpu
-torch>=2.0.0
-line_profiler
-numpy
