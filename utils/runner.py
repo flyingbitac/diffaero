@@ -12,7 +12,6 @@ import imageio
 from omegaconf import DictConfig
 
 from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
-from quaddif.utils.exporter import PolicyExporter
 from quaddif.utils.logger import Logger
 
 def display_image(state, action, policy_info, env_info):
@@ -175,6 +174,7 @@ class TrainRunner:
         print(f"The checkpoint is saved to {ckpt_path}.")
         print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
         if any(dict(self.cfg.export).values()):
+            from quaddif.utils.exporter import PolicyExporter
             PolicyExporter(self.agent.policy_net).export(
                 path=ckpt_path,
                 verbose=True,
@@ -284,13 +284,20 @@ class TestRunner:
     
     def close(self):
         if self.cfg.export:
+            from quaddif.utils.exporter import PolicyExporter, WorldExporter
             ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
-            PolicyExporter(self.agent.policy_net).export(
-                path=ckpt_path,
-                verbose=True,
-                export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx
-            )
+            if self.cfg.algo.name != "world":
+                PolicyExporter(self.agent.policy_net).export(
+                    path=ckpt_path,
+                    verbose=True,
+                    export_jit=self.cfg.export.jit,
+                    export_onnx=self.cfg.export.onnx
+                )
+            else:
+                if not os.path.exists(ckpt_path):
+                    os.makedirs(ckpt_path)
+                exporter = WorldExporter(self.agent)
+                exporter.export(ckpt_path)
         
         if self.env.renderer is not None:
             self.env.renderer.close()

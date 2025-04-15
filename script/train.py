@@ -33,7 +33,7 @@ def main(cfg: DictConfig):
 
     env = build_env(cfg.env, device=device)
     
-    agent = build_agent(cfg, env, device)
+    agent = build_agent(cfg.algo, env, device)
     
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
     logger = Logger(cfg, run_name=runname)
