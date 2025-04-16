@@ -20,6 +20,8 @@ class DepthStateModelCfg:
     latent_dim: int
     categoricals: int
     num_classes: int
+    grid_loss_pos_weight: float
+    img_recon_loss_weight: float
     grid_dim: int=4000
     use_simnorm: bool=False
     only_state: bool=False
@@ -176,7 +178,7 @@ class MSELoss(nn.Module):
         return loss.mean()
 
 class DepthStateModel(nn.Module):
-    def __init__(self, cfg:DepthStateModelCfg) -> None:
+    def __init__(self, cfg: DepthStateModelCfg) -> None:
         super().__init__()
         self.cfg = cfg
         self.use_simnorm = cfg.use_simnorm
@@ -184,8 +186,8 @@ class DepthStateModel(nn.Module):
         self.kl_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
         self.mse_loss = MSELoss()
         self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
-        self.endloss = nn.BCEWithLogitsLoss()
-        # self.endloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(3))
+        # self.endloss = nn.BCEWithLogitsLoss()
+        self.endloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(cfg.grid_loss_pos_weight))
 
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         if not cfg.only_state:
@@ -367,22 +369,23 @@ class DepthStateModel(nn.Module):
             grid_logits = torch.stack(grid_logits,dim=1)[visible_map]
             ground_truth_grid = grid[visible_map]
             # grid_loss = self.endloss(grid_logits, grid.float())
-            # print(grid_logits.shape, grid.shape, visible_map.shape)
             grid_loss = self.endloss(grid_logits, ground_truth_grid.float())
             grid_pred = grid_logits > 0
             grid_acc = (grid_pred == ground_truth_grid).float().mean()
+            grid_precision = grid_pred[ground_truth_grid].float().mean()
         else:
-            grid_loss, grid_acc = torch.zeros(()), torch.zeros(())
+            grid_loss, grid_acc, grid_precision = torch.zeros(()), torch.zeros(()), torch.zeros(())
+            
+        rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
         if depth_images!=None:
-            rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()+self.mse_loss(rec_images,depth_images)
-        else:
-            rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
+            rec_loss = rec_loss + self.mse_loss(rec_images, depth_images) * self.cfg.img_recon_loss_weight
+        
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss + grid_loss
-        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc
+        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision
 
 if __name__=='__main__':
 
-    cfg = DepthStateModelCfg
+    cfg = DepthStateModelCfg()
     cfg.action_dim = 4
     cfg.categoricals = 16
     cfg.hidden_dim = 256

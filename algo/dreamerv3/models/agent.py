@@ -179,8 +179,6 @@ class ActorCriticAgent(nn.Module):
 
     def sample_as_env_action(self, latent, greedy=False):
         action = self.sample(latent, greedy)
-        # print("action:",action)
-        # assert 0==1
         return action.to(torch.float32).detach().cpu().squeeze(0).numpy()
 
     def update(self, latent, action, reward, termination, logger=None):

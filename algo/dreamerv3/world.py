@@ -1,16 +1,17 @@
+from typing import *
 import os
-import math
 
 import torch
 from omegaconf import DictConfig
 
-from quaddif.env import PositionControl, ObstacleAvoidanceGrid
-from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
+from quaddif.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid
+from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel
 from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
 from quaddif.algo.dreamerv3.models.blocks import symlog
 from quaddif.algo.dreamerv3.wmenv.world_state_env import DepthStateEnv
 from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
 from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
+from quaddif.utils.runner import timeit
 
 @torch.no_grad()
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
@@ -38,6 +39,7 @@ def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictCo
 
     return feats, actions, rewards, ends, org_samples
 
+@timeit
 def train_agents(agent: ActorCriticAgent, state_env: DepthStateEnv, cfg: DictConfig):
     trainingcfg = getattr(cfg, "actor_critic").training
     feats, _, rewards, ends, org_samples = collect_imagine_trj(state_env, agent, trainingcfg)
@@ -46,25 +48,35 @@ def train_agents(agent: ActorCriticAgent, state_env: DepthStateEnv, cfg: DictCon
     agent_info["reward_sum"] = reward_sum.item()
     return agent_info
 
-def train_worldmodel(world_model: DepthStateModel, replaybuffer: ReplayBuffer, opt: torch.optim.Optimizer, training_hyper):
-    for _ in range(training_hyper.worldmodel_update_freq):
-        sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid, sample_visible_map = \
-            replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
-        total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc = \
-            world_model.compute_loss(
-                sample_state,
-                sample_perception,
-                sample_action,
-                sample_reward,
-                sample_termination,
-                sample_grid,
-                sample_visible_map
-            )
+@timeit
+def train_worldmodel(
+    world_model: DepthStateModel,
+    replaybuffer: ReplayBuffer,
+    opt: torch.optim.Optimizer,
+    training_hyper: DictConfig,
+    scaler: torch.amp.GradScaler
+):
+    with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=training_hyper.use_amp):
+        for _ in range(training_hyper.worldmodel_update_freq):
+            sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid, sample_visible_map = \
+                replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
+            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision = \
+                world_model.compute_loss(
+                    sample_state,
+                    sample_perception,
+                    sample_action,
+                    sample_reward,
+                    sample_termination,
+                    sample_grid,
+                    sample_visible_map
+                )
     
-    total_loss.backward()
-    grad_norm = torch.nn.utils.clip_grad_norm_(world_model.parameters(), training_hyper.max_grad_norm)
-    opt.step()
-    opt.zero_grad()
+    if scaler is not None:
+        scaler.scale(total_loss).backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(world_model.parameters(), training_hyper.max_grad_norm)
+        scaler.step(opt)
+        scaler.update()
+        opt.zero_grad(set_to_none=True)
 
     world_info = {
         'WorldModel/state_total_loss':total_loss.item(),
@@ -76,12 +88,13 @@ def train_worldmodel(world_model: DepthStateModel, replaybuffer: ReplayBuffer, o
         'WorldModel/state_end_loss':end_loss.item(),
         'WorldModel/state_grid_loss':grid_loss.item(),
         'WorldModel/state_grid_acc':grid_acc.item(),
+        'WorldModel/state_grid_precision':grid_precision.item(),
     }
 
     return world_info
 
 class World_Agent:
-    def __init__(self, cfg, env, device):
+    def __init__(self, cfg: DictConfig, env: Union[PositionControl, ObstacleAvoidance], device: torch.device):
         self.cfg = cfg
         self.n_envs = env.n_envs
         device_idx = device.index
@@ -121,6 +134,7 @@ class World_Agent:
             self.replaybuffer = ReplayBuffer(buffercfg)
             self.world_model_env = DepthStateEnv(self.state_model, self.replaybuffer, worldcfg)
         self.opt = configure_opt(self.state_model, **getattr(world_agent_cfg, "state_predictor").optimizer)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.training_hyper.use_amp)
 
         if world_agent_cfg.common.checkpoint_path is not None:
             self.load(world_agent_cfg.common.checkpoint_path)
@@ -140,6 +154,7 @@ class World_Agent:
         self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden, True)[2]
         return action, None
 
+    @timeit
     def step(self, cfg, env, obs, on_step_cb):
         policy_info = {}
         with torch.no_grad():
@@ -170,7 +185,7 @@ class World_Agent:
                         self.hidden[i] = 0
 
         if self.replaybuffer.ready():
-            world_info = train_worldmodel(self.state_model, self.replaybuffer, self.opt, self.training_hyper)
+            world_info = train_worldmodel(self.state_model, self.replaybuffer, self.opt, self.training_hyper, self.scaler)
             agent_info = train_agents(self.agent, self.world_model_env, self.world_agent_cfg)
             policy_info.update(world_info)
             policy_info.update(agent_info)

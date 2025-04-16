@@ -293,31 +293,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device)
         
         self.prev_pos = torch.zeros(self.n_envs, 3, device=self.device)
-        self.visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
-    
-    def visualize_grid(self, grid: Tensor):
-        import matplotlib.pyplot as plt
-        fig = plt.figure(figsize=(8, 7))
-        ax = fig.add_subplot(111, projection='3d')
-        # ax.set_xlim3d([self.cfg.grid.x_min, self.cfg.grid.x_max])
-        # ax.set_ylim3d([self.cfg.grid.y_min, self.cfg.grid.y_max])
-        # ax.set_zlim3d([self.cfg.grid.z_min, self.cfg.grid.z_max])
-        grid = grid.view(*self.cfg.grid.n_points).float()
-        voxel = grid.cpu().numpy()
-        colors = torch.stack([
-            grid * 1.0,
-            grid * 0.,
-            grid * 0.,
-            1 - grid * 0.1
-        ], dim=-1).cpu().numpy()
-        print(colors.shape, colors.dtype)
-        ax.voxels(
-            self.local_grid_centers[0, :, 0].cpu().numpy(),
-            self.local_grid_centers[0, :, 1].cpu().numpy(),
-            self.local_grid_centers[0, :, 2].cpu().numpy(),
-            voxel, facecolors=colors, edgecolors="grey")
-        # ax.voxels(np.ones_like(voxel, dtype=bool), facecolors=colors)
-        plt.show()
+        self.prev_visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
     
     @timeit
     def get_occupancy_map(self, quat_xyzw):
@@ -350,8 +326,66 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_rays]
             visible_map.logical_or_(torch.any(dist2visible_points < self.cube_size / 2, dim=-1))
         
-        # prev_visible_points = self.local_grid_centers.gather(dim=1, index=self.visible_map.unsqueeze(-1).expand(-1, -1, 3)) + self.prev_pos.unsqueeze(1)
-        # dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - prev_visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_rays]
+        if torch.any(self.prev_visible_map):
+            # 计算旧地图障碍物的全局坐标
+            prev_visible_global = self.local_grid_centers + self.prev_pos.unsqueeze(1)
+            
+            # 获取所有可见点的环境索引和点索引
+            env_ids, point_ids = torch.where(self.prev_visible_map)
+            
+            # 提取有效的全局坐标
+            valid_global = prev_visible_global[env_ids, point_ids]
+            
+            # 转换到当前局部坐标系
+            current_local = valid_global - self.p[env_ids]
+            
+            # 地图边界参数
+            x_min, x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
+            y_min, y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
+            z_min, z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
+            
+            # 有效性掩码（使用左闭右开区间）
+            valid_mask = (
+                (current_local[:, 0] >= x_min) & (current_local[:, 0] < x_max) &
+                (current_local[:, 1] >= y_min) & (current_local[:, 1] < y_max) &
+                (current_local[:, 2] >= z_min) & (current_local[:, 2] < z_max)
+            )
+            
+            # 过滤有效点
+            valid_env_ids = env_ids[valid_mask]
+            valid_current_local = current_local[valid_mask]
+            
+            # 计算三维索引
+            cube_size = self.cube_size
+            x_idx = ((valid_current_local[:, 0] - x_min) // cube_size).long()
+            y_idx = ((valid_current_local[:, 1] - y_min) // cube_size).long()
+            z_idx = ((valid_current_local[:, 2] - z_min) // cube_size).long()
+            
+            # 验证索引有效性
+            n_x, n_y, n_z = self.cfg.grid.n_points
+            valid_indices = (
+                (x_idx >= 0) & (x_idx < n_x) &
+                (y_idx >= 0) & (y_idx < n_y) &
+                (z_idx >= 0) & (z_idx < n_z)
+            )
+            assert torch.all(valid_indices)
+            
+            # 最终有效点
+            # final_env_ids = valid_env_ids[valid_indices]
+            # x_idx = x_idx[valid_indices]
+            # y_idx = y_idx[valid_indices]
+            # z_idx = z_idx[valid_indices]
+            
+            # 转换为线性索引
+            linear_indices = x_idx * (n_y * n_z) + y_idx * n_z + z_idx
+            
+            # 更新visible_map
+            visible_map[valid_env_ids, linear_indices] = True
+        
+        self.prev_visible_map.copy_(visible_map)
+        self.prev_pos.copy_(self.p)
+        
+        # self.visualize_grid(visible_map[0])
         
         return occupancy_map, visible_map # [n_envs, n_points]
     
@@ -374,7 +408,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     @timeit
     def reset_idx(self, env_idx):
         super().reset_idx(env_idx)
-        self.visible_map[env_idx] = False
+        self.prev_visible_map[env_idx] = False
         self.prev_pos[env_idx] = self.p[env_idx]
     
 class ObstacleAvoidanceYOPO(ObstacleAvoidance):
