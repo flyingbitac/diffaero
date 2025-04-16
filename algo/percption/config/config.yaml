@@ -1,10 +1,21 @@
 encoder:
-  image_shape: [3,64,64]
-  channels: [16,32,64,128]
-  stride: 2
-  kernel_size: 4
-  act: SiLU
-  norm: BatchNorm2d
+  use_state: True
+  use_image: True
+
+  img_encoder:
+    image_shape: [3,64,64]
+    channels: [16,32,64,128]
+    stride: 2
+    kernel_size: 4
+    act: SiLU
+    norm: BatchNorm2d
+
+  state_encoder:
+    state_dim: 10
+    embedding_dim: 64
+    hidden_units: [64]
+    act: SiLU
+    norm: LayerNorm
 
 rssm:
   action_dim: 3
