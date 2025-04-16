@@ -50,33 +50,19 @@ def main(cfg: DictConfig):
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
     logger = Logger(cfg, run_name=runname)
     
-    if cfg.seed != -1:
-        random.seed(cfg.seed)
-        np.random.seed(cfg.seed)
-        torch.manual_seed(cfg.seed)
-        torch.backends.cudnn.deterministic = cfg.torch_deterministic
+    env = build_env(cfg.env, device=device)
     
-    env_class = ENV_ALIAS[cfg.env.name]
-    if cfg.env.name== 'obstacle_avoidance_grid':
-        env = RecordEpisodeStatistics(env_class(cfg.env, device=device,test=True))
-    else:
-        env = RecordEpisodeStatistics(env_class(cfg.env, device=device))
-    
-    agent = build_agent(cfg.algo, env, device)
+    agent = build_agent(cfg, env, device)
     agent.load(cfg.checkpoint)
     
     runner = TestRunner(cfg, logger, env, agent)
     
-    logger = Logger(cfg, run_name=cfg.runname)
-    # test(cfg, agent, env, logger, on_step_cb=display_image)
-    
-    export_path = os.path.join(logger.logdir,"checkpoints")
-    if not os.path.exists(export_path):
-        os.makedirs(export_path)
-    exporter = WorldExporter(agent)
-    exporter.export(export_path)
-    
-    test(cfg, agent, env, logger)
+    try:
+        runner.run()
+    except KeyboardInterrupt:
+        print("Interrupted.")
+    finally:
+        success_rate = runner.close()
     
     return success_rate
 
