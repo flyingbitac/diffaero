@@ -48,31 +48,45 @@ class RSSM(nn.Module):
 class WorldModel(nn.Module):
     def __init__(self, cfg:DictConfig):
         super().__init__()
-        enc_cfg = cfg.encoder
+        img_enc_cfg = cfg.encoder.img_encoder
+        state_enc_cfg = cfg.encoder.state_encoder
         rssm_cfg = cfg.rssm
         dec_cfg = cfg.decoder
-        self.encoder = ImageEncoder(image_shape=enc_cfg.image_shape, channels=enc_cfg.channels, 
-                                    stride=enc_cfg.stride, kernel_size=enc_cfg.kernel_size, 
-                                    act=enc_cfg.act, norm=enc_cfg.norm)
-        final_shape = self.encoder.final_shape
-        self.rssm = RSSM(token_dim=math.prod(final_shape), action_dim=rssm_cfg.action_dim,
-                         stoch=rssm_cfg.stoch, classes=rssm_cfg.classes, deter=rssm_cfg.deter,
-                         hidden=rssm_cfg.hidden, act=rssm_cfg.act, norm=rssm_cfg.norm)
-        self.decoder = ImageDecoder(final_image_shape=final_shape, feat_dim=rssm_cfg.stoch*rssm_cfg.classes+rssm_cfg.deter,
-                                    channels=dec_cfg.channels, stride=dec_cfg.stride, kernel_size=dec_cfg.kernel_size,
-                                    act=dec_cfg.act, norm=dec_cfg.norm)
+        embed_dim, final_shape = 0, [0]
         common_kwargs = {'input_dim':rssm_cfg.deter + rssm_cfg.stoch*rssm_cfg.classes, 'hidden_units':[rssm_cfg.hidden], 
                          'norm':rssm_cfg.norm,'act':rssm_cfg.act,'output_dim':rssm_cfg.hidden}
+        if cfg.encoder.use_image:
+            self.img_encoder = ImageEncoder(image_shape=img_enc_cfg.image_shape, channels=img_enc_cfg.channels, 
+                                        stride=img_enc_cfg.stride, kernel_size=img_enc_cfg.kernel_size, 
+                                        act=img_enc_cfg.act, norm=img_enc_cfg.norm)
+            final_shape = self.img_encoder.final_shape
+            self.img_decoder = ImageDecoder(final_image_shape=final_shape, feat_dim=rssm_cfg.stoch*rssm_cfg.classes+rssm_cfg.deter,
+                                        channels=dec_cfg.channels, stride=dec_cfg.stride, kernel_size=dec_cfg.kernel_size,
+                                        act=dec_cfg.act, norm=dec_cfg.norm)
+        if cfg.encoder.use_state:
+            self.state_encoder = MLP(input_dim=state_enc_cfg.state_dim, output_dim=state_enc_cfg.embedding_dim,
+                                     hidden_units=state_enc_cfg.hidden_units, act=state_enc_cfg.act, 
+                                     norm=state_enc_cfg.norm)
+            self.state_decoter = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, state_enc_cfg.state_dim))
+            embed_dim = state_enc_cfg.embedding_dim
+        self.rssm = RSSM(token_dim=math.prod(final_shape) + embed_dim, action_dim=rssm_cfg.action_dim,
+                         stoch=rssm_cfg.stoch, classes=rssm_cfg.classes, deter=rssm_cfg.deter,
+                         hidden=rssm_cfg.hidden, act=rssm_cfg.act, norm=rssm_cfg.norm)
         self.rew = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, 255),)
-        self.ter = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, 1), nn.Sigmoid())
+        self.ter = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, 1))
         self.symlogtwohot = SymLogTwoHotLoss(255, -20, 20)
         self.bce_loss = nn.BCEWithLogitsLoss()
         self.kl_loss = CategoricalLossWithFreeBits()
     
         self.deter_dim = rssm_cfg.deter
     
-    def encode(self, obs:torch.Tensor, deter:torch.Tensor):
-        tokens = self.encoder(obs)
+    def encode(self, obs:torch.Tensor=None, state:torch.Tensor=None, deter:torch.Tensor=None):
+        tokens = []
+        if hasattr(self, 'img_encoder'):
+            tokens.append(self.img_encoder(obs))
+        if hasattr(self, 'state_encoder'):
+            tokens.append(self.state_encoder(state))
+        tokens = torch.cat(tokens, dim=-1)
         post_sample, _ = self.rssm._post(tokens, deter)
         return post_sample
     
@@ -81,11 +95,15 @@ class WorldModel(nn.Module):
         deter = torch.where(terminal.unsqueeze(-1), torch.zeros_like(deter), deter)
         return deter
         
-    def compute_loss(self, obs:torch.Tensor, actions:torch.Tensor, rewards:torch.Tensor, terminals:torch.Tensor):
+    def compute_loss(self, obs:torch.Tensor=None, state:torch.Tensor=None, actions:torch.Tensor=None, rewards:torch.Tensor=None, terminals:torch.Tensor=None):
         # obs: B L C H W, actions:B L D, rewards:B L, terminals:B L
         deter = torch.zeros(obs.size(0), self.deter_dim, device=obs.device)
-        tokens = self.encoder(obs)
-        
+        tokens = []
+        if hasattr(self, 'img_encoder'):
+            tokens.append(self.img_encoder(obs))
+        if hasattr(self, 'state_encoder'):
+            tokens.append(self.state_encoder(state))
+        tokens = torch.cat(tokens, dim=-1)   
         post_probs_list, prior_probs_list, feat_list = [], [], []
         for i in range(obs.size(1)):
             post_samples, post_prob = self.rssm._post(tokens[:, i], deter)
@@ -99,13 +117,20 @@ class WorldModel(nn.Module):
         feats = torch.stack(feat_list, dim=1)
         reward_logits = self.rew(feats)
         ter_logits = self.ter(feats)
-        rec_images = self.decoder(feats)
+        rec_img_loss = 0
+        rec_state_loss = 0
+        if hasattr(self, 'img_decoder'):
+            rec_images = self.img_decoder(feats)
+            rec_img_loss = mse(rec_images, obs.detach())
+        if hasattr(self, 'state_decoder'):
+            rec_states = self.state_decoter(feats)
+            rec_state_loss = mse(rec_states, state.detach())
         
+        rec_loss = rec_img_loss + rec_state_loss
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
         rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
         rew_loss = self.symlogtwohot(reward_logits, rewards)
         ter_loss = self.bce_loss(ter_logits.squeeze(-1), terminals)
-        rec_loss = mse(rec_images, obs.detach())
         
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + ter_loss
         

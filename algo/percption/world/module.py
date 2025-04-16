@@ -161,12 +161,7 @@ class Decoder(nn.Module):
             rec['state'] = state
         return rec
 
-if __name__ == '__main__':
-    # enc = ImageEncoder([3, 64, 64], [16, 32, 64, 128], 2, 4, 'ReLU', 'BatchNorm2d')
-    # tensor = torch.randn(3, 3, 64, 64)
-    # dec = ImageDecoder(enc.final_shape, 1024, [64, 32, 16, 3], 2, 4, 'ReLU', 'BatchNorm2d')
-    # print(dec(torch.randn(10, 16, 1024)).shape)
-    
+if __name__ == '__main__': 
     obs_space = {'perception':[3, 64, 64], 'state':[9]}
     enc = Encoder(obs_space, [16, 32, 64, 128], 2, 4, 64, 512, 1, 'ReLU', 'BatchNorm2d')
     inp = {'perception':torch.randn(3, 3, 64, 64), 'state':torch.randn(3, 9)}

@@ -16,7 +16,6 @@ def mse(pred:torch.Tensor, target:torch.Tensor):
     mse_loss = reduce(mse_loss, 'b l ... -> b l', 'sum')
     return mse_loss.mean()
 
-
 class SymLogTwoHotLoss(nn.Module):
     def __init__(self, num_classes, lower_bound, upper_bound):
         super().__init__()
