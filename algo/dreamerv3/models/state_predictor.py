@@ -366,13 +366,14 @@ class DepthStateModel(nn.Module):
         rew_loss = self.symlogtwohotloss(reward_logits,rewards)
         end_loss = self.endloss(end_logits,terminations)
         if hasattr(self, 'grid_gredictor'):
-            grid_logits = torch.stack(grid_logits,dim=1)[visible_map]
-            ground_truth_grid = grid[visible_map]
+            grid_logits = torch.stack(grid_logits, dim=1)
+            visible_grid_logits = grid_logits[visible_map]
+            visible_ground_truth_grid = grid[visible_map]
             # grid_loss = self.endloss(grid_logits, grid.float())
-            grid_loss = self.endloss(grid_logits, ground_truth_grid.float())
-            grid_pred = grid_logits > 0
-            grid_acc = (grid_pred == ground_truth_grid).float().mean()
-            grid_precision = grid_pred[ground_truth_grid].float().mean()
+            grid_loss = self.endloss(visible_grid_logits, visible_ground_truth_grid.float())
+            grid_pred = visible_grid_logits > 0
+            grid_acc = (grid_pred == visible_ground_truth_grid).float().mean()
+            grid_precision = grid_pred[visible_ground_truth_grid].float().mean()
         else:
             grid_loss, grid_acc, grid_precision = torch.zeros(()), torch.zeros(()), torch.zeros(())
             
@@ -381,7 +382,14 @@ class DepthStateModel(nn.Module):
             rec_loss = rec_loss + self.mse_loss(rec_images, depth_images) * self.cfg.img_recon_loss_weight
         
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss + grid_loss
-        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision
+        
+        n_grid = grid.sum(dim=-1)
+        env_idx, time_idx = torch.where(n_grid == n_grid.max())
+        env_idx, time_idx = env_idx[0], time_idx[0]
+        grid_gt = grid[env_idx, time_idx].reshape(20, 20, 10)
+        grid_pred = (grid_logits > 0)[env_idx, time_idx].reshape(20, 20, 10)
+        
+        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision, (grid_gt, grid_pred)
 
 if __name__=='__main__':
 

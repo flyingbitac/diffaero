@@ -153,9 +153,15 @@ class TrainRunner:
             if "value" in policy_info.keys():
                 log_info["value"] = policy_info["value"].mean().item()
             if "WorldModel/state_total_loss" in policy_info.keys():
-                log_info.update(policy_info)
+                log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
             if (i+1) % 10 == 0:
                 self.logger.log_scalars(log_info, i+1)
+            
+            if i % 10 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
+                grid_gt = self.env.visualize_grid(policy_info["grid_gt"])
+                grid_pred = self.env.visualize_grid(policy_info["grid_pred"])
+                grid = np.concatenate([grid_gt, grid_pred], axis=2)
+                self.logger.log_image("grid", grid, i+1)
             
             if success_rate >= self.max_success_rate:
                 self.max_success_rate = success_rate
