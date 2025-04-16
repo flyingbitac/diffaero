@@ -24,6 +24,7 @@ class DepthStateModelCfg:
     use_simnorm: bool=False
     only_state: bool=False
     use_grid: bool=False
+    enable_rec: bool=True
 
 @dataclass
 class Batch:
@@ -192,8 +193,9 @@ class DepthStateModel(nn.Module):
                                               image_height=cfg.image_height)
             # self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
             #                                 last_channels=self.image_encoder.last_channels,final_image_width=4)
-            self.image_decoder = ImageDecoderMLP(feat_dim=cfg.latent_dim+cfg.hidden_dim,hidden_dim=cfg.hidden_dim,
-                                                image_width=cfg.image_width,image_height=cfg.image_height)
+            if cfg.enable_rec:
+                self.image_decoder = ImageDecoderMLP(feat_dim=cfg.latent_dim+cfg.hidden_dim,hidden_dim=cfg.hidden_dim,
+                                                    image_width=cfg.image_width,image_height=cfg.image_height)
             state_emb_dim = 64
             self.state_encoder = MLP(cfg.state_dim, state_emb_dim, state_emb_dim, 1, 'SiLU', 'LayerNorm', bias=False)
             depth_flatten_dim = self.image_encoder.flatten_dim
@@ -241,7 +243,7 @@ class DepthStateModel(nn.Module):
         if hidden==None:
             hidden = torch.zeros(latent.shape[0],self.cfg.hidden_dim,device=latent.device)
         feat = torch.cat([latent,hidden],dim=-1)
-        if self.cfg.only_state:
+        if self.cfg.only_state or not self.cfg.enable_rec:
             return self.state_decoder(feat),None
         else:
             return self.state_decoder(feat),self.image_decoder(feat)
@@ -359,7 +361,7 @@ class DepthStateModel(nn.Module):
         else:
             grid_loss = torch.zeros(())
             
-        if depth_images!=None:
+        if rec_image!=None:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()+self.mse_loss(rec_images,depth_images)
         else:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()

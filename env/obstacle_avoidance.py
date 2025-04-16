@@ -295,11 +295,12 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             occupancy = occupancy | (grid_xyz[..., 2] - self.r_drone < self.z_ground_plane)
         return occupancy # [n_envs, n_points]
     
-    def state(self, with_grad=False):
+    @timeit
+    def get_observations(self, with_grad=False):
         if self.dynamic_type == "pointmass":
-            state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
+            obs = torch.cat([self.target_vel, self.q, self._v], dim=-1)
         else:
-            state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         if not self.test:
             grid = self.grid(x_min=self.cfg.grid.x_min, x_max=self.cfg.grid.x_max, 
                             y_min=self.cfg.grid.y_min, y_max=self.cfg.grid.y_max, 
@@ -307,10 +308,27 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
                             n_points=self.cfg.grid.n_points)
         else:
             grid = None
-        state = TensorDict({
-            "state": state, "perception": self.sensor_tensor.clone(), "grid":grid}, batch_size=self.n_envs)
-        state = state if with_grad else state.detach()
-        return state
+        obs = TensorDict({
+            "state": obs, "perception": self.sensor_tensor.clone(), "grid":grid}, batch_size=self.n_envs)
+        obs = obs if with_grad else obs.detach()
+        return obs
+    
+    # def state(self, with_grad=False):
+    #     if self.dynamic_type == "pointmass":
+    #         state = torch.cat([self.target_vel, self.q, self._v], dim=-1)
+    #     else:
+    #         state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+    #     if not self.test:
+    #         grid = self.grid(x_min=self.cfg.grid.x_min, x_max=self.cfg.grid.x_max, 
+    #                         y_min=self.cfg.grid.y_min, y_max=self.cfg.grid.y_max, 
+    #                         z_min=self.cfg.grid.z_min, z_max=self.cfg.grid.z_max, 
+    #                         n_points=self.cfg.grid.n_points)
+    #     else:
+    #         grid = None
+    #     state = TensorDict({
+    #         "state": state, "perception": self.sensor_tensor.clone(), "grid":grid}, batch_size=self.n_envs)
+    #     state = state if with_grad else state.detach()
+    #     return state
     
 class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device: torch.device):

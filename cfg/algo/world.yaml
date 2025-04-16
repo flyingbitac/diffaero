@@ -47,6 +47,7 @@ state_predictor:
     only_state: False
     use_grid: False
     grid_dim: 4000
+    enable_rec: True
 
   training:
     max_grad_norm: 100.0

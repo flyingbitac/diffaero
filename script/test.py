@@ -51,6 +51,7 @@ def main(cfg: DictConfig):
     logger = Logger(cfg, run_name=runname)
     
     env = build_env(cfg.env, device=device)
+    env.test = True
     
     agent = build_agent(cfg, env, device)
     agent.load(cfg.checkpoint)

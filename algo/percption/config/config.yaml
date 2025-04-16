@@ -1,0 +1,23 @@
+encoder:
+  image_shape: [3,64,64]
+  channels: [16,32,64,128]
+  stride: 2
+  kernel_size: 4
+  act: SiLU
+  norm: BatchNorm2d
+
+rssm:
+  action_dim: 3
+  stoch: 32
+  classes: 32
+  deter: 512
+  hidden: 512
+  act: SiLU
+  norm: LayerNorm
+
+decoder:
+  channels: [64,32,16,3]
+  stride: 2
+  kernel_size: 4
+  act: SiLU
+  norm: BatchNorm2d
