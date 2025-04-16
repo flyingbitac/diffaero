@@ -162,3 +162,12 @@ class RolloutBufferPPO:
         self.values[self.step] = value
         self.next_values[self.step] = next_value
         self.step += 1
+
+
+class RolloutBufferGRID:
+    def __init__(self, l_rollout, n_envs, obs_dim, action_dim, device):
+        # type: (int, int, int, int, torch.device) -> None
+        factory_kwargs = {"dtype": torch.float32, "device": device}
+    
+    def clear(self):
+        self.step = 0

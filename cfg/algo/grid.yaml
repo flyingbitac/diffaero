@@ -1,0 +1,10 @@
+name: grid
+network: ${network}
+
+l_rollout: 32
+
+encdec_lr: 0.001
+actor_lr: 0.001
+max_grad_norm: 1.
+
+entropy_weight: 0.03
