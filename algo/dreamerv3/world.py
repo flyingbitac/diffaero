@@ -183,7 +183,7 @@ class World_Agent:
                 for i in range(self.n_envs):
                     if terminated[i]:
                         self.hidden[i] = 0
-
+        
         if self.replaybuffer.ready():
             world_info, grid_gt, grid_pred = train_worldmodel(self.state_model, self.replaybuffer, self.opt, self.training_hyper, self.scaler)
             agent_info = train_agents(self.agent, self.world_model_env, self.world_agent_cfg)

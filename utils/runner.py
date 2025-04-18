@@ -157,7 +157,7 @@ class TrainRunner:
             if (i+1) % 10 == 0:
                 self.logger.log_scalars(log_info, i+1)
             
-            if i % 10 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
+            if i % 100 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
                 grid_gt = self.env.visualize_grid(policy_info["grid_gt"])
                 grid_pred = self.env.visualize_grid(policy_info["grid_pred"])
                 grid = np.concatenate([grid_gt, grid_pred], axis=2)
