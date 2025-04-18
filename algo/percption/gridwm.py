@@ -24,10 +24,9 @@ class GRIDWM:
     ):
         self.l_rollout: int = cfg.l_rollout
         self.batch_size: int = cfg.batch_size
-        self.latent_dim: int = cfg.latent_dim
         
         # encoder
-        self.wm_encoder = WorldModel(cfg.algo.wmperc)
+        self.wm_encoder = WorldModel(cfg.wmperc)
         # actor
         self.actor = StochasticActor(cfg.network, self.wm_encoder.deter_dim + self.wm_encoder.latent_dim, action_dim).to(device)
         # optimizers
@@ -38,7 +37,7 @@ class GRIDWM:
             self.l_rollout,
             int(cfg.buffer_size),
             obs_dim,
-            self.latent_dim,
+            self.wm_encoder.latent_dim,
             action_dim,
             self.n_grid_points,
             device
