@@ -1,2 +1,0 @@
-accel_control:flight_control:realsense-ros/realsense2_camera:realsense-ros/realsense2_description
--DCATKIN_DEVEL_PREFIX=/home/zxh/ws/wrqws/quaddif/deploy/devel -DCMAKE_INSTALL_PREFIX=/home/zxh/ws/wrqws/quaddif/deploy/install -G Unix Makefiles

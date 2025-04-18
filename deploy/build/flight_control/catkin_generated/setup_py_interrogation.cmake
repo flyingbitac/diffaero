@@ -1,7 +1,0 @@
-set(flight_control_SETUP_PY_SETUP_MODULE "distutils.core")
-set(flight_control_SETUP_PY_VERSION "0.0.0")
-set(flight_control_SETUP_PY_SCRIPTS "")
-set(flight_control_SETUP_PY_PACKAGES "flight_control")
-set(flight_control_SETUP_PY_PACKAGE_DIRS "scripts/flight_control")
-set(flight_control_SETUP_PY_MODULES "")
-set(flight_control_SETUP_PY_MODULE_DIRS "")

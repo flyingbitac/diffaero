@@ -1,8 +1,0 @@
-prefix=/home/zxh/ws/wrqws/quaddif/deploy/install
-
-Name: flight_control
-Description: Description of flight_control
-Version: 0.0.0
-Cflags: -I${prefix}/include
-Libs: -L${prefix}/lib -lflight_control
-Requires: geometry_msgs mavros_msgs roscpp std_msgs
