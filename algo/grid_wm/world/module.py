@@ -63,17 +63,20 @@ class ImageEncoder(nn.Module):
     
     def forward(self, x:torch.Tensor):
         if x.ndim == 3:
-            x = x.unsqueeze(0)
+            x = x.unsqueeze(1)
             x = self.encoder(x)
             x = rearrange(x, '... c h w -> ... (c h w)')
         elif x.ndim == 4:
+            B, L, H, W = x.shape
+            x = rearrange(x, 'b l h w -> (b l) 1 h w')
             x = self.encoder(x)
-            x = rearrange(x, 'b c h w -> b (c h w)')
-        elif x.ndim == 5:
-            batch_size = x.size(0)
-            x = rearrange(x, 'b t ... -> (b t) ...')
-            x = self.encoder(x)
-            x = rearrange(x, '(b t) c h w -> b t (c h w)', b = batch_size)
+            x = rearrange(x, '... c h w -> ... (c h w)')
+            x = rearrange(x, '(b l) ... -> b l ...', b = B)
+        # elif x.ndim == 5:
+        #     batch_size = x.size(0)
+        #     x = rearrange(x, 'b t ... -> (b t) ...')
+        #     x = self.encoder(x)
+        #     x = rearrange(x, '(b t) c h w -> b t (c h w)', b = batch_size)
         else:
             raise ValueError(f'Invalid input dimension {x.ndim}')
         return x
@@ -166,7 +169,6 @@ class Decoder(nn.Module):
         if hasattr(self, 'img_decoder'):
             image = self.img_decoder(feats)
             if not self.use_dconv:
-                print('image shape:', self.img_shape)
                 image = rearrange(image, '... (c h w) -> ... c h w', c=self.img_shape[0], h=self.img_shape[1])
             rec['perception'] = image
         if hasattr(self, 'state_decoder'):

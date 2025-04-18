@@ -12,7 +12,7 @@ from quaddif.env.obstacle_avoidance import ObstacleAvoidanceGrid
 from quaddif.algo.buffer import RolloutBufferGRID
 from quaddif.network.agents import  StochasticActor
 from quaddif.utils.runner import timeit
-from quaddif.algo.percption.world.backbone import WorldModel
+from .world.backbone import WorldModel
 
 class GRIDWM:
     def __init__(
@@ -25,13 +25,18 @@ class GRIDWM:
     ):
         self.l_rollout: int = cfg.l_rollout
         self.batch_size: int = cfg.batch_size
+        self.n_epochs: int = cfg.n_epochs
         self.grid_points: List[int] = grid_cfg.n_points
         self.n_grid_points = math.prod(self.grid_points)
         
         # encoder
-        self.wm_encoder = WorldModel(cfg.wmperc)
+        self.wm_encoder = WorldModel(cfg, grid_cfg).to(device)
         # actor
-        self.actor = StochasticActor(cfg.network, self.wm_encoder.deter_dim + self.wm_encoder.latent_dim, action_dim).to(device)
+        self.actor = StochasticActor(
+            cfg.network,
+            self.wm_encoder.deter_dim + self.wm_encoder.latent_dim + obs_dim[0],
+            action_dim
+        ).to(device)
         # optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
         
@@ -59,7 +64,7 @@ class GRIDWM:
             if self.deter is None:
                 self.deter = torch.zeros(obs['state'].shape[0], self.wm_encoder.deter_dim, device=obs['state'].device)
             latent = self.wm_encoder.encode(obs['perception'], obs['state'], self.deter)
-            actor_input = torch.cat([latent, self.deter], dim=-1)
+            actor_input = torch.cat([latent, self.deter, obs["state"]], dim=-1)
         action, sample, logprob, entropy = self.actor(actor_input, test=test)
         return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}, latent
     
@@ -73,14 +78,15 @@ class GRIDWM:
         if not self.buffer.size >= self.batch_size:
             return {}, {}
         
-        observations, actions, dones, rewards = self.buffer.sample(self.batch_size)
-        # find ground truth and visible grid
-        ground_truth_grid = observations["grid"]
-        visible_map = observations["visible_map"]
-        visible_ground_truth_grid = ground_truth_grid[visible_map]
-        total_loss, metrics = self.wm_encoder.update(observations['perception'], observations['state'], 
-                                actions, rewards, dones, visible_ground_truth_grid, visible_map)
-        return total_loss, metrics
+        for _ in range(self.n_epochs):
+            observations, actions, dones, rewards = self.buffer.sample(self.batch_size)
+            # find ground truth and visible grid
+            ground_truth_grid = observations["grid"]
+            visible_map = observations["visible_map"]
+            visible_ground_truth_grid = ground_truth_grid[visible_map]
+            total_loss, grad_norms = self.wm_encoder.update(observations['perception'], observations['state'], 
+                                    actions, rewards, dones, visible_ground_truth_grid, visible_map)
+        return total_loss, grad_norms
     
     @timeit
     def update_actor(self):
@@ -110,7 +116,6 @@ class GRIDWM:
             rollout_actions.append(action)
             rollout_dones.append(terminated)
             rollout_rewards.append(10.*(1. - 0.1*loss).detach())
-            self.reset(env_info["reset"])
             obs = next_obs
             if on_step_cb is not None:
                 on_step_cb(
@@ -124,10 +129,10 @@ class GRIDWM:
             done=torch.stack(rollout_dones, dim=1),
             reward=torch.stack(rollout_rewards, dim=1)
         )
-        wm_losses, _ = self.update_wm()
+        wm_losses, wm_grad_norm = self.update_wm()
         actor_losses, actor_grad_norms = self.update_actor()
         losses = {**wm_losses, **actor_losses}
-        grad_norms = actor_grad_norms
+        grad_norms = {**wm_grad_norm, **actor_grad_norms}
         self.detach()
         return obs, policy_info, env_info, losses, grad_norms
     
@@ -142,7 +147,7 @@ class GRIDWM:
         self.actor.load(path)
     
     def detach(self):
-        self.wm_encoder.detach()
+        self.deter.detach_()
     
     @staticmethod
     def build(cfg: DictConfig, env: ObstacleAvoidanceGrid, device: torch.device):

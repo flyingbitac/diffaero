@@ -1,11 +1,26 @@
-name: grid_wm 
+name: grid_wm
+
+# actor
+network:
+  name: mlp
+  hidden_dim: [256, 128]
+
+l_rollout: 32
+buffer_size: 1e4
+batch_size: 256
+
+actor_lr: 0.001
+max_grad_norm: 1.
+n_epochs: 1
+
+entropy_weight: 0.03
 
 encoder:
   use_state: True
   use_image: True
 
   img_encoder:
-    image_shape: [1,16,9]
+    image_shape: [1, 9, 16]
     channels: [16,32]
     stride: 2
     kernel_size: 4
@@ -23,29 +38,35 @@ rssm:
   action_dim: 3
   stoch: 32
   classes: 32
-  deter: 512
-  hidden: 512
+  deter: 256
+  hidden: 256
   act: SiLU
   norm: LayerNorm
 
 decoder:
   use_mlp: True
   cnndecoder:
-    channels: [64,32,16,3]
+    channels: [64, 32, 16, 3]
     stride: 2
     kernel_size: 4
     act: SiLU
     norm: BatchNorm2d
 
   mlpdecoder:
-    hidden_units: [512, 512]
+    hidden_units: [256, 256]
     act: SiLU
     norm: LayerNorm
 
-grid:
-  use_grid: True
-  grid_shape: [20, 20, 10]
-
 train:
-  lr: 1e-4
+  lr: 1e-3
   grad_norm: 100.
+  grid_pos_weight: 10
+
+  # weight of loss funcs
+  rec_img_weight: 1.
+  rec_state_weight: 1.
+  dyn_weight: 0.5
+  rep_weight: 0.1
+  rew_weight: 1.
+  ter_weight: 1.
+  grid_loss: 1.

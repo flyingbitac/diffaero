@@ -1,12 +1,9 @@
-from typing import List
-from dataclasses import dataclass
-from omegaconf import DictConfig
 import math
 
+from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import hydra
 
 from .module import *
 from .function import *
@@ -46,7 +43,7 @@ class RSSM(nn.Module):
         return self.seq_model(deter, stoch, action)
 
 class WorldModel(nn.Module):
-    def __init__(self, cfg:DictConfig):
+    def __init__(self, cfg: DictConfig, grid_cfg: DictConfig):
         super().__init__()
         img_enc_cfg = cfg.encoder.img_encoder
         state_enc_cfg = cfg.encoder.state_encoder
@@ -77,18 +74,25 @@ class WorldModel(nn.Module):
         self.rssm = RSSM(token_dim=math.prod(final_shape) + embed_dim, action_dim=rssm_cfg.action_dim,
                          stoch=rssm_cfg.stoch, classes=rssm_cfg.classes, deter=rssm_cfg.deter,
                          hidden=rssm_cfg.hidden, act=rssm_cfg.act, norm=rssm_cfg.norm)
-        if cfg.grid.use_grid:
-            self.grid_decoder = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, math.prod(cfg.grid.grid_shape)))
+        self.grid_decoder = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, math.prod(grid_cfg.n_points)))
         self.rew = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, 255),)
         self.ter = nn.Sequential(MLP(**common_kwargs), nn.Linear(rssm_cfg.hidden, 1))
         self.optim = torch.optim.Adam(self.parameters(), lr=cfg.train.lr)
         self.grad_norm = cfg.train.grad_norm
         self.symlogtwohot = SymLogTwoHotLoss(255, -20, 20)
-        self.bce_loss = nn.BCEWithLogitsLoss()
+        self.bce_loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([cfg.train.grid_pos_weight]))
         self.kl_loss = CategoricalLossWithFreeBits()
     
         self.deter_dim = rssm_cfg.deter
         self.latent_dim = rssm_cfg.stoch*rssm_cfg.classes
+        
+        self.rec_img_weight: float = cfg.rec_img_weight
+        self.rec_state_weight: float = cfg.rec_state_weight
+        self.dyn_weight: float = cfg.dyn_weight
+        self.rep_weight: float = cfg.rep_weight
+        self.rew_weight: float = cfg.rew_weight
+        self.ter_weight: float = cfg.ter_weight
+        self.grid_loss: float = cfg.grid_loss
     
     def encode(self, obs:torch.Tensor=None, state:torch.Tensor=None, deter:torch.Tensor=None):
         tokens = []
@@ -132,22 +136,30 @@ class WorldModel(nn.Module):
         rec_img_loss, rec_state_loss, grid_loss = 0, 0, torch.zeros((), device=obs.device)
         if hasattr(self, 'img_decoder'):
             rec_images = self.img_decoder(feats)
-            rec_img_loss = mse(rec_images, obs.detach())
+            rec_img_loss = mse(rec_images, obs.unsqueeze(2).detach())
         if hasattr(self, 'state_decoder'):
             rec_states = self.state_decoter(feats)
             rec_state_loss = mse(rec_states, state.detach())
         if hasattr(self, 'grid_decoder'):
             pred_grid = self.grid_decoder(feats)
             visible_pred_grid = pred_grid[visible_map]
-            grid_loss = self.bce_loss(visible_pred_grid, grids.detach())
+            grid_loss = self.bce_loss(visible_pred_grid, grids.float())
         
         rec_loss = rec_img_loss + rec_state_loss
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
         rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
         rew_loss = self.symlogtwohot(reward_logits, rewards)
-        ter_loss = self.bce_loss(ter_logits.squeeze(-1), terminals)
+        ter_loss = self.bce_loss(ter_logits.squeeze(-1), terminals.float())
         
-        total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + ter_loss + grid_loss
+        total_loss = (
+            self.rec_img_weight * rec_img_loss +
+            self.rec_state_weight * rec_state_loss +
+            self.dyn_weight * dyn_loss +
+            self.rep_weight * rep_loss +
+            self.rew_weight * rew_loss +
+            self.ter_weight * ter_loss +
+            self.grid_loss * grid_loss
+        )
         
         self.optim.zero_grad()
         total_loss.backward()
@@ -160,7 +172,6 @@ class WorldModel(nn.Module):
                   'WorldModel/Reward': rew_loss.item(),
                   'WorldModel/Termination': ter_loss.item(),
                   'WorldModel/Total': total_loss.item(),
-                  'WorldModel/GradNorm': gradnorm.item(),
                   'WorldModel/GridLoss': grid_loss.item()}
         
-        return losses, {}
+        return losses, {'WorldModel/GradNorm': gradnorm.item()}

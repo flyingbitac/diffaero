@@ -9,7 +9,7 @@ from quaddif.algo.SHAC import *
 from quaddif.algo.MASHAC import *
 from quaddif.algo.dreamerv3 import *
 from quaddif.algo.GRID import *
-from quaddif.algo.GRIDWM import *
+from quaddif.algo.grid_wm import *
 from quaddif.algo.YOPO import *
 
 AGENT_ALIAS = {
