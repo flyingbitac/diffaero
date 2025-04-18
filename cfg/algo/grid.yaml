@@ -1,5 +1,6 @@
 name: grid
 
+# actor
 network:
   name: mlp
   hidden_dim: [256, 128]
@@ -17,6 +18,7 @@ batch_size: 256
 encdec_lr: 0.0001
 actor_lr: 0.001
 max_grad_norm: 1.
+n_epochs: 1
 
 entropy_weight: 0.03
 grid_recon_weight: 1

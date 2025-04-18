@@ -141,8 +141,8 @@ def get_contact_point(
     H: int,
     W: int
 ):
-    raydist = (1. - depth.view(-1, H*W, 1)) * max_dist
-    return F.normalize(ray_directions_w, dim=-1) * raydist + start # [n_envs, n_rays, 3]
+    raydist = (1. - depth.reshape(-1, H*W, 1)) * max_dist
+    return ray_directions_w * raydist + start # [n_envs, n_rays, 3]
 
 class Camera:
     def __init__(self, cfg: DictConfig, device: torch.device):

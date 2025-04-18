@@ -104,6 +104,7 @@ class GRID:
         self.l_rollout: int = cfg.l_rollout
         self.batch_size: int = cfg.batch_size
         self.latent_dim: int = cfg.latent_dim
+        self.n_epochs: int = cfg.n_epochs
         
         # encoder
         self.encoder = RCNN(
@@ -175,59 +176,60 @@ class GRID:
         if not self.buffer.size >= self.batch_size:
             return {}, {}
         
-        hidden = torch.zeros(self.encoder.rnn_n_layers, self.batch_size, self.encoder.rnn_hidden_dim, device=self.device)
-        zero_hidden = hidden.clone()
-        observations, actions, dones = self.buffer.sample(self.batch_size)
-        decoded_grid_logits, decoded_state, decoded_image, decoded_next_latent, latents = [], [], [], [], []
-        for l in range(self.l_rollout):
-            obs, action, done = observations[:, l], actions[:, l], dones[:, l]
-            latent, hidden = self.encoder((obs["state"], obs["perception"]), hidden=hidden)
-            # reset hidden state when episode termination occurs
-            hidden = hidden.where(done.reshape(1, -1, 1).expand(
-                self.encoder.rnn_n_layers, -1, self.encoder.rnn_hidden_dim), zero_hidden)
-            decoded_grid_logits.append(self.grid_decoder(latent))
-            decoded_state.append(self.state_decoder(latent))
-            decoded_image.append(self.image_decoder(latent))
-            decoded_next_latent.append(self.dynamic_predictor(torch.cat([latent, action], dim=-1)))
-            latents.append(latent)
-        
-        decoded_grid_logits = torch.stack(decoded_grid_logits, dim=1) # [batch_size, l_rollout, n_grid_points]
-        decoded_state = torch.stack(decoded_state, dim=1) # [batch_size, l_rollout, obs_dim[0]]
-        decoded_image = torch.stack(decoded_image, dim=1) # [batch_size, l_rollout, H, W]
-        decoded_next_latent = torch.stack(decoded_next_latent, dim=1) # [batch_size, l_rollout, latent_dim]
-        latents = torch.stack(latents, dim=1) # [batch_size, l_rollout, latent_dim]
-        
-        grid_pred = decoded_grid_logits > 0
-        ground_truth_grid = observations["grid"]
-        
-        visible_map = observations["visible_map"]
-        visible_grid_logits = decoded_grid_logits[visible_map]
-        visible_grid_pred = grid_pred[visible_map]
-        visible_ground_truth_grid = ground_truth_grid[visible_map]
-        
-        grid_recon_loss = F.binary_cross_entropy_with_logits(
-            visible_grid_logits,
-            visible_ground_truth_grid.float(),
-            pos_weight=self.grid_pos_weight
-        )
-        image_recon_loss = F.mse_loss(decoded_image, observations["perception"].flatten(-2))
-        state_recon_loss = F.mse_loss(decoded_state, observations["state"])
-        dynamics_loss = F.mse_loss(decoded_next_latent[:, :-1], latents[:, 1:].detach())
-        representation_loss = F.mse_loss(latents[:, 1:], decoded_next_latent[:, :-1].detach())
-        encdec_loss = (
-            state_recon_loss + 
-            self.grid_recon_weight * grid_recon_loss + 
-            self.image_recon_weight * image_recon_loss + 
-            self.dynamics_weight * dynamics_loss +
-            self.representation_weight * representation_loss
-        )
-        
-        self.encdec_optimizer.zero_grad()
-        encdec_loss.backward()
-        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.encoder.parameters()]) ** 0.5
-        if self.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), max_norm=self.max_grad_norm)
-        self.encdec_optimizer.step()
+        for _ in range(self.n_epochs):
+            hidden = torch.zeros(self.encoder.rnn_n_layers, self.batch_size, self.encoder.rnn_hidden_dim, device=self.device)
+            zero_hidden = hidden.clone()
+            observations, actions, dones = self.buffer.sample(self.batch_size)
+            decoded_grid_logits, decoded_state, decoded_image, decoded_next_latent, latents = [], [], [], [], []
+            for l in range(self.l_rollout):
+                obs, action, done = observations[:, l], actions[:, l], dones[:, l]
+                latent, hidden = self.encoder((obs["state"], obs["perception"]), hidden=hidden)
+                # reset hidden state when episode termination occurs
+                hidden = hidden.where(done.reshape(1, -1, 1).expand(
+                    self.encoder.rnn_n_layers, -1, self.encoder.rnn_hidden_dim), zero_hidden)
+                decoded_grid_logits.append(self.grid_decoder(latent))
+                decoded_state.append(self.state_decoder(latent))
+                decoded_image.append(self.image_decoder(latent))
+                decoded_next_latent.append(self.dynamic_predictor(torch.cat([latent, action], dim=-1)))
+                latents.append(latent)
+            
+            decoded_grid_logits = torch.stack(decoded_grid_logits, dim=1) # [batch_size, l_rollout, n_grid_points]
+            decoded_state = torch.stack(decoded_state, dim=1) # [batch_size, l_rollout, obs_dim[0]]
+            decoded_image = torch.stack(decoded_image, dim=1) # [batch_size, l_rollout, H, W]
+            decoded_next_latent = torch.stack(decoded_next_latent, dim=1) # [batch_size, l_rollout, latent_dim]
+            latents = torch.stack(latents, dim=1) # [batch_size, l_rollout, latent_dim]
+            
+            grid_pred = decoded_grid_logits > 0
+            ground_truth_grid = observations["grid"]
+            
+            visible_map = observations["visible_map"]
+            visible_grid_logits = decoded_grid_logits[visible_map]
+            visible_grid_pred = grid_pred[visible_map]
+            visible_ground_truth_grid = ground_truth_grid[visible_map]
+            
+            grid_recon_loss = F.binary_cross_entropy_with_logits(
+                visible_grid_logits,
+                visible_ground_truth_grid.float(),
+                pos_weight=self.grid_pos_weight
+            )
+            image_recon_loss = F.mse_loss(decoded_image, observations["perception"].flatten(-2))
+            state_recon_loss = F.mse_loss(decoded_state, observations["state"])
+            dynamics_loss = F.mse_loss(decoded_next_latent[:, :-1], latents[:, 1:].detach())
+            representation_loss = F.mse_loss(latents[:, 1:], decoded_next_latent[:, :-1].detach())
+            encdec_loss = (
+                state_recon_loss + 
+                self.grid_recon_weight * grid_recon_loss + 
+                self.image_recon_weight * image_recon_loss + 
+                self.dynamics_weight * dynamics_loss +
+                self.representation_weight * representation_loss
+            )
+            
+            self.encdec_optimizer.zero_grad()
+            encdec_loss.backward()
+            grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.encoder.parameters()]) ** 0.5
+            if self.max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), max_norm=self.max_grad_norm)
+            self.encdec_optimizer.step()
         
         losses = {
             "grid_recon_loss": grid_recon_loss.item(),
