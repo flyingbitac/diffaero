@@ -6,6 +6,10 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from tensordict import TensorDict
+from matplotlib import pyplot as plt
+from PIL import Image
+import numpy as np
+from io import BytesIO
 
 from quaddif.env.base_env import BaseEnv
 from quaddif.utils.sensor import Camera, LiDAR
@@ -294,6 +298,35 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         if self.z_ground_plane is not None:
             occupancy = occupancy | (grid_xyz[..., 2] - self.r_drone < self.z_ground_plane)
         return occupancy # [n_envs, n_points]
+    
+    def visualize_grid(self, grid):
+        fig = plt.figure(figsize=(8, 7), dpi=100)
+        ax = fig.add_subplot(111, projection="3d")
+        ax.set_xlim3d([self.cfg.grid.x_min, self.cfg.grid.x_max])
+        ax.set_ylim3d([self.cfg.grid.y_min, self.cfg.grid.y_max])
+        ax.set_zlim3d([self.cfg.grid.z_min, self.cfg.grid.z_max])
+        x = torch.linspace(self.cfg.grid.x_min, self.cfg.grid.x_max, self.cfg.grid.n_points[0] + 1, device=self.device).cpu()
+        y = torch.linspace(self.cfg.grid.y_min, self.cfg.grid.y_max, self.cfg.grid.n_points[1] + 1, device=self.device).cpu()
+        z = torch.linspace(self.cfg.grid.z_min, self.cfg.grid.z_max, self.cfg.grid.n_points[2] + 1, device=self.device).cpu()
+        x, y, z = torch.meshgrid(x, y, z, indexing='ij')
+        # Create a boolean array representing the occupancy
+        occupancy = grid.reshape(*self.cfg.grid.n_points).cpu().numpy()
+        # Plot the voxels
+        r, g, b, a = [np.zeros(self.cfg.grid.n_points, dtype=np.float32) for _ in range(4)]
+        r.fill(1)
+        a.fill(0.2)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.voxels(x, y, z, occupancy, facecolors=np.stack([r, g, b, a], axis=-1))
+        
+        buf = BytesIO()
+        plt.savefig(buf, format='png')
+        plt.close(fig)
+        image = np.array(Image.open(buf))
+        buf.close()
+        
+        return image[..., :3].transpose(2, 0, 1)
     
     @timeit
     def get_observations(self, with_grad=False):

@@ -80,6 +80,7 @@ actor_critic:
     imagine_length: 16
     use_states: False
     scale_rewards: False
+    use_grid: False
 
 training:
   max_grad_norm: 1.0 

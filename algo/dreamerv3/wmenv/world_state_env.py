@@ -39,10 +39,10 @@ class DepthStateEnv:
         return self.sampler.denoiser.device
 
     @torch.no_grad()
-    def make_generator_init(self,):
+    def make_generator_init(self, use_grid:bool=False):
         batch_size = self.cfg.batch_size
         batch_length = self.cfg.batch_length
-        states, actions, _ , _, perceptions, grid = self.replaybuffer.sample(batch_size, batch_length)
+        states, actions, _ , _, perceptions, _ = self.replaybuffer.sample(batch_size, batch_length)
         hidden = None
             
         for i in range(batch_length):
@@ -56,15 +56,18 @@ class DepthStateEnv:
         latent = self.state_model.flatten(latent)
         self.latent = latent
         self.hidden = hidden
-        return latent,hidden
+        if use_grid:
+            grid = self.state_model.grid_predictor(latent, hidden) > 0
+            grid = grid.float()
+        else:
+            grid = None
+        return latent,hidden,grid
         
     @torch.no_grad()
-    def step(self,action:Tensor):
+    def step(self,action:Tensor,use_grid:bool=False):
         assert action.ndim==2
-        prior_sample,pred_reward,pred_end,hidden=self.state_model.predict_next(latent=self.latent,
-                                                                                          act=action,
-                                                                                          hidden=self.hidden)
+        prior_sample,pred_reward,pred_end,hidden,grid=self.state_model.predict_next(latent=self.latent, act=action, hidden=self.hidden, use_grid=use_grid)
         flattened_sample = prior_sample.view(*prior_sample.shape[:-2],-1)
         self.latent = flattened_sample
         self.hidden = hidden
-        return flattened_sample,pred_reward,pred_end,hidden
+        return flattened_sample,pred_reward,pred_end,hidden,grid

@@ -69,6 +69,12 @@ class Logger:
         else:
             self.writer.log({tag: img}, step=step)
     
+    def log_images(self, tag, img, step):
+        if isinstance(self.writer, SummaryWriter):
+            self.writer.add_images(tag, img, step)
+        else:
+            self.writer.log({tag: img}, step=step)
+            
     def log_video(self, tag, video, step, fps):
         if isinstance(self.writer, SummaryWriter):
             self.writer.add_video(tag, video, step, fps=fps)
