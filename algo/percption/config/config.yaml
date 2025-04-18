@@ -27,8 +27,23 @@ rssm:
   norm: LayerNorm
 
 decoder:
-  channels: [64,32,16,3]
-  stride: 2
-  kernel_size: 4
-  act: SiLU
-  norm: BatchNorm2d
+  use_mlp: True
+  cnndecoder:
+    channels: [64,32,16,3]
+    stride: 2
+    kernel_size: 4
+    act: SiLU
+    norm: BatchNorm2d
+
+  mlpdecoder:
+    hidden_units: [512, 512]
+    act: SiLU
+    norm: LayerNorm
+
+grid:
+  use_grid: False
+  grid_shape: [20, 20, 10]
+
+train:
+  lr: 1e-4
+  grad_norm: 100.

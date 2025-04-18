@@ -104,6 +104,19 @@ class ImageDecoder(nn.Module):
             x = F.sigmoid(self.decoder(x))
         return x
 
+class ImageDecoderMLP(nn.Module):
+    def __init__(self, final_image_shape:List, feat_dim:int, hidden_units:List[int], act:str, norm:str):
+        super().__init__()
+        self.backbone = MLP(feat_dim, hidden_units[-1], hidden_units[:-1], norm, act)
+        self.proj = nn.Linear(hidden_units[-1], math.prod(final_image_shape))
+        self.final_shape = final_image_shape
+    
+    def forward(self, x:torch.Tensor):
+        x = self.proj(self.backbone(x))
+        x = rearrange(x, '... (c h w) -> ... c h w', c=self.final_shape[0], h=self.final_shape[1])
+        x = F.sigmoid(x)
+        return x
+
 class Encoder(nn.Module):
     def __init__(self, obs_space:Dict, channels:List[int], stride:int, kernel_size:int, 
                  embed:int, hidden:int, layers:int, act:str, norm:str):
