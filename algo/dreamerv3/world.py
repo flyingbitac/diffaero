@@ -1,7 +1,11 @@
 from typing import *
 import os
+import math
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
 from omegaconf import DictConfig
 
 from quaddif.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid
@@ -17,19 +21,25 @@ from quaddif.utils.runner import timeit
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
     feats, rewards, ends, actions, org_samples = [], [], [], [], []
     imagine_length = cfg.imagine_length
-    latent, hidden = env.make_generator_init()
+    latent, hidden, grid = env.make_generator_init(cfg.use_grid)
 
     for i in range(imagine_length):
-        feat = torch.cat([latent, hidden], dim=-1)
+        if cfg.use_grid:
+            feat = torch.cat([grid, hidden], dim=-1)
+        else:
+            feat = torch.cat([latent, hidden], dim=-1)
         feats.append(feat)
         action, org_sample = agent.sample(feat)
-        latent, reward, end, hidden = env.step(action)
+        latent, reward, end, hidden, grid = env.step(action, cfg.use_grid)
         rewards.append(reward)
         actions.append(action)
         org_samples.append(org_sample)
         ends.append(end)
 
-    feat = torch.cat([latent, hidden], dim=-1)
+    if cfg.use_grid:
+        feat = torch.cat([grid, hidden], dim=-1)
+    else:
+        feat = torch.cat([latent, hidden], dim=-1)
     feats.append(feat)
     feats = torch.stack(feats, dim=1)
     actions = torch.stack(actions, dim=1)
@@ -109,7 +119,12 @@ class World_Agent:
         statemodelcfg = getattr(world_agent_cfg, "state_predictor").state_model
         statemodelcfg.state_dim = 10
         actorcriticcfg = getattr(world_agent_cfg, "actor_critic").model
-        actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
+        if world_agent_cfg.actor_critic.training.use_grid:
+            actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + math.prod(cfg.env.grid.n_points)
+            self.deploy_grid = True
+        else:
+            actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
+            self.deploy_grid = False
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
         buffercfg = getattr(world_agent_cfg, "replaybuffer")
         buffercfg.state_dim = 10
@@ -139,7 +154,10 @@ class World_Agent:
         if world_agent_cfg.common.checkpoint_path is not None:
             self.load(world_agent_cfg.common.checkpoint_path)
 
-        self.hidden = torch.zeros(self.n_envs, statemodelcfg.hidden_dim, device=device)
+        self.num_steps = 0
+        self.hidden = torch.zeros(cfg.n_envs, statemodelcfg.hidden_dim, device=device)
+        if self.deploy_grid:
+            self.grid = torch.zeros(cfg.n_envs, math.prod(cfg.env.grid.n_points), device=device)
 
     @torch.no_grad()
     def act(self, obs, test=False):
@@ -150,13 +168,25 @@ class World_Agent:
         if self.world_agent_cfg.common.use_symlog:
             state = symlog(state)
         latent = self.state_model.sample_with_post(state, perception, self.hidden, True)[0].flatten(1)
-        action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1), test)[0]
-        self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden, True)[2]
+        if self.deploy_grid:
+            action = self.agent.sample(torch.cat([self.grid, self.hidden], dim=-1), test)[0]
+        else:
+            action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1), test)[0]
+        prior_sample, _, self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden, True)
+        if self.deploy_grid:
+            self.grid = self.state_model.grid_predictor(prior_sample.flatten(1), self.hidden)>0
+            self.grid = self.grid.float()
         return action, None
 
     @timeit
     def step(self, cfg, env, obs, on_step_cb):
         policy_info = {}
+        if self.num_steps%1000==0 and hasattr(env, 'visualize_grid') and hasattr(self, 'grid'):
+            imagine_grid = env.visualize_grid(self.grid[0])
+            real_grid = env.visualize_grid(obs['grid'][0])
+            logger_grid = np.stack([imagine_grid, real_grid], axis=0)
+            policy_info['grid'] = logger_grid
+            
         with torch.no_grad():
             if not isinstance(obs, torch.Tensor):
                 state, perception = obs['state'], obs['perception'].unsqueeze(1)
@@ -171,8 +201,14 @@ class World_Agent:
                 state = symlog(state)
             if self.replaybuffer.ready() or self.world_agent_cfg.common.checkpoint_path is not None:
                 latent = self.state_model.sample_with_post(state, perception, self.hidden)[0].flatten(1)
-                action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1))[0]
-                self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden)[2]
+                if self.deploy_grid:
+                    action = self.agent.sample(torch.cat([self.grid, self.hidden], dim=-1))[0]
+                else:
+                    action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1))[0]
+                prior_sample, _, self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden)
+                if self.deploy_grid:
+                    self.grid = self.state_model.grid_predictor(prior_sample.flatten(1), self.hidden)>0
+                    self.grid = self.grid.float()
             else:
                 action = torch.randn(self.n_envs,3,device=state.device)
             next_obs,rewards,terminated,env_info = env.step(env.rescale_action(action))
@@ -195,6 +231,7 @@ class World_Agent:
             })
 
         obs = next_obs
+        self.num_steps+=1
 
         return obs, policy_info, env_info, 0.0, 0.0
 

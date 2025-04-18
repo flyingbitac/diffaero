@@ -1,6 +1,7 @@
 from typing import *
 from collections import defaultdict
 import os
+from copy import deepcopy
 
 import torch
 import torchvision
@@ -152,6 +153,9 @@ class TrainRunner:
             }
             if "value" in policy_info.keys():
                 log_info["value"] = policy_info["value"].mean().item()
+            if "grid" in policy_info.keys():
+                self.logger.log_images("grid", deepcopy(policy_info["grid"]), i+1)
+                del(policy_info["grid"])
             if "WorldModel/state_total_loss" in policy_info.keys():
                 log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
             if (i+1) % 10 == 0:

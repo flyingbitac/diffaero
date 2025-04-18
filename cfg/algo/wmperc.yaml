@@ -1,0 +1,51 @@
+name: grid_wm 
+
+encoder:
+  use_state: True
+  use_image: True
+
+  img_encoder:
+    image_shape: [1,16,9]
+    channels: [16,32]
+    stride: 2
+    kernel_size: 4
+    act: SiLU
+    norm: BatchNorm2d
+
+  state_encoder:
+    state_dim: 10
+    embedding_dim: 64
+    hidden_units: [64]
+    act: SiLU
+    norm: LayerNorm
+
+rssm:
+  action_dim: 3
+  stoch: 32
+  classes: 32
+  deter: 512
+  hidden: 512
+  act: SiLU
+  norm: LayerNorm
+
+decoder:
+  use_mlp: True
+  cnndecoder:
+    channels: [64,32,16,3]
+    stride: 2
+    kernel_size: 4
+    act: SiLU
+    norm: BatchNorm2d
+
+  mlpdecoder:
+    hidden_units: [512, 512]
+    act: SiLU
+    norm: LayerNorm
+
+grid:
+  use_grid: True
+  grid_shape: [20, 20, 10]
+
+train:
+  lr: 1e-4
+  grad_norm: 100.

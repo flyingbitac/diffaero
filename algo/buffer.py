@@ -180,21 +180,22 @@ class RolloutBufferGRID:
             "state": torch.zeros((buffer_size, l_rollout, obs_dim[0]), **factory_kwargs),
             "perception": torch.zeros((buffer_size, l_rollout, obs_dim[1][0], obs_dim[1][1]), **factory_kwargs),
             "grid": torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool),
-            "visible_map": torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool)
+            "visible_map": torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool),
         }, batch_size=(buffer_size, l_rollout))
         self.dones = torch.zeros((buffer_size, l_rollout), device=device, dtype=torch.bool)
         self.actions = torch.zeros((buffer_size, l_rollout, action_dim), **factory_kwargs)
+        self.rewards = torch.zeros((buffer_size, l_rollout), device=device, dtype=torch.float32)
         self.device = device
         self.max_size = buffer_size
         self.size = 0
         self.ptr = 0
     
     @torch.no_grad()
-    def add(self, obs, action, done, ratio=1.):
-        # type: (TensorDict, Tensor, Tensor, int) -> None
+    def add(self, obs, action, done, reward, ratio=1.):
+        # type: (TensorDict, Tensor, Tensor, Tensor, int) -> None
         if ratio != 1.:
             n0 = int(ratio * obs.shape[0])
-            obs, action, done = obs[:n0], action[:n0], done[:n0]
+            obs, action, done, reward = obs[:n0], action[:n0], done[:n0], reward[:n0]
         
         n = obs.shape[0]
         start1, end1 = self.ptr, min(self.max_size, self.ptr + n)
@@ -202,15 +203,17 @@ class RolloutBufferGRID:
         n1, n2 = end1 - start1, end2 - start2
         self.obs[start1:end1] = obs[:n1]
         self.dones[start1:end1] = done[:n1]
+        self.rewards[start1:end1] = reward[:n1]
         self.actions[start1:end1] = action[:n1]
         if n2 > 0:
             self.obs[start2:end2] = obs[n1:]
             self.dones[start2:end2] = done[n1:]
             self.actions[start2:end2] = action[n1:]
+            self.rewards[start2:end2] = reward[n1:]
         self.ptr = (self.ptr + n) % self.max_size
         self.size = min(self.size + n, self.max_size)
     
     def sample(self, batch_size):
         # type: (int) -> Tuple[Tensor]
         ind = torch.randint(0, self.size, size=(batch_size,), device=self.device)
-        return self.obs[ind], self.actions[ind], self.dones[ind]
+        return self.obs[ind], self.actions[ind], self.dones[ind], self.rewards[ind]

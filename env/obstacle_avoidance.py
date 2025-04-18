@@ -438,7 +438,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         if self.dynamic_type == "pointmass":
             state = torch.cat([self.target_vel, quat_xyzw, self._v], dim=-1)
         else:
-            state = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         if not self.test:
             grid, visible_map = self.get_occupancy_map(quat_xyzw)
         else:
