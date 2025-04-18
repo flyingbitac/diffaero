@@ -18,82 +18,7 @@ from quaddif.utils.runner import timeit
 from quaddif.utils.nn import mlp
 from quaddif.algo.percption.world.backbone import WorldModel
 
-
-class RCNN(nn.Module):
-    def __init__(
-        self,
-        input_dim: Tuple[int, Tuple[int, int]],
-        hidden_dim: Union[int, List[int]],
-        rnn_n_layers: int,
-        rnn_hidden_dim: int,
-        output_dim: int,
-        output_act: Optional[nn.Module] = None
-    ):
-        super().__init__()
-        self.input_dim = input_dim
-        self.cnn = CNNBackbone(input_dim)
-        
-        self.rnn_n_layers = rnn_n_layers
-        self.rnn_hidden_dim = rnn_hidden_dim
-        self.gru = torch.nn.GRU(
-            input_size=self.cnn.out_dim,
-            hidden_size=self.rnn_hidden_dim,
-            num_layers=self.rnn_n_layers,
-            bias=True,
-            batch_first=True,
-            dropout=0.0,
-            bidirectional=False,
-            dtype=torch.float
-        )
-        self.head = mlp(self.rnn_hidden_dim, hidden_dim, output_dim, output_act=output_act)
-        self.hidden_state: Tensor = None
-    
-    def forward(
-        self,
-        obs: Tuple[Tensor, Tensor], # ([N, D_state], [N, H, W])
-        action: Optional[Tensor] = None, # [N, D_action]
-        hidden: Optional[Tensor] = None, # [n_layers, N, D_hidden]
-    ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
-        # self.gru.flatten_parameters()
-        
-        perception = obs[1]
-        if perception.ndim == 3:
-            perception = perception.unsqueeze(1)
-        rnn_input = torch.cat([obs[0], self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
-        
-        use_own_hidden = hidden is None
-        if use_own_hidden:
-            if self.hidden_state is None:
-                hidden = torch.zeros(self.rnn_n_layers, rnn_input.size(0), self.rnn_hidden_dim, dtype=rnn_input.dtype, device=rnn_input.device)
-            else:
-                hidden = self.hidden_state
-        
-        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
-        if use_own_hidden:
-            self.hidden_state = hidden
-        return self.head(rnn_out.squeeze(1)), hidden
-    
-    def forward_export(
-        self,
-        state: Tensor, # [N, D_state]
-        perception: Tensor, # [N, H, W]
-        hidden: Tensor, # [n_layers, N, D_hidden]
-        action: Optional[Tensor] = None, # [N, D_action]
-    ) -> Tuple[Tensor, Tensor]:
-        if perception.ndim == 3:
-            perception = perception.unsqueeze(1)
-        rnn_input = torch.cat([state, self.cnn(perception)] + ([] if action is None else [action]), dim=-1)
-        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
-        return self.head(rnn_out.squeeze(1)), hidden
-
-    def reset(self, indices: Tensor):
-        self.hidden_state[:, indices, :] = 0
-    
-    def detach(self):
-        self.hidden_state.detach_()
-
-
-class GRID:
+class GRIDWM:
     def __init__(
         self,
         cfg: DictConfig,
@@ -107,7 +32,7 @@ class GRID:
         self.latent_dim: int = cfg.latent_dim
         
         # encoder
-        self.wm_encoder = WorldModel(cfg.wmperc)
+        self.wm_encoder = WorldModel(cfg.algo.wmperc)
         # actor
         self.actor = StochasticActor(cfg.network, self.wm_encoder.deter_dim + self.wm_encoder.latent_dim, action_dim).to(device)
         # optimizers
@@ -224,7 +149,7 @@ class GRID:
     
     @staticmethod
     def build(cfg: DictConfig, env: ObstacleAvoidanceGrid, device: torch.device):
-        return GRID(
+        return GRIDWM(
             cfg=cfg,
             obs_dim=env.obs_dim,
             action_dim=env.action_dim,
