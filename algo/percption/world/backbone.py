@@ -88,6 +88,7 @@ class WorldModel(nn.Module):
         self.kl_loss = CategoricalLossWithFreeBits()
     
         self.deter_dim = rssm_cfg.deter
+        self.latent_dim = rssm_cfg.stoch*rssm_cfg.classes
     
     def encode(self, obs:torch.Tensor=None, state:torch.Tensor=None, deter:torch.Tensor=None):
         tokens = []
@@ -105,7 +106,8 @@ class WorldModel(nn.Module):
         return deter
         
     def update(self, obs:torch.Tensor=None, state:torch.Tensor=None, actions:torch.Tensor=None, 
-               rewards:torch.Tensor=None, terminals:torch.Tensor=None, grids:torch.Tensor=None):
+               rewards:torch.Tensor=None, terminals:torch.Tensor=None, grids:torch.Tensor=None,
+               visible_map:torch.Tensor=None):
         # obs: B L C H W, actions:B L D, rewards:B L, terminals:B L
         deter = torch.zeros(obs.size(0), self.deter_dim, device=obs.device)
         tokens = []
@@ -136,7 +138,8 @@ class WorldModel(nn.Module):
             rec_state_loss = mse(rec_states, state.detach())
         if hasattr(self, 'grid_decoder'):
             pred_grid = self.grid_decoder(feats)
-            grid_loss = self.bce_loss(pred_grid, grids.detach())
+            visible_pred_grid = pred_grid[visible_map]
+            grid_loss = self.bce_loss(visible_pred_grid, grids.detach())
         
         rec_loss = rec_img_loss + rec_state_loss
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
