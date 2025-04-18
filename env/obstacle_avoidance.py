@@ -349,15 +349,40 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             start=start,
             quat_xyzw=quat_xyzw)
         
-        # visible_points = torch.lerp(start.unsqueeze(1), contact_point.unsqueeze(1), self.ray_segment_weight.reshape(1, n_segments, 1, 1)).reshape(N, -1, 3) # [n_envs, n_segments * n_rays, 3]
-        # dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_segments * n_rays]
-        # visible_map = torch.any(dist2visible_points < self.cube_size / 2, dim=-1)
+        x_min, x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
+        y_min, y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
+        z_min, z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
         
         visible_map = torch.zeros_like(occupancy_map, dtype=torch.bool)
-        for w in self.ray_segment_weight:
-            visible_points = torch.lerp(start, contact_point, w)
-            dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_rays]
-            visible_map.logical_or_(torch.any(dist2visible_points < self.cube_size / 2, dim=-1))
+        
+        visible_points = torch.lerp(start.unsqueeze(1), contact_point.unsqueeze(1), self.ray_segment_weight.reshape(1, -1, 1, 1)).reshape(N, -1, 3) # [n_envs, n_segments * n_rays, 3]
+        
+        # 1st way to calculate visible map
+        local_visible_points = visible_points - self.p.unsqueeze(1) # [n_envs, n_segments * n_rays, 3]
+        valid_mask = (
+            (local_visible_points[:, :, 0] >= x_min) & (local_visible_points[:, :, 0] < x_max) &
+            (local_visible_points[:, :, 1] >= y_min) & (local_visible_points[:, :, 1] < y_max) &
+            (local_visible_points[:, :, 2] >= z_min) & (local_visible_points[:, :, 2] < z_max)
+        ) # [n_envs, n_segments * n_rays]
+        env_ids, point_ids = torch.where(valid_mask) # [n_valid_points, ]
+        local_valid_visible_points = local_visible_points[env_ids, point_ids] # [n_valid_points, 3]
+        x_idx = ((local_valid_visible_points[:, 0] - x_min) // self.cube_size).long()
+        y_idx = ((local_valid_visible_points[:, 1] - y_min) // self.cube_size).long()
+        z_idx = ((local_valid_visible_points[:, 2] - z_min) // self.cube_size).long()
+        n_x, n_y, n_z = self.cfg.grid.n_points
+        linear_indices = x_idx * (n_y * n_z) + y_idx * n_z + z_idx
+        visible_map[env_ids, linear_indices] = True
+        
+        # 2nd way to calculate visible map
+        # dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_segments * n_rays]
+        # visible_map1 = torch.any(dist2visible_points < self.cube_size / 2, dim=-1)
+        
+        # 3rd way to calculate visible map
+        # visible_map2 = torch.zeros_like(occupancy_map, dtype=torch.bool)
+        # for w in self.ray_segment_weight:
+        #     visible_points = torch.lerp(start, contact_point, w)
+        #     dist2visible_points = torch.norm(grid_xyz.unsqueeze(2) - visible_points.unsqueeze(1), p=1, dim=-1) # [n_envs, n_points, n_rays]
+        #     visible_map2.logical_or_(torch.any(dist2visible_points < self.cube_size / 2, dim=-1))
         
         if torch.any(self.prev_visible_map):
             # 计算旧地图障碍物的全局坐标
@@ -365,17 +390,12 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             
             # 获取所有可见点的环境索引和点索引
             env_ids, point_ids = torch.where(self.prev_visible_map)
-            
+        
             # 提取有效的全局坐标
             valid_global = prev_visible_global[env_ids, point_ids]
             
             # 转换到当前局部坐标系
             current_local = valid_global - self.p[env_ids]
-            
-            # 地图边界参数
-            x_min, x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
-            y_min, y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
-            z_min, z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
             
             # 有效性掩码（使用左闭右开区间）
             valid_mask = (
@@ -389,25 +409,17 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             valid_current_local = current_local[valid_mask]
             
             # 计算三维索引
-            cube_size = self.cube_size
-            x_idx = ((valid_current_local[:, 0] - x_min) // cube_size).long()
-            y_idx = ((valid_current_local[:, 1] - y_min) // cube_size).long()
-            z_idx = ((valid_current_local[:, 2] - z_min) // cube_size).long()
+            x_idx = ((valid_current_local[:, 0] - x_min) // self.cube_size).long()
+            y_idx = ((valid_current_local[:, 1] - y_min) // self.cube_size).long()
+            z_idx = ((valid_current_local[:, 2] - z_min) // self.cube_size).long()
             
             # 验证索引有效性
-            n_x, n_y, n_z = self.cfg.grid.n_points
             valid_indices = (
                 (x_idx >= 0) & (x_idx < n_x) &
                 (y_idx >= 0) & (y_idx < n_y) &
                 (z_idx >= 0) & (z_idx < n_z)
             )
             assert torch.all(valid_indices)
-            
-            # 最终有效点
-            # final_env_ids = valid_env_ids[valid_indices]
-            # x_idx = x_idx[valid_indices]
-            # y_idx = y_idx[valid_indices]
-            # z_idx = z_idx[valid_indices]
             
             # 转换为线性索引
             linear_indices = x_idx * (n_y * n_z) + y_idx * n_z + z_idx

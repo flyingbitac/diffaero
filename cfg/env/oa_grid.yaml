@@ -28,11 +28,20 @@ defaults:
   - render: oa_render
   - _self_
 
+# grid:
+#   x_min: -2.
+#   x_max: 2.
+#   y_min: -2.
+#   y_max: 2.
+#   z_min: -1.
+#   z_max: 1.
+#   n_points: [20, 20, 10]
+
 grid:
-  x_min: -2.
-  x_max: 2.
-  y_min: -2.
-  y_max: 2.
-  z_min: -1.
-  z_max: 1.
+  x_min: -4.
+  x_max: 4.
+  y_min: -4.
+  y_max: 4.
+  z_min: -2.
+  z_max: 2.
   n_points: [20, 20, 10]
