@@ -120,16 +120,18 @@ class GRID:
         self.grid_decoder = mlp(self.latent_dim, [self.latent_dim * 2], self.n_grid_points).to(device)
         self.state_decoder = mlp(self.latent_dim, [self.latent_dim * 2], obs_dim[0]).to(device)
         self.image_decoder = mlp(self.latent_dim, [self.latent_dim * 2], obs_dim[1][0] * obs_dim[1][1], output_act=nn.Sigmoid()).to(device)
+        self.dynamic_predictor = mlp(self.latent_dim+action_dim, [self.latent_dim * 2], self.latent_dim).to(device)
         
         # actor
-        self.actor = StochasticActor(cfg.network, self.latent_dim, action_dim).to(device)
+        self.actor = StochasticActor(cfg.network, self.latent_dim + obs_dim[0], action_dim).to(device)
         
         # optimizers
         self.encdec_optimizer = torch.optim.Adam([
             {"params": self.encoder.parameters()},
             {"params": self.grid_decoder.parameters()},
             {"params": self.state_decoder.parameters()},
-            {"params": self.image_decoder.parameters()}
+            {"params": self.image_decoder.parameters()},
+            {"params": self.dynamic_predictor.parameters()}
         ], lr=cfg.encdec_lr)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
         
@@ -148,6 +150,8 @@ class GRID:
         self.max_grad_norm: float = cfg.max_grad_norm
         self.grid_recon_weight: float = cfg.grid_recon_weight
         self.image_recon_weight: float = cfg.image_recon_weight
+        self.dynamics_weight: float = cfg.dynamics_weight
+        self.representation_weight: float = cfg.representation_weight
         self.grid_pos_weight: Tensor = torch.tensor(cfg.grid_pos_weight, device=device)
         self.actor_loss = torch.zeros(1, device=device)
         self.device = device
@@ -157,7 +161,8 @@ class GRID:
         # type: (TensorDict, bool) -> Tuple[Tensor, Dict[str, Tensor]]
         with torch.no_grad():
             latent, hidden = self.encoder((obs["state"], obs["perception"]))
-        action, sample, logprob, entropy = self.actor(latent, test=test)
+            actor_input = torch.cat([latent, obs["state"]], dim=-1)
+        action, sample, logprob, entropy = self.actor(actor_input, test=test)
         return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}
     
     def record_loss(self, loss, policy_info, env_info):
@@ -173,7 +178,7 @@ class GRID:
         hidden = torch.zeros(self.encoder.rnn_n_layers, self.batch_size, self.encoder.rnn_hidden_dim, device=self.device)
         zero_hidden = hidden.clone()
         observations, actions, dones = self.buffer.sample(self.batch_size)
-        decoded_grid_logits, decoded_state, decoded_image = [], [], []
+        decoded_grid_logits, decoded_state, decoded_image, decoded_next_latent, latents = [], [], [], [], []
         for l in range(self.l_rollout):
             obs, action, done = observations[:, l], actions[:, l], dones[:, l]
             latent, hidden = self.encoder((obs["state"], obs["perception"]), hidden=hidden)
@@ -183,10 +188,14 @@ class GRID:
             decoded_grid_logits.append(self.grid_decoder(latent))
             decoded_state.append(self.state_decoder(latent))
             decoded_image.append(self.image_decoder(latent))
+            decoded_next_latent.append(self.dynamic_predictor(torch.cat([latent, action], dim=-1)))
+            latents.append(latent)
         
         decoded_grid_logits = torch.stack(decoded_grid_logits, dim=1) # [batch_size, l_rollout, n_grid_points]
         decoded_state = torch.stack(decoded_state, dim=1) # [batch_size, l_rollout, obs_dim[0]]
         decoded_image = torch.stack(decoded_image, dim=1) # [batch_size, l_rollout, H, W]
+        decoded_next_latent = torch.stack(decoded_next_latent, dim=1) # [batch_size, l_rollout, latent_dim]
+        latents = torch.stack(latents, dim=1) # [batch_size, l_rollout, latent_dim]
         
         grid_pred = decoded_grid_logits > 0
         ground_truth_grid = observations["grid"]
@@ -195,6 +204,7 @@ class GRID:
         visible_grid_logits = decoded_grid_logits[visible_map]
         visible_grid_pred = grid_pred[visible_map]
         visible_ground_truth_grid = ground_truth_grid[visible_map]
+        
         grid_recon_loss = F.binary_cross_entropy_with_logits(
             visible_grid_logits,
             visible_ground_truth_grid.float(),
@@ -202,10 +212,14 @@ class GRID:
         )
         image_recon_loss = F.mse_loss(decoded_image, observations["perception"].flatten(-2))
         state_recon_loss = F.mse_loss(decoded_state, observations["state"])
+        dynamics_loss = F.mse_loss(decoded_next_latent[:, :-1], latents[:, 1:].detach())
+        representation_loss = F.mse_loss(latents[:, 1:], decoded_next_latent[:, :-1].detach())
         encdec_loss = (
             state_recon_loss + 
             self.grid_recon_weight * grid_recon_loss + 
-            self.image_recon_weight * image_recon_loss
+            self.image_recon_weight * image_recon_loss + 
+            self.dynamics_weight * dynamics_loss +
+            self.representation_weight * representation_loss
         )
         
         self.encdec_optimizer.zero_grad()
@@ -219,7 +233,10 @@ class GRID:
             "grid_recon_loss": grid_recon_loss.item(),
             "grid_acc": (visible_grid_pred == visible_ground_truth_grid).float().mean().item(),
             "grid_precision": visible_grid_pred[visible_ground_truth_grid].float().mean().item(),
+            "image_recon_loss": image_recon_loss.item(),
             "state_recon_loss": state_recon_loss.item(),
+            "dynamics_loss": dynamics_loss.item(),
+            "representation_loss": representation_loss.item(),
             "encdec_loss": encdec_loss.item()
         }
         grad_norms = {"encdec_grid_norm": grad_norm}
@@ -227,8 +244,8 @@ class GRID:
         visible_grid_gt_for_plot = ground_truth_grid & visible_map
         visible_grid_pred_for_plot = grid_pred & visible_map
         
-        n_grid = visible_grid_gt_for_plot.sum(dim=-1)
-        env_idx, time_idx = torch.where(n_grid == n_grid.max())
+        n_missd_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
+        env_idx, time_idx = torch.where(n_missd_predictions == n_missd_predictions.max())
         env_idx, time_idx = env_idx[0], time_idx[0]
         selected_grid_gt = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
         selected_grid_pred = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)

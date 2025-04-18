@@ -1,5 +1,8 @@
 name: grid
-network: ${network}
+
+network:
+  name: mlp
+  hidden_dim: [256, 128]
 
 # encoder
 encoder_hidden_dim: [128]
@@ -11,12 +14,14 @@ l_rollout: 32
 buffer_size: 1e4
 batch_size: 256
 
-encdec_lr: 0.001
+encdec_lr: 0.0001
 actor_lr: 0.001
 max_grad_norm: 1.
 
 entropy_weight: 0.03
 grid_recon_weight: 1
 image_recon_weight: 0
+dynamics_weight: 0
+representation_weight: 0
 
 grid_pos_weight: 10
