@@ -1,21 +1,16 @@
-from typing import Tuple, Dict, Union, Optional, List
+from typing import Tuple, Dict
 import os
-import math
 
 from omegaconf import DictConfig
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 import tensordict
 from tensordict import TensorDict
 
 from quaddif.env.obstacle_avoidance import ObstacleAvoidanceGrid
-from quaddif.algo.buffer import RolloutBufferGRID, RNNStateBuffer
-from quaddif.network.networks import CNNBackbone
-from quaddif.network.agents import tensordict2tuple, StochasticActor
+from quaddif.algo.buffer import RolloutBufferGRID
+from quaddif.network.agents import  StochasticActor
 from quaddif.utils.runner import timeit
-from quaddif.utils.nn import mlp
 from quaddif.algo.percption.world.backbone import WorldModel
 
 class GRIDWM:
