@@ -86,13 +86,13 @@ class WorldModel(nn.Module):
         self.deter_dim = rssm_cfg.deter
         self.latent_dim = rssm_cfg.stoch*rssm_cfg.classes
         
-        self.rec_img_weight: float = cfg.rec_img_weight
-        self.rec_state_weight: float = cfg.rec_state_weight
-        self.dyn_weight: float = cfg.dyn_weight
-        self.rep_weight: float = cfg.rep_weight
-        self.rew_weight: float = cfg.rew_weight
-        self.ter_weight: float = cfg.ter_weight
-        self.grid_loss: float = cfg.grid_loss
+        self.rec_img_weight: float = cfg.train.rec_img_weight
+        self.rec_state_weight: float = cfg.train.rec_state_weight
+        self.dyn_weight: float = cfg.train.dyn_weight
+        self.rep_weight: float = cfg.train.rep_weight
+        self.rew_weight: float = cfg.train.rew_weight
+        self.ter_weight: float = cfg.train.ter_weight
+        self.grid_loss: float = cfg.train.grid_loss
     
     def encode(self, obs:torch.Tensor=None, state:torch.Tensor=None, deter:torch.Tensor=None):
         tokens = []
