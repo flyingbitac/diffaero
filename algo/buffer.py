@@ -177,14 +177,14 @@ class RolloutBufferGRID:
     ):
         factory_kwargs = {"dtype": torch.float32, "device": device}
         self.obs = TensorDict({
-            "state": torch.zeros((buffer_size, l_rollout, obs_dim[0]), **factory_kwargs),
-            "perception": torch.zeros((buffer_size, l_rollout, obs_dim[1][0], obs_dim[1][1]), **factory_kwargs),
-            "grid": torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool),
+            "state":       torch.zeros((buffer_size, l_rollout, obs_dim[0]), **factory_kwargs),
+            "perception":  torch.zeros((buffer_size, l_rollout, obs_dim[1][0], obs_dim[1][1]), **factory_kwargs),
+            "grid":        torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool),
             "visible_map": torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool),
         }, batch_size=(buffer_size, l_rollout))
         self.dones = torch.zeros((buffer_size, l_rollout), device=device, dtype=torch.bool)
         self.actions = torch.zeros((buffer_size, l_rollout, action_dim), **factory_kwargs)
-        self.rewards = torch.zeros((buffer_size, l_rollout), device=device, dtype=torch.float32)
+        self.rewards = torch.zeros((buffer_size, l_rollout), **factory_kwargs)
         self.device = device
         self.max_size = buffer_size
         self.size = 0

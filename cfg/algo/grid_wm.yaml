@@ -9,23 +9,21 @@ l_rollout: 32
 buffer_size: 1e4
 batch_size: 256
 
-actor_lr: 0.001
+actor_lr: 1e-3
 max_grad_norm: 1.
-n_epochs: 1
+n_epochs: 4
 
 entropy_weight: 0.03
 
 encoder:
-  use_state: True
-  use_image: True
-
   img_encoder:
     image_shape: [1, 9, 16]
-    channels: [16,32]
+    channels: [16, 32]
     stride: 2
     kernel_size: 4
     act: SiLU
     norm: BatchNorm2d
+  recon_image: False
 
   state_encoder:
     state_dim: 10
@@ -33,6 +31,7 @@ encoder:
     hidden_units: [64]
     act: SiLU
     norm: LayerNorm
+  recon_state: True
 
 rssm:
   action_dim: 3
@@ -58,7 +57,7 @@ decoder:
     norm: LayerNorm
 
 train:
-  lr: 1e-3
+  lr: 3e-4
   grad_norm: 100.
   grid_pos_weight: 10
 
