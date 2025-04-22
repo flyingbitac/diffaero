@@ -1,6 +1,7 @@
 from typing import *
 import os
 import math
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -9,13 +10,14 @@ import numpy as np
 from omegaconf import DictConfig
 
 from quaddif.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid
-from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel
+from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
 from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
 from quaddif.algo.dreamerv3.models.blocks import symlog
 from quaddif.algo.dreamerv3.wmenv.world_state_env import DepthStateEnv
 from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
 from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
 from quaddif.utils.runner import timeit
+from quaddif.dynamics.pointmass import point_mass_quat
 
 @torch.no_grad()
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
@@ -248,3 +250,89 @@ class World_Agent:
     @staticmethod
     def build(cfg, env, device):
         return World_Agent(cfg, env, device)
+    
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        verbose=False,
+    ):
+        WorldExporter(self).export(path, export_jit, export_onnx, verbose)
+
+class WorldExporter(nn.Module):
+    def __init__(self, agent: World_Agent):
+        super().__init__()
+        self.use_symlog = agent.world_agent_cfg.common.use_symlog
+        self.state_encoder = deepcopy(agent.state_model.state_encoder)
+        if hasattr(agent.state_model, 'image_encoder'):
+            self.image_encoder = deepcopy(agent.state_model.image_encoder)
+            self.forward = self.forward_perc_prop
+        else:
+            self.forward = self.forward_prop
+        self.inp_proj = deepcopy(agent.state_model.inp_proj)
+        self.seq_model = deepcopy(agent.state_model.seq_model)
+        self.act_state_proj = deepcopy(agent.state_model.act_state_proj)
+        self.actor = deepcopy(agent.agent.actor_mean_std)
+        
+        self.register_buffer("hidden_state",torch.zeros(1,agent.state_model.cfg.hidden_dim))
+        self.hidden_state = self.get_buffer("hidden_state")
+        self.is_recurrent = True
+        self.hidden_shape = agent.state_model.cfg.hidden_dim
+    
+    def sample_for_deploy(self,logits):
+        probs = F.softmax(logits,dim=-1)
+        return onehotsample(probs)
+    
+    def sample_with_post(self,feat):        
+        post_logits = self.inp_proj(torch.cat([feat,self.hidden_state],dim=-1))
+        b,d = post_logits.shape
+        post_logits = post_logits.reshape(b,int(math.sqrt(d)),-1) # b l d -> b l c k
+        post_sample = self.sample_for_deploy(post_logits)
+        return post_sample
+
+    def forward_perc_prop(self, state, perception, orientation, min_action, max_action, hidden):
+        with torch.no_grad():
+            if self.use_symlog:
+                state = torch.sign(state) * torch.log(1 + torch.abs(state))
+            state_feat = self.state_encoder(state)
+            image_feat = self.image_encoder(perception.unsqueeze(0))
+            feat = torch.cat([state_feat, image_feat], dim=-1)
+            latent = self.sample_with_post(feat).flatten(1)
+            mean_std = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            action, _ = torch.chunk(mean_std, 2, dim=-1)
+            action = torch.tanh(action)
+            self.sample_with_prior(latent, action)
+            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
+        return action, quat_xyzw, acc_norm, hidden
+            
+    def forward_prop(self,state, orientation, min_action, max_action, hidden):
+        with torch.no_grad():
+            if self.use_symlog:
+                state = torch.sign(state) * torch.log(1 + torch.abs(state))
+            state_feat = self.state_encoder(state.unsqueeze(0))
+            latent = self.sample_with_post(state_feat).flatten(1)
+            mean_std = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            action, _ = torch.chunk(mean_std, 2, dim=-1)
+            action = torch.tanh(action)
+            self.sample_with_prior(latent,action)
+            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
+        return action, quat_xyzw, acc_norm, hidden  
+    
+    def post_process(self, action, min_action, max_action, orientation):
+        action = (action * 0.5 + 0.5) * (max_action - min_action) + min_action
+        quat_xyzw = point_mass_quat(action, orientation)
+        acc_norm = action.norm(p=2, dim=-1)
+        return action, quat_xyzw, acc_norm
+    
+    def export_jit(self, path: str, verbose=False):
+        traced_script_module = torch.jit.script(self)
+        if verbose:
+            print(traced_script_module.code)
+        export_path = os.path.join(path, "exported_actor.pt2")
+        traced_script_module.save(export_path)
+        print(f"The checkpoint is compiled and exported to {export_path}.")
+    
+    def export(self, path: str, export_jit=False, export_onnx=False, verbose=False):
+        if export_jit:
+            self.export_jit(path, verbose)

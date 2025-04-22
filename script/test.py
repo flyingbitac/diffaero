@@ -61,8 +61,8 @@ def main(cfg: DictConfig):
         runner.run()
     except KeyboardInterrupt:
         print("Interrupted.")
-    finally:
-        success_rate = runner.close()
+    
+    success_rate = runner.close()
     
     return success_rate
 

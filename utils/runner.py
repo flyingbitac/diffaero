@@ -184,12 +184,11 @@ class TrainRunner:
         print(f"The checkpoint is saved to {ckpt_path}.")
         print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
         if any(dict(self.cfg.export).values()):
-            from quaddif.utils.exporter import PolicyExporter
-            PolicyExporter(self.agent.policy_net).export(
+            self.agent.export(
                 path=ckpt_path,
-                verbose=True,
                 export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx
+                export_onnx=self.cfg.export.onnx,
+                verbose=True
             )
         if self.env.renderer is not None:
             self.env.renderer.close()
@@ -293,22 +292,14 @@ class TestRunner:
                     env_info=env_info)
     
     def close(self):
-        if self.cfg.export:
-            from quaddif.utils.exporter import PolicyExporter, WorldExporter
+        if any(dict(self.cfg.export).values()):
             ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
-            if self.cfg.algo.name != "world":
-                PolicyExporter(self.agent.policy_net).export(
-                    path=ckpt_path,
-                    verbose=True,
-                    export_jit=self.cfg.export.jit,
-                    export_onnx=self.cfg.export.onnx
-                )
-            else:
-                if not os.path.exists(ckpt_path):
-                    os.makedirs(ckpt_path)
-                exporter = WorldExporter(self.agent)
-                exporter.export(ckpt_path)
-        
+            self.agent.export(
+                path=ckpt_path,
+                export_jit=self.cfg.export.jit,
+                export_onnx=self.cfg.export.onnx,
+                verbose=True
+            )
         if self.env.renderer is not None:
             self.env.renderer.close()
         

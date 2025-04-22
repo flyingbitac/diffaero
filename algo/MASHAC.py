@@ -13,6 +13,8 @@ from quaddif.algo.buffer import RolloutBufferMASHAC, RNNStateBuffer
 from quaddif.network.agents import tensordict2tuple
 from quaddif.network.multiagents import MAStochasticActorCriticV
 from quaddif.utils.runner import timeit
+from quaddif.utils.exporter import PolicyExporter
+
 
 class MASHAC:
     def __init__(
@@ -234,6 +236,11 @@ class MASHAC:
             l_rollout=cfg.l_rollout,
             device=device)
     
-    @property
-    def policy_net(self):
-        return self.agent.actor
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        verbose=False,
+    ):
+        PolicyExporter(self.agent.actor).export(path, export_jit, export_onnx, verbose)
