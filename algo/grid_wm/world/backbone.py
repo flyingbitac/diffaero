@@ -57,11 +57,71 @@ class RSSM(nn.Module):
     def recurrent(self, stoch:torch.Tensor, deter:torch.Tensor, action:torch.Tensor):
         return self.seq_model(deter, stoch, action)
 
+class GridDecoder(nn.Module):
+    def __init__(self, rssm_cfg: DictConfig, grid_cfg: DictConfig):
+        super().__init__()
+        input_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
+        ds_rate = 4
+        self.n_grids = math.prod(grid_cfg.n_points)
+        self.fmap_shape = [i // ds_rate for i in grid_cfg.n_points]
+        self.fmap_channels = 8
+        
+        self.input_layer = nn.Sequential(
+            nn.Linear(input_dim, self.fmap_channels * math.prod(self.fmap_shape)),
+            nn.SiLU())
+        self.up_convs = nn.Sequential(
+            nn.ConvTranspose3d(
+                in_channels=self.fmap_channels,
+                out_channels=self.fmap_channels//2,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                output_padding=1
+            ),
+            nn.SiLU(),
+            nn.ConvTranspose3d(
+                in_channels=self.fmap_channels//2,
+                out_channels=self.fmap_channels//4,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                output_padding=1
+            ),
+            nn.SiLU(),
+            nn.Conv3d(
+                in_channels=self.fmap_channels//4,
+                out_channels=1,
+                kernel_size=1,
+                stride=1
+            )
+        )
+    
+    def forward(self, x):
+        flattened_fmap = self.input_layer(x)
+        reshaped_fmap = rearrange(
+            flattened_fmap,
+            '... (c l w h) -> ... c l w h',
+            c=self.fmap_channels,
+            l=self.fmap_shape[0],
+            w=self.fmap_shape[1],
+            h=self.fmap_shape[2])
+        flag = reshaped_fmap.ndim == 6
+        if flag:
+            B, T, C, L, W, H = reshaped_fmap.shape
+            reshaped_fmap = reshaped_fmap.reshape(B*T, C, L, W, H)
+        else:
+            B, C, L, W, H = reshaped_fmap.shape
+        out = self.up_convs(reshaped_fmap)
+        if flag:
+            out = out.reshape(B, T, *out.shape[1:])
+        return out.reshape(B, T, self.n_grids)
+        
+
 class WorldModel(nn.Module):
     @staticmethod
     def _build_mlp(rssm_cfg: DictConfig) -> MLP:
         return MLP(
-            input_dim=rssm_cfg.deter + rssm_cfg.stoch*rssm_cfg.classes,
+            input_dim=rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes,
             hidden_units=[rssm_cfg.hidden],
             act=rssm_cfg.act,
             norm=rssm_cfg.norm,
@@ -136,10 +196,11 @@ class WorldModel(nn.Module):
         )
         
         # grid deocder
-        self.grid_decoder = nn.Sequential(
-            self._build_mlp(rssm_cfg),
-            nn.Linear(rssm_cfg.hidden, math.prod(grid_cfg.n_points))
-        )
+        # self.grid_decoder = nn.Sequential(
+        #     self._build_mlp(rssm_cfg),
+        #     nn.Linear(rssm_cfg.hidden, math.prod(grid_cfg.n_points))
+        # )
+        self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
         # reward deocder
         self.reward_decoder = nn.Sequential(
             self._build_mlp(rssm_cfg),
