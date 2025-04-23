@@ -170,7 +170,6 @@ class RolloutBufferGRID:
         l_rollout: int,
         buffer_size: int,
         obs_dim: Tuple[int, Tuple[int, int]],
-        latent_dim: int,
         action_dim: int,
         grid_dim: int,
         device: torch.device
@@ -191,12 +190,8 @@ class RolloutBufferGRID:
         self.ptr = 0
     
     @torch.no_grad()
-    def add(self, obs, action, done, reward, ratio=1.):
-        # type: (TensorDict, Tensor, Tensor, Tensor, int) -> None
-        if ratio != 1.:
-            n0 = int(ratio * obs.shape[0])
-            obs, action, done, reward = obs[:n0], action[:n0], done[:n0], reward[:n0]
-        
+    def add(self, obs, action, done, reward):
+        # type: (TensorDict, Tensor, Tensor, Tensor) -> None
         n = obs.shape[0]
         start1, end1 = self.ptr, min(self.max_size, self.ptr + n)
         start2, end2 = 0, max(0, self.ptr + n - self.max_size)

@@ -1,4 +1,6 @@
+from typing import Optional, Tuple
 import math
+import os
 
 from omegaconf import DictConfig
 import torch
@@ -56,6 +58,19 @@ class RSSM(nn.Module):
     
     def recurrent(self, stoch:torch.Tensor, deter:torch.Tensor, action:torch.Tensor):
         return self.seq_model(deter, stoch, action)
+    
+    @staticmethod
+    def build(token_dim: int, rssm_cfg: DictConfig):
+        return RSSM(
+            token_dim=token_dim,
+            action_dim=rssm_cfg.action_dim,
+            stoch=rssm_cfg.stoch,
+            classes=rssm_cfg.classes,
+            deter=rssm_cfg.deter,
+            hidden=rssm_cfg.hidden,
+            act=rssm_cfg.act,
+            norm=rssm_cfg.norm
+        )
 
 class GridDecoder(nn.Module):
     def __init__(self, rssm_cfg: DictConfig, grid_cfg: DictConfig):
@@ -127,8 +142,27 @@ class WorldModel(nn.Module):
             norm=rssm_cfg.norm,
             output_dim=rssm_cfg.hidden
         )
+    @staticmethod
+    def _build_image_encoder(image_shape: Tuple[int, int], img_enc_cfg: DictConfig) -> ImageEncoder:
+        return ImageEncoder(
+            image_shape=[1, image_shape[0], image_shape[1]],
+            channels=img_enc_cfg.channels, 
+            stride=img_enc_cfg.stride,
+            kernel_size=img_enc_cfg.kernel_size,
+            act=img_enc_cfg.act,
+            norm=img_enc_cfg.norm
+        )
+    @staticmethod
+    def _build_state_encoder(state_dim: int, state_enc_cfg: DictConfig) -> nn.Sequential:
+        return MLP(
+            input_dim=state_dim,
+            output_dim=state_enc_cfg.embedding_dim,
+            hidden_units=state_enc_cfg.hidden_units,
+            act=state_enc_cfg.act,
+            norm=state_enc_cfg.norm
+        )
     
-    def __init__(self, cfg: DictConfig, grid_cfg: DictConfig):
+    def __init__(self, obs_dim: Tuple[int, Tuple[int, int]], cfg: DictConfig, grid_cfg: DictConfig):
         super().__init__()
         self.l_rollout: int = cfg.l_rollout
         self.recon_image: bool = cfg.encoder.recon_image
@@ -139,15 +173,17 @@ class WorldModel(nn.Module):
         dec_cfg = cfg.decoder
         
         # image encoder and decoder
-        self.img_encoder = ImageEncoder(
-            image_shape=img_enc_cfg.image_shape,
-            channels=img_enc_cfg.channels, 
-            stride=img_enc_cfg.stride,
-            kernel_size=img_enc_cfg.kernel_size,
-            act=img_enc_cfg.act,
-            norm=img_enc_cfg.norm
-        )
-        fmap_final_shape = self.img_encoder.final_shape
+        self.image_encoder = self._build_image_encoder(obs_dim[1], img_enc_cfg)
+        fmap_final_shape = self.image_encoder.final_shape
+        
+        # state encoder
+        state_embed_dim = state_enc_cfg.embedding_dim
+        self.state_encoder = self._build_state_encoder(obs_dim[0], state_enc_cfg)
+        
+        # sequence model
+        self.rssm = RSSM.build(token_dim=math.prod(fmap_final_shape) + state_embed_dim, rssm_cfg=rssm_cfg)
+        
+        # image decoder
         if self.recon_image:
             if not cfg.decoder.use_mlp:
                 self.img_decoder = ImageDecoder(
@@ -161,46 +197,24 @@ class WorldModel(nn.Module):
                 )
             else:
                 self.img_decoder = ImageDecoderMLP(
-                    final_image_shape=img_enc_cfg.image_shape,
+                    final_image_shape=[1, obs_dim[1][0], obs_dim[1][1]],
                     feat_dim=rssm_cfg.stoch*rssm_cfg.classes+rssm_cfg.deter,
                     hidden_units=cfg.decoder.mlpdecoder.hidden_units,
                     act=cfg.decoder.mlpdecoder.act,
                     norm=cfg.decoder.mlpdecoder.norm
                 )
-        
-        # state encoder and decoder
-        state_embed_dim = state_enc_cfg.embedding_dim
-        self.state_encoder = MLP(
-            input_dim=state_enc_cfg.state_dim,
-            output_dim=state_enc_cfg.embedding_dim,
-            hidden_units=state_enc_cfg.hidden_units,
-            act=state_enc_cfg.act,
-            norm=state_enc_cfg.norm
-        )
+        # state decoder
         if self.recon_state:
             self.state_decoder = nn.Sequential(
                 self._build_mlp(rssm_cfg),
-                nn.Linear(rssm_cfg.hidden, state_enc_cfg.state_dim)
+                nn.Linear(rssm_cfg.hidden, obs_dim[0])
             )
-        
-        # sequence model
-        self.rssm = RSSM(
-            token_dim=math.prod(fmap_final_shape) + state_embed_dim,
-            action_dim=rssm_cfg.action_dim,
-            stoch=rssm_cfg.stoch,
-            classes=rssm_cfg.classes,
-            deter=rssm_cfg.deter,
-            hidden=rssm_cfg.hidden,
-            act=rssm_cfg.act,
-            norm=rssm_cfg.norm
-        )
-        
         # grid deocder
-        # self.grid_decoder = nn.Sequential(
-        #     self._build_mlp(rssm_cfg),
-        #     nn.Linear(rssm_cfg.hidden, math.prod(grid_cfg.n_points))
-        # )
-        self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
+        self.grid_decoder = nn.Sequential(
+            self._build_mlp(rssm_cfg),
+            nn.Linear(rssm_cfg.hidden, math.prod(grid_cfg.n_points))
+        )
+        # self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
         # reward deocder
         self.reward_decoder = nn.Sequential(
             self._build_mlp(rssm_cfg),
@@ -230,34 +244,28 @@ class WorldModel(nn.Module):
     
     def encode(self, obs, state, deter):
         # type: (Tensor, Tensor, Tensor) -> Tensor
-        tokens = []
-        if hasattr(self, 'img_encoder'):
-            tokens.append(self.img_encoder(obs))
-        if hasattr(self, 'state_encoder'):
-            tokens.append(self.state_encoder(state))
-        tokens = torch.cat(tokens, dim=-1)
+        tokens = torch.cat([self.image_encoder(obs), self.state_encoder(state)], dim=-1)
         post_sample, _ = self.rssm._post(tokens, deter)
         return post_sample
     
     @torch.no_grad()
-    def recurrent(self, stoch, deter, action, done):
-        # type: (Tensor, Tensor, Tensor, Tensor) -> Tensor
+    def recurrent(self, stoch, deter, action):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
         deter = self.rssm.recurrent(stoch, deter, action)
-        deter[done] = 0.
         return deter
         
     def update(
         self,
-        obs: Tensor,       # [B L C H W]
-        state: Tensor,     # [B L S]
-        actions: Tensor,   # [B L D]
-        rewards: Tensor,   # [B L]
-        terminals: Tensor, # [B L]
-        gt_grids: Tensor,
-        visible_map: Tensor
+        obs: Tensor,        # [B L C H W]
+        state: Tensor,      # [B L S]
+        actions: Tensor,    # [B L D]
+        rewards: Tensor,    # [B L]
+        terminals: Tensor,  # [B L]
+        gt_grids: Tensor,   # [B L N_grids]
+        visible_map: Tensor # [B L N_grids]
     ):
         deter = torch.zeros(obs.size(0), self.deter_dim, device=obs.device)
-        tokens = torch.cat([self.img_encoder(obs), self.state_encoder(state)], dim=-1)   
+        tokens = torch.cat([self.image_encoder(obs), self.state_encoder(state)], dim=-1)   
         
         post_probs_list, prior_probs_list, feat_list = [], [], []
         for i in range(self.l_rollout):
@@ -271,7 +279,7 @@ class WorldModel(nn.Module):
         prior_probs = torch.stack(prior_probs_list, dim=1)
         feats = torch.stack(feat_list, dim=1)
         reward_logits = self.reward_decoder(feats)
-        ter_logits = self.termination_decoder(feats)
+        ter_logits = self.termination_decoder(feats).squeeze(-1)
         
         rec_img_loss = torch.tensor(0)
         if self.recon_image:
@@ -282,22 +290,23 @@ class WorldModel(nn.Module):
         if self.recon_state:
             rec_states = self.state_decoder(feats)
             rec_state_loss = mse(rec_states, state)
-        
-        grid_loss, grid_acc, grid_precision = torch.tensor(0), torch.tensor(0), torch.tensor(0)
-        if hasattr(self, 'grid_decoder'):
-            grid_logits = self.grid_decoder(feats)
-            visible_grid_logits = grid_logits[visible_map]
-            visible_gt_grid = gt_grids[visible_map]
-            grid_loss = self.bce_loss(visible_grid_logits, visible_gt_grid.float())
             
-            visible_pred_grid = visible_grid_logits > 0
-            grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
-            grid_precision = visible_pred_grid[visible_gt_grid].float().mean()
+        grid_logits = self.grid_decoder(feats)
+        visible_grid_logits = grid_logits[visible_map]
+        visible_gt_grid = gt_grids[visible_map]
+        grid_loss = self.bce_loss(visible_grid_logits, visible_gt_grid.float())
+        
+        visible_pred_grid = visible_grid_logits > 0
+        grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
+        grid_precision = visible_pred_grid[visible_gt_grid].float().mean()
         
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
         rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
         rew_loss = self.symlogtwohot(reward_logits, rewards)
-        term_loss = self.bce_loss(ter_logits.squeeze(-1), terminals.float())
+        term_loss = self.bce_loss(ter_logits, terminals.float())
+        term_pred = ter_logits > 0
+        term_acc = (term_pred == terminals).float().mean()
+        term_precision = term_pred[terminals].float().mean()
         
         total_loss = (
             self.rec_img_weight * rec_img_loss +
@@ -324,6 +333,8 @@ class WorldModel(nn.Module):
             'wm/rep_loss': rep_loss.item(),
             'wm/rew_loss': rew_loss.item(),
             'wm/term_loss': term_loss.item(),
+            'wm/term_acc': term_acc.item(),
+            'wm/term_precision': term_precision.item(),
             'wm/total_loss': total_loss.item(),
         }
         grad_norms = {

@@ -281,8 +281,16 @@ class ObstacleAvoidance(BaseEnv):
 class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device:torch.device, test:bool=False):
         super().__init__(cfg, device)
-        self.test = test
         self.n_grid_points = math.prod(cfg.grid.n_points)
+        
+        self.x_min, self.x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
+        self.y_min, self.y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
+        self.z_min, self.z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
+        assert (
+            ((self.x_max - self.x_min) / cfg.grid.n_points[0]) == \
+            ((self.y_max - self.y_min) / cfg.grid.n_points[1]) == \
+            ((self.z_max - self.z_min) / cfg.grid.n_points[2])
+        )
         self.cube_size = min(
             (cfg.grid.x_max - cfg.grid.x_min) / cfg.grid.n_points[0],
             (cfg.grid.y_max - cfg.grid.y_min) / cfg.grid.n_points[1],
@@ -355,7 +363,11 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         
         visible_map = torch.zeros_like(occupancy_map, dtype=torch.bool)
         
-        visible_points = torch.lerp(start.unsqueeze(1), contact_point.unsqueeze(1), self.ray_segment_weight.reshape(1, -1, 1, 1)).reshape(N, -1, 3) # [n_envs, n_segments * n_rays, 3]
+        visible_points = torch.lerp( # [n_envs, n_segments * n_rays, 3]
+            input=start.unsqueeze(1),
+            end=contact_point.unsqueeze(1),
+            weight=self.ray_segment_weight.reshape(1, -1, 1, 1)
+        ).reshape(N, -1, 3)
         
         # 1st way to calculate visible map
         local_visible_points = visible_points - self.p.unsqueeze(1) # [n_envs, n_segments * n_rays, 3]
@@ -414,12 +426,12 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             z_idx = ((valid_current_local[:, 2] - z_min) // self.cube_size).long()
             
             # 验证索引有效性
-            valid_indices = (
-                (x_idx >= 0) & (x_idx < n_x) &
-                (y_idx >= 0) & (y_idx < n_y) &
-                (z_idx >= 0) & (z_idx < n_z)
-            )
-            assert torch.all(valid_indices)
+            # valid_indices = (
+            #     (x_idx >= 0) & (x_idx < n_x) &
+            #     (y_idx >= 0) & (y_idx < n_y) &
+            #     (z_idx >= 0) & (z_idx < n_z)
+            # )
+            # assert torch.all(valid_indices)
             
             # 转换为线性索引
             linear_indices = x_idx * (n_y * n_z) + y_idx * n_z + z_idx
@@ -436,17 +448,14 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def get_observations(self, with_grad=False):
         quat_xyzw = self.q
         if self.dynamic_type == "pointmass":
-            state = torch.cat([self.target_vel, quat_xyzw, self._v], dim=-1)
+            obs = torch.cat([self.target_vel, quat_xyzw, self._v], dim=-1)
         else:
             obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
-        if not self.test:
-            grid, visible_map = self.get_occupancy_map(quat_xyzw)
-        else:
-            grid, visible_map = None
-        state = TensorDict({
-            "state": state, "perception": self.sensor_tensor.clone(), "grid": grid, "visible_map": visible_map}, batch_size=self.n_envs)
-        state = state if with_grad else state.detach()
-        return state
+        grid, visible_map = self.get_occupancy_map(quat_xyzw)
+        obs = TensorDict({
+            "state": obs, "perception": self.sensor_tensor.clone(), "grid": grid, "visible_map": visible_map}, batch_size=self.n_envs)
+        obs = obs if with_grad else obs.detach()
+        return obs
     
     @timeit
     def reset_idx(self, env_idx):

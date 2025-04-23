@@ -23,6 +23,10 @@ class GRIDWM:
         grid_cfg: DictConfig,
         device: torch.device
     ):
+        self.cfg = cfg
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+        
         self.l_rollout: int = cfg.l_rollout
         self.batch_size: int = cfg.batch_size
         self.n_epochs: int = cfg.n_epochs
@@ -30,7 +34,7 @@ class GRIDWM:
         self.n_grid_points = math.prod(self.grid_points)
         
         # encoder
-        self.wm_encoder = WorldModel(cfg, grid_cfg).to(device)
+        self.wm_encoder = WorldModel(obs_dim, cfg, grid_cfg).to(device)
         # actor
         self.actor = StochasticActor(
             cfg.network,
@@ -45,7 +49,6 @@ class GRIDWM:
             l_rollout=self.l_rollout,
             buffer_size=int(cfg.buffer_size),
             obs_dim=obs_dim,
-            latent_dim=self.wm_encoder.latent_dim,
             action_dim=action_dim,
             grid_dim=self.n_grid_points,
             device=device
@@ -66,7 +69,8 @@ class GRIDWM:
             latent = self.wm_encoder.encode(obs['perception'], obs['state'], self.deter)
             actor_input = torch.cat([latent, self.deter, obs["state"]], dim=-1)
         action, sample, logprob, entropy = self.actor(actor_input, test=test)
-        return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}, latent
+        self.deter = self.wm_encoder.recurrent(latent, self.deter, action)
+        return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}
     
     def record_loss(self, loss, policy_info, env_info):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor]) -> None
@@ -122,13 +126,13 @@ class GRIDWM:
     def step(self, cfg, env, obs, on_step_cb=None):
         rollout_obs, rollout_dones, rollout_actions, rollout_rewards = [], [], [], []
         for _ in range(self.l_rollout):
-            action, policy_info, latent = self.act(obs)
+            action, policy_info = self.act(obs)
             next_obs, loss, terminated, env_info = env.step(env.rescale_action(action), need_obs_before_reset=False)
-            self.deter = self.wm_encoder.recurrent(latent, self.deter, action, env_info['reset'])
+            self.reset(env_info['reset'])
             self.record_loss(loss, policy_info, env_info)
             rollout_obs.append(obs)
             rollout_actions.append(action)
-            rollout_dones.append(env_info['reset'])
+            rollout_dones.append(terminated)
             rollout_rewards.append(10.*(1. - 0.1*loss).detach())
             obs = next_obs
             if on_step_cb is not None:
@@ -166,6 +170,9 @@ class GRIDWM:
     
     def detach(self):
         self.deter.detach_()
+    
+    def reset(self, env_idx: Tensor):
+        self.deter[env_idx] = 0.
     
     @staticmethod
     def build(cfg: DictConfig, env: ObstacleAvoidanceGrid, device: torch.device):

@@ -47,7 +47,8 @@ class MiniGru(nn.Module):
 class ImageEncoder(nn.Module):
     def __init__(self, image_shape:List, channels:List[int], stride:int, kernel_size:int, act:str, norm:str):
         super().__init__()
-        assert len(image_shape) == 3
+        if len(image_shape) == 2:
+            image_shape = [1, image_shape[0], image_shape[1]]
         flex_img_shape = deepcopy(image_shape)
         module_list = nn.ModuleList()
         channels = [flex_img_shape[0]] + channels
