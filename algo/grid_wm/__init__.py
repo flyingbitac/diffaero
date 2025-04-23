@@ -32,48 +32,64 @@ class GRIDWM:
         self.action_dim = action_dim
         
         self.l_rollout: int = cfg.l_rollout
-        self.batch_size: int = cfg.batch_size
-        self.n_epochs: int = cfg.n_epochs
+        self.batch_size: int = cfg.wm.train.batch_size
+        self.n_epochs: int = cfg.wm.train.n_epochs
         self.grid_points: List[int] = grid_cfg.n_points
         self.n_grid_points = math.prod(self.grid_points)
         
-        # encoder
-        self.wm_encoder = WorldModel(obs_dim, cfg, grid_cfg).to(device)
-        # actor
-        self.actor = StochasticActor(
-            cfg.network,
-            self.wm_encoder.deter_dim + self.wm_encoder.latent_dim + obs_dim[0],
-            action_dim
-        ).to(device)
-        # optimizers
-        self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
+        self.input_target_vel: bool = cfg.actor.input_target_vel
+        self.input_quat: bool = cfg.actor.input_quat
+        self.input_vel: bool = cfg.actor.input_vel
         
+        # world model
+        self.wm = WorldModel(obs_dim, cfg.wm, grid_cfg).to(device)
         # replay buffer
         self.buffer=RolloutBufferGRID(
             l_rollout=self.l_rollout,
-            buffer_size=int(cfg.buffer_size),
+            buffer_size=int(cfg.wm.train.buffer_size),
             obs_dim=obs_dim,
             action_dim=action_dim,
             grid_dim=self.n_grid_points,
             device=device
         )
-        self.entropy_weight: float = cfg.entropy_weight
-        self.max_grad_norm: float = cfg.max_grad_norm
+        # actor
+        actor_input_dim = (
+            self.wm.deter_dim + self.wm.latent_dim + 
+            self.input_target_vel * 3 + self.input_quat * 4 + self.input_vel * 3
+        )
+        self.actor = StochasticActor(cfg.actor.network, actor_input_dim, action_dim).to(device)
+        # optimizer
+        self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor.lr)
+        
+        self.entropy_weight: float = cfg.actor.entropy_weight
+        self.max_grad_norm: float = cfg.actor.max_grad_norm
         self.entropy_loss = torch.zeros(1, device=device)
         self.actor_loss = torch.zeros(1, device=device)
         self.device = device
         self.deter: Tensor = None
+    
+    def make_state_input(self, obs: TensorDict) -> Tensor:
+        state = obs["state"]
+        target_vel, quat, vel = state[..., 0:3], state[..., 3:7], state[..., 7:10]
+        inputs = []
+        if self.input_target_vel:
+            inputs.append(target_vel)
+        if self.input_quat:
+            inputs.append(quat)
+        if self.input_vel:
+            inputs.append(vel)
+        return torch.cat(inputs, dim=-1)
     
     @timeit
     def act(self, obs, test=False):
         # type: (TensorDict, bool) -> Tuple[Tensor, Dict[str, Tensor]]
         with torch.no_grad():
             if self.deter is None:
-                self.deter = torch.zeros(obs['state'].shape[0], self.wm_encoder.deter_dim, device=obs['state'].device)
-            latent = self.wm_encoder.encode(obs['perception'], obs['state'], self.deter)
-            actor_input = torch.cat([latent, self.deter, obs["state"]], dim=-1)
+                self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=obs['state'].device)
+            latent = self.wm.encode(obs['perception'], obs['state'], self.deter)
+            actor_input = torch.cat([latent, self.deter, self.make_state_input(obs)], dim=-1)
         action, sample, logprob, entropy = self.actor(actor_input, test=test)
-        self.deter = self.wm_encoder.recurrent(latent, self.deter, action)
+        self.deter = self.wm.recurrent(latent, self.deter, action)
         return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}
     
     def record_loss(self, loss, policy_info, env_info):
@@ -90,7 +106,7 @@ class GRIDWM:
             # find ground truth and visible grid
             ground_truth_grid = observations["grid"]
             visible_map = observations["visible_map"]
-            total_loss, grad_norms, grid_pred = self.wm_encoder.update(
+            total_loss, grad_norms, grid_pred = self.wm.update(
                 obs=observations['perception'],
                 state=observations['state'],
                 actions=actions,
@@ -99,14 +115,18 @@ class GRIDWM:
                 gt_grids=ground_truth_grid,
                 visible_map=visible_map
             )
-        visible_grid_gt_for_plot = ground_truth_grid & visible_map
-        visible_grid_pred_for_plot = grid_pred & visible_map
         
-        n_missd_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
-        env_idx, time_idx = torch.where(n_missd_predictions == n_missd_predictions.max())
-        env_idx, time_idx = env_idx[0], time_idx[0]
-        selected_grid_gt = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
-        selected_grid_pred = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
+        if grid_pred is not None:
+            visible_grid_gt_for_plot = ground_truth_grid & visible_map
+            visible_grid_pred_for_plot = grid_pred & visible_map
+            
+            n_missd_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
+            env_idx, time_idx = torch.where(n_missd_predictions == n_missd_predictions.max())
+            env_idx, time_idx = env_idx[0], time_idx[0]
+            selected_grid_gt = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
+            selected_grid_pred = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
+        else:
+            selected_grid_gt, selected_grid_pred = None, None
         
         return total_loss, grad_norms, selected_grid_gt, selected_grid_pred
     
@@ -156,18 +176,19 @@ class GRIDWM:
         losses = {**wm_losses, **actor_losses}
         grad_norms = {**wm_grad_norm, **actor_grad_norms}
         self.detach()
-        policy_info.update({
-            "grid_gt": selected_grid_gt,
-            "grid_pred": selected_grid_pred
-        })
+        if selected_grid_gt is not None and selected_grid_pred is not None:
+            policy_info.update({
+                "grid_gt": selected_grid_gt,
+                "grid_pred": selected_grid_pred
+            })
         return obs, policy_info, env_info, losses, grad_norms
     
     def save(self, path):
-        self.wm_encoder.save(path)
+        self.wm.save(path)
         self.actor.save(path)
     
     def load(self, path):
-        self.wm_encoder.load(path)
+        self.wm.load(path)
         self.actor.load(path)
     
     def detach(self):
@@ -214,33 +235,48 @@ class GRIDWMTesttime:
         device: torch.device
     ):
         self.obs_dim = obs_dim
-        self.wm_encoder = WorldModelTesttime(cfg).to(device)
-        self.actor = StochasticActor(
-            cfg.network,
-            self.wm_encoder.deter_dim + self.wm_encoder.latent_dim + obs_dim[0],
-            action_dim
-        ).to(device)
+        self.wm = WorldModelTesttime(obs_dim, cfg.wm).to(device)
+        
+        self.input_target_vel: bool = cfg.actor.input_target_vel
+        self.input_quat: bool = cfg.actor.input_quat
+        self.input_vel: bool = cfg.actor.input_vel
+        self.state_dim = self.input_target_vel * 3 + self.input_quat * 4 + self.input_vel * 3
+        actor_input_dim = self.wm.deter_dim + self.wm.latent_dim + self.state_dim
+        
+        self.actor = StochasticActor(cfg.actor.network, actor_input_dim, action_dim).to(device)
         self.device = device
         self.deter: Tensor = None
+    
+    def make_state_input(self, obs: TensorDict) -> Tensor:
+        state = obs["state"]
+        target_vel, quat, vel = state[..., 0:3], state[..., 3:7], state[..., 7:10]
+        inputs = []
+        if self.input_target_vel:
+            inputs.append(target_vel)
+        if self.input_quat:
+            inputs.append(quat)
+        if self.input_vel:
+            inputs.append(vel)
+        return torch.cat(inputs, dim=-1)
     
     @timeit
     def act(self, obs, test=False):
         # type: (TensorDict, bool) -> Tuple[Tensor, Dict[str, Tensor]]
         with torch.no_grad():
             if self.deter is None:
-                self.deter = torch.zeros(obs['state'].shape[0], self.wm_encoder.deter_dim, device=obs['state'].device)
-            latent = self.wm_encoder.encode(obs['perception'], obs['state'], self.deter)
-            actor_input = torch.cat([latent, self.deter, obs["state"]], dim=-1)
+                self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=obs['state'].device)
+            latent = self.wm.encode(obs['perception'], obs['state'], self.deter)
+            actor_input = torch.cat([latent, self.deter, self.make_state_input(obs)], dim=-1)
         action, sample, logprob, entropy = self.actor(actor_input, test=test)
-        self.deter = self.wm_encoder.recurrent(latent, self.deter, action)
+        self.deter = self.wm.recurrent(latent, self.deter, action)
         return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}
     
     def save(self, path):
-        self.wm_encoder.save(path)
+        self.wm.save(path)
         self.actor.save(path)
     
     def load(self, path):
-        self.wm_encoder.load(path)
+        self.wm.load(path)
         self.actor.load(path)
     
     def detach(self):
@@ -262,9 +298,9 @@ class GRIDWMTesttime:
 class GRIDWMExporter(nn.Module):
     def __init__(self, agent: GRIDWMTesttime):
         super().__init__()
-        self.wm_encoder = deepcopy(agent.wm_encoder).cpu()
+        self.wm_encoder = deepcopy(agent.wm).cpu()
         self.actor = deepcopy(agent.actor.actor_mean).cpu()
-        state_dim, perception_dim = agent.obs_dim
+        state_dim, perception_dim = agent.state_dim, agent.obs_dim[1]
         self.named_inputs = [
             ("state", torch.rand(1, state_dim)),
             ("perception", torch.rand(1, perception_dim[0], perception_dim[1])),

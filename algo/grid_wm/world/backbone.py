@@ -134,13 +134,16 @@ class GridDecoder(nn.Module):
 
 class WorldModel(nn.Module):
     @staticmethod
-    def _build_mlp(rssm_cfg: DictConfig) -> MLP:
-        return MLP(
-            input_dim=rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes,
-            hidden_units=[rssm_cfg.hidden],
-            act=rssm_cfg.act,
-            norm=rssm_cfg.norm,
-            output_dim=rssm_cfg.hidden
+    def _build_mlp(rssm_cfg: DictConfig, output_dim: int) -> MLP:
+        return nn.Sequential(
+            MLP(
+                input_dim=rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes,
+                hidden_units=[rssm_cfg.hidden],
+                act=rssm_cfg.act,
+                norm=rssm_cfg.norm,
+                output_dim=rssm_cfg.hidden
+            ),
+            nn.Linear(rssm_cfg.hidden, output_dim)
         )
     @staticmethod
     def _build_image_encoder(image_shape: Tuple[int, int], img_enc_cfg: DictConfig) -> ImageEncoder:
@@ -153,78 +156,65 @@ class WorldModel(nn.Module):
             norm=img_enc_cfg.norm
         )
     @staticmethod
-    def _build_state_encoder(state_dim: int, state_enc_cfg: DictConfig) -> nn.Sequential:
-        return MLP(
-            input_dim=state_dim,
-            output_dim=state_enc_cfg.embedding_dim,
-            hidden_units=state_enc_cfg.hidden_units,
-            act=state_enc_cfg.act,
-            norm=state_enc_cfg.norm
-        )
+    def _build_state_encoder(state_enc_cfg: DictConfig) -> nn.Sequential:
+        return StateEncoder(state_enc_cfg)
     
     def __init__(self, obs_dim: Tuple[int, Tuple[int, int]], cfg: DictConfig, grid_cfg: DictConfig):
         super().__init__()
         self.l_rollout: int = cfg.l_rollout
-        self.recon_image: bool = cfg.encoder.recon_image
-        self.recon_state: bool = cfg.encoder.recon_state
-        img_enc_cfg = cfg.encoder.img_encoder
-        state_enc_cfg = cfg.encoder.state_encoder
+        self.recon_image: bool = cfg.decoder.image.enable
+        self.recon_state: bool = cfg.decoder.state.enable
+        self.recon_grid: bool = cfg.decoder.grid.enable
+        image_enc_cfg = cfg.encoder.image
+        state_enc_cfg = cfg.encoder.state
         rssm_cfg = cfg.rssm
-        dec_cfg = cfg.decoder
+        image_dec_cfg = cfg.decoder.image
+        grid_dec_cfg = cfg.decoder.grid
         
         # image encoder and decoder
-        self.image_encoder = self._build_image_encoder(obs_dim[1], img_enc_cfg)
+        self.image_encoder = self._build_image_encoder(obs_dim[1], image_enc_cfg)
         fmap_final_shape = self.image_encoder.final_shape
         
         # state encoder
         state_embed_dim = state_enc_cfg.embedding_dim
-        self.state_encoder = self._build_state_encoder(obs_dim[0], state_enc_cfg)
+        self.state_encoder = self._build_state_encoder(state_enc_cfg)
         
         # sequence model
         self.rssm = RSSM.build(token_dim=math.prod(fmap_final_shape) + state_embed_dim, rssm_cfg=rssm_cfg)
         
         # image decoder
         if self.recon_image:
-            if not cfg.decoder.use_mlp:
-                self.img_decoder = ImageDecoder(
-                    final_image_shape=fmap_final_shape,
-                    feat_dim=rssm_cfg.stoch*rssm_cfg.classes+rssm_cfg.deter,
-                    channels=dec_cfg.channels,
-                    stride=dec_cfg.stride,
-                    kernel_size=dec_cfg.kernel_size,
-                    act=dec_cfg.act,
-                    norm=dec_cfg.norm
-                )
-            else:
+            if image_dec_cfg.use_mlp:
                 self.img_decoder = ImageDecoderMLP(
                     final_image_shape=[1, obs_dim[1][0], obs_dim[1][1]],
                     feat_dim=rssm_cfg.stoch*rssm_cfg.classes+rssm_cfg.deter,
-                    hidden_units=cfg.decoder.mlpdecoder.hidden_units,
-                    act=cfg.decoder.mlpdecoder.act,
-                    norm=cfg.decoder.mlpdecoder.norm
-                )
+                    hidden_units=image_dec_cfg.mlpdecoder.hidden_units,
+                    act=image_dec_cfg.mlpdecoder.act,
+                    norm=image_dec_cfg.mlpdecoder.norm)
+            else:
+                self.img_decoder = ImageDecoder(
+                    final_image_shape=fmap_final_shape,
+                    feat_dim=rssm_cfg.stoch*rssm_cfg.classes+rssm_cfg.deter,
+                    channels=image_dec_cfg.channels,
+                    stride=image_dec_cfg.stride,
+                    kernel_size=image_dec_cfg.kernel_size,
+                    act=image_dec_cfg.act,
+                    norm=image_dec_cfg.norm)
         # state decoder
         if self.recon_state:
-            self.state_decoder = nn.Sequential(
-                self._build_mlp(rssm_cfg),
-                nn.Linear(rssm_cfg.hidden, obs_dim[0])
-            )
+            self.state_decoder = self._build_mlp(rssm_cfg, output_dim=obs_dim[0])
         # grid deocder
-        self.grid_decoder = nn.Sequential(
-            self._build_mlp(rssm_cfg),
-            nn.Linear(rssm_cfg.hidden, math.prod(grid_cfg.n_points))
-        )
-        # self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
+        if self.recon_grid:
+            if grid_dec_cfg.use_mlp:
+                self.grid_decoder = self._build_mlp(rssm_cfg, output_dim=math.prod(grid_cfg.n_points))
+            else:
+                self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
+        
         # reward deocder
-        self.reward_decoder = nn.Sequential(
-            self._build_mlp(rssm_cfg),
-            nn.Linear(rssm_cfg.hidden, 255)
-        )
+        self.reward_decoder = self._build_mlp(rssm_cfg, output_dim=255)
         # termination deocder
-        self.termination_decoder = nn.Sequential(
-            self._build_mlp(rssm_cfg),
-            nn.Linear(rssm_cfg.hidden, 1)
-        )
+        self.termination_decoder = self._build_mlp(rssm_cfg, output_dim=1)
+        
         self.optim = torch.optim.Adam(self.parameters(), lr=cfg.train.lr)
         self.grad_norm = cfg.train.grad_norm
         self.symlogtwohot = SymLogTwoHotLoss(255, -20, 20)
@@ -290,15 +280,18 @@ class WorldModel(nn.Module):
         if self.recon_state:
             rec_states = self.state_decoder(feats)
             rec_state_loss = mse(rec_states, state)
-            
-        grid_logits = self.grid_decoder(feats)
-        visible_grid_logits = grid_logits[visible_map]
-        visible_gt_grid = gt_grids[visible_map]
-        grid_loss = self.bce_loss(visible_grid_logits, visible_gt_grid.float())
         
-        visible_pred_grid = visible_grid_logits > 0
-        grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
-        grid_precision = visible_pred_grid[visible_gt_grid].float().mean()
+        grid_loss, grid_acc, grid_precision = torch.tensor(0), torch.tensor(0), torch.tensor(0)
+        if self.recon_grid:
+            grid_logits = self.grid_decoder(feats)
+            visible_grid_logits = grid_logits[visible_map]
+            visible_gt_grid = gt_grids[visible_map]
+            grid_loss = self.bce_loss(visible_grid_logits, visible_gt_grid.float())
+            
+            visible_pred_grid = visible_grid_logits > 0
+            grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
+            grid_precision = visible_pred_grid[visible_gt_grid].float().mean()
+        grid_pred = grid_logits > 0 if self.recon_grid else None
         
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
         rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
@@ -341,7 +334,7 @@ class WorldModel(nn.Module):
             'wm/grad_norm': grad_norm.item()
         }
         
-        return losses, grad_norms, grid_logits > 0
+        return losses, grad_norms, grid_pred
     
     def save(self, path: str):
         if not os.path.exists(path):
@@ -350,7 +343,6 @@ class WorldModel(nn.Module):
             "rssm": self.rssm.state_dict(),
             "image_encoder": self.image_encoder.state_dict(),
             "state_encoder": self.state_encoder.state_dict(),
-            "grid_decoder": self.grid_decoder.state_dict(),
             "reward_decoder": self.reward_decoder.state_dict(),
             "termination_decoder": self.termination_decoder.state_dict()
         }
@@ -358,6 +350,8 @@ class WorldModel(nn.Module):
             state_dicts["image_decoder"] = self.img_decoder.state_dict()
         if self.recon_state:
             state_dicts["state_decoder"] = self.state_decoder.state_dict()
+        if self.recon_grid:
+            state_dicts["grid_decoder"] = self.grid_decoder.state_dict()
         torch.save(state_dicts, os.path.join(path, "world_model.pth"))
     
     def load(self, path: str):
@@ -372,13 +366,15 @@ class WorldModel(nn.Module):
             self.img_decoder.load_state_dict(state_dicts["image_decoder"])
         if self.recon_state:
             self.state_decoder.load_state_dict(state_dicts["state_decoder"])
+        if self.recon_grid:
+            self.grid_decoder.load_state_dict(state_dicts["grid_decoder"])
 
 
 class WorldModelTesttime(nn.Module):
     def __init__(self, obs_dim: Tuple[int, Tuple[int, int]], cfg: DictConfig):
         super().__init__()
-        img_enc_cfg = cfg.encoder.img_encoder
-        state_enc_cfg = cfg.encoder.state_encoder
+        img_enc_cfg = cfg.encoder.image
+        state_enc_cfg = cfg.encoder.state
         rssm_cfg = cfg.rssm
 
         self.deter_dim = rssm_cfg.deter
@@ -390,7 +386,7 @@ class WorldModelTesttime(nn.Module):
         
         # state encoder
         state_embed_dim = state_enc_cfg.embedding_dim
-        self.state_encoder = WorldModel._build_state_encoder(obs_dim[0], state_enc_cfg)
+        self.state_encoder = WorldModel._build_state_encoder(state_enc_cfg)
         
         # sequence model
         self.rssm = RSSM.build(token_dim=math.prod(fmap_final_shape) + state_embed_dim, rssm_cfg=rssm_cfg)

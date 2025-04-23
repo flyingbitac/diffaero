@@ -1,71 +1,85 @@
 name: grid_wm
 
-# actor
-network:
-  name: mlp
-  hidden_dim: [256, 128]
-
 l_rollout: 32
-buffer_size: 1e4
-batch_size: 256
 
-actor_lr: 1e-3
-max_grad_norm: 1.
-n_epochs: 4
+actor:
+  network:
+    name: mlp
+    hidden_dim: [256, 128]
+  
+  input_target_vel: True
+  input_quat: True
+  input_vel: True
 
-entropy_weight: 0.03
+  lr: 1e-3
+  max_grad_norm: 1.
+  entropy_weight: 0.03
 
-encoder:
-  img_encoder:
-    image_shape: [1, 9, 16]
-    channels: [16, 32]
-    stride: 2
-    kernel_size: 4
-    act: SiLU
-    norm: BatchNorm2d
-  recon_image: False
+wm:
+  l_rollout: ${algo.l_rollout}
+  encoder:
+    image:
+      channels: [16, 32]
+      stride: 2
+      kernel_size: 4
+      act: SiLU
+      norm: BatchNorm2d
 
-  state_encoder:
-    state_dim: 10
-    embedding_dim: 64
-    hidden_units: [64]
-    act: SiLU
-    norm: LayerNorm
-  recon_state: True
+    state:
+      encode_target_vel: ${algo.actor.input_target_vel}
+      encode_quat: ${algo.actor.input_quat}
+      encode_vel: ${algo.actor.input_vel}
+      embedding_dim: 64
+      hidden_units: [64]
+      act: SiLU
+      norm: LayerNorm
 
-rssm:
-  action_dim: 3
-  stoch: 32
-  classes: 32
-  deter: 256
-  hidden: 256
-  act: SiLU
-  norm: LayerNorm
-
-decoder:
-  use_mlp: True
-  cnndecoder:
-    channels: [64, 32, 16, 3]
-    stride: 2
-    kernel_size: 4
-    act: SiLU
-    norm: BatchNorm2d
-
-  mlpdecoder:
-    hidden_units: [256, 256]
+  rssm:
+    action_dim: 3
+    stoch: 32
+    classes: 32
+    deter: 256
+    hidden: 256
     act: SiLU
     norm: LayerNorm
 
-train:
-  lr: 3e-4
-  grad_norm: 100.
-  grid_pos_weight: 10
+  decoder:
+    image:
+      enable: True
+      use_mlp: True
+      cnndecoder:
+        channels: [64, 32, 16, 3]
+        stride: 2
+        kernel_size: 4
+        act: SiLU
+        norm: BatchNorm2d
 
-  # weight of loss funcs
-  rec_img_weight: 1.
-  rec_state_weight: 1.
-  dyn_weight: 0.5
-  rep_weight: 0.1
-  rew_weight: 1.
-  ter_weight: 1.
-  grid_loss: 1.
+      mlpdecoder:
+        hidden_units: [256, 256]
+        act: SiLU
+        norm: LayerNorm
+    
+    state:
+      enable: True
+    
+    grid: 
+      enable: True
+      use_mlp: True
+
+  train:
+    lr: 3e-4
+    grad_norm: 100.
+    grid_pos_weight: 10
+
+    # weight of loss funcs
+    rec_img_weight: 1.
+    rec_state_weight: 1.
+    dyn_weight: 0.5
+    rep_weight: 0.1
+    rew_weight: 1.
+    ter_weight: 1.
+    grid_loss: 1.
+
+    batch_size: 256
+    buffer_size: 1e4
+    n_epochs: 4

@@ -2,6 +2,7 @@ import math
 from typing import List, Dict
 from copy import deepcopy
 
+from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -120,6 +121,40 @@ class ImageDecoderMLP(nn.Module):
         x = rearrange(x, '... (c h w) -> ... c h w', c=self.final_shape[0], h=self.final_shape[1])
         x = F.sigmoid(x)
         return x
+
+
+class StateEncoder(nn.Module):
+    def __init__(self, state_enc_cfg: DictConfig):
+        super().__init__()
+        self.encode_target_vel: bool = state_enc_cfg.encode_target_vel
+        self.encode_quat: bool = state_enc_cfg.encode_quat
+        self.encode_vel: bool = state_enc_cfg.encode_vel
+        assert self.encode_target_vel or self.encode_quat or self.encode_vel
+        input_dim = (
+            self.encode_target_vel * 3 +
+            self.encode_quat * 4 +
+            self.encode_vel * 3
+        )
+        
+        self.state_encoder = MLP(
+            input_dim=input_dim,
+            output_dim=state_enc_cfg.embedding_dim,
+            hidden_units=state_enc_cfg.hidden_units,
+            act=state_enc_cfg.act,
+            norm=state_enc_cfg.norm
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        target_vel, quat, vel = x[..., 0:3], x[..., 3:7], x[..., 7:10]
+        inputs = []
+        if self.encode_target_vel:
+            inputs.append(target_vel)
+        if self.encode_quat:
+            inputs.append(quat)
+        if self.encode_vel:
+            inputs.append(vel)
+        return self.state_encoder(torch.cat(inputs, dim=-1))
+
 
 class Encoder(nn.Module):
     def __init__(self, obs_space:Dict, channels:List[int], stride:int, kernel_size:int, 
