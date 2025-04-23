@@ -342,3 +342,83 @@ class WorldModel(nn.Module):
         }
         
         return losses, grad_norms, grid_logits > 0
+    
+    def save(self, path: str):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        state_dicts = {
+            "rssm": self.rssm.state_dict(),
+            "image_encoder": self.image_encoder.state_dict(),
+            "state_encoder": self.state_encoder.state_dict(),
+            "grid_decoder": self.grid_decoder.state_dict(),
+            "reward_decoder": self.reward_decoder.state_dict(),
+            "termination_decoder": self.termination_decoder.state_dict()
+        }
+        if self.recon_image:
+            state_dicts["image_decoder"] = self.img_decoder.state_dict()
+        if self.recon_state:
+            state_dicts["state_decoder"] = self.state_decoder.state_dict()
+        torch.save(state_dicts, os.path.join(path, "world_model.pth"))
+    
+    def load(self, path: str):
+        state_dicts = torch.load(os.path.join(path, "world_model.pth"))
+        self.rssm.load_state_dict(state_dicts["rssm"])
+        self.image_encoder.load_state_dict(state_dicts["image_encoder"])
+        self.state_encoder.load_state_dict(state_dicts["state_encoder"])
+        self.grid_decoder.load_state_dict(state_dicts["grid_decoder"])
+        self.reward_decoder.load_state_dict(state_dicts["reward_decoder"])
+        self.termination_decoder.load_state_dict(state_dicts["termination_decoder"])
+        if self.recon_image:
+            self.img_decoder.load_state_dict(state_dicts["image_decoder"])
+        if self.recon_state:
+            self.state_decoder.load_state_dict(state_dicts["state_decoder"])
+
+
+class WorldModelTesttime(nn.Module):
+    def __init__(self, obs_dim: Tuple[int, Tuple[int, int]], cfg: DictConfig):
+        super().__init__()
+        img_enc_cfg = cfg.encoder.img_encoder
+        state_enc_cfg = cfg.encoder.state_encoder
+        rssm_cfg = cfg.rssm
+
+        self.deter_dim = rssm_cfg.deter
+        self.latent_dim = rssm_cfg.stoch * rssm_cfg.classes
+        
+        # image encoder and decoder
+        self.img_encoder = WorldModel._build_image_encoder(obs_dim[1], img_enc_cfg)
+        fmap_final_shape = self.img_encoder.final_shape
+        
+        # state encoder
+        state_embed_dim = state_enc_cfg.embedding_dim
+        self.state_encoder = WorldModel._build_state_encoder(obs_dim[0], state_enc_cfg)
+        
+        # sequence model
+        self.rssm = RSSM.build(token_dim=math.prod(fmap_final_shape) + state_embed_dim, rssm_cfg=rssm_cfg)
+    
+    def encode(self, obs, state, deter):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
+        tokens = torch.cat([self.img_encoder(obs), self.state_encoder(state)], dim=-1)
+        post_sample, _ = self.rssm._post(tokens, deter)
+        return post_sample
+    
+    @torch.no_grad()
+    def recurrent(self, stoch, deter, action):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
+        deter = self.rssm.recurrent(stoch, deter, action)
+        return deter
+
+    def save(self, path: str):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        state_dicts = {
+            "rssm": self.rssm.state_dict(),
+            "image_encoder": self.img_encoder.state_dict(),
+            "state_encoder": self.state_encoder.state_dict()
+        }
+        torch.save(state_dicts, os.path.join(path, "world_model.pth"))
+        
+    def load(self, path: str):
+        state_dicts = torch.load(os.path.join(path, "world_model.pth"))
+        self.rssm.load_state_dict(state_dicts["rssm"])
+        self.img_encoder.load_state_dict(state_dicts["image_encoder"])
+        self.state_encoder.load_state_dict(state_dicts["state_encoder"])
