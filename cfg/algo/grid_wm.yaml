@@ -69,7 +69,8 @@ wm:
   train:
     lr: 3e-4
     grad_norm: 100.
-    grid_pos_weight: 10
+    grid_pos_weight: 30
+    term_pos_weight: 100
 
     # weight of loss funcs
     rec_img_weight: 1.
@@ -78,7 +79,7 @@ wm:
     rep_weight: 0.1
     rew_weight: 1.
     ter_weight: 1.
-    grid_loss: 1.
+    grid_weight: 1.
 
     batch_size: 256
     buffer_size: 1e4

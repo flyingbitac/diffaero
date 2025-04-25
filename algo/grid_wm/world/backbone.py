@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from .module import *
 from .function import *
+from quaddif.utils.runner import timeit
 
 class RSSM(nn.Module):
     def __init__(
@@ -94,6 +95,14 @@ class GridDecoder(nn.Module):
                 output_padding=1
             ),
             nn.SiLU(),
+            nn.Conv3d(
+                in_channels=self.fmap_channels//2,
+                out_channels=self.fmap_channels//2,
+                kernel_size=3,
+                stride=1,
+                padding=1
+            ),
+            nn.SiLU(),
             nn.ConvTranspose3d(
                 in_channels=self.fmap_channels//2,
                 out_channels=self.fmap_channels//4,
@@ -106,8 +115,9 @@ class GridDecoder(nn.Module):
             nn.Conv3d(
                 in_channels=self.fmap_channels//4,
                 out_channels=1,
-                kernel_size=1,
-                stride=1
+                kernel_size=3,
+                stride=1,
+                padding=1
             )
         )
     
@@ -218,7 +228,8 @@ class WorldModel(nn.Module):
         self.optim = torch.optim.Adam(self.parameters(), lr=cfg.train.lr)
         self.grad_norm = cfg.train.grad_norm
         self.symlogtwohot = SymLogTwoHotLoss(255, -20, 20)
-        self.bce_loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([cfg.train.grid_pos_weight]))
+        self.term_loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([cfg.train.term_pos_weight]))
+        self.grid_loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([cfg.train.grid_pos_weight]))
         self.kl_loss = CategoricalLossWithFreeBits()
     
         self.deter_dim = rssm_cfg.deter
@@ -230,7 +241,7 @@ class WorldModel(nn.Module):
         self.rep_weight: float = cfg.train.rep_weight
         self.rew_weight: float = cfg.train.rew_weight
         self.ter_weight: float = cfg.train.ter_weight
-        self.grid_loss: float = cfg.train.grid_loss
+        self.grid_weight: float = cfg.train.grid_weight
     
     def encode(self, obs, state, deter):
         # type: (Tensor, Tensor, Tensor) -> Tensor
@@ -243,7 +254,8 @@ class WorldModel(nn.Module):
         # type: (Tensor, Tensor, Tensor) -> Tensor
         deter = self.rssm.recurrent(stoch, deter, action)
         return deter
-        
+    
+    @timeit
     def update(
         self,
         obs: Tensor,        # [B L C H W]
@@ -286,7 +298,7 @@ class WorldModel(nn.Module):
             grid_logits = self.grid_decoder(feats)
             visible_grid_logits = grid_logits[visible_map]
             visible_gt_grid = gt_grids[visible_map]
-            grid_loss = self.bce_loss(visible_grid_logits, visible_gt_grid.float())
+            grid_loss = self.grid_loss(visible_grid_logits, visible_gt_grid.float())
             
             visible_pred_grid = visible_grid_logits > 0
             grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
@@ -296,7 +308,7 @@ class WorldModel(nn.Module):
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
         rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
         rew_loss = self.symlogtwohot(reward_logits, rewards)
-        term_loss = self.bce_loss(ter_logits, terminals.float())
+        term_loss = self.term_loss(ter_logits, terminals.float())
         term_pred = ter_logits > 0
         term_acc = (term_pred == terminals).float().mean()
         term_precision = term_pred[terminals].float().mean()
@@ -308,7 +320,7 @@ class WorldModel(nn.Module):
             self.rep_weight * rep_loss +
             self.rew_weight * rew_loss +
             self.ter_weight * term_loss +
-            self.grid_loss * grid_loss
+            self.grid_weight * grid_loss
         )
         
         self.optim.zero_grad()
