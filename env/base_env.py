@@ -19,7 +19,9 @@ class BaseEnv:
         if not isinstance(self, BaseEnvMultiAgent):
             assert self.n_agents == 1
             self.target_pos = torch.zeros(self.n_envs, 3, device=device)
+            self.init_pos = torch.zeros(self.n_envs, 3, device=device)
         if self.n_agents > 1:
+            self.init_pos = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
             assert isinstance(self, BaseEnvMultiAgent)
         self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.long)
         self.arrive_time = torch.zeros(self.n_envs, device=device, dtype=torch.float)
