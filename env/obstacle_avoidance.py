@@ -344,10 +344,10 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def get_occupancy_map(self, quat_xyzw): 
         # get occupancy map
         grid_xyz = self.p.unsqueeze(1) + self.local_grid_centers # [n_envs, n_points, 3]
-        dist2sphere = torch.norm(grid_xyz.unsqueeze(2) - self.obstacle_manager.p_spheres.unsqueeze(1), p=1, dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(1) # [n_envs, n_points, n_spheres]
+        dist2sphere = torch.norm(grid_xyz.unsqueeze(2) - self.obstacle_manager.p_spheres.unsqueeze(1), dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(1) # [n_envs, n_points, n_spheres]
         occupancy_sphere = torch.any(dist2sphere < self.cube_size / 2, dim=-1) # [n_envs, n_points]
         nearest_point2cube = grid_xyz.unsqueeze(2).clamp(min=self.obstacle_manager.box_min.unsqueeze(1), max=self.obstacle_manager.box_max.unsqueeze(1)) # [n_envs, n_points, n_cubes, 3]
-        dist2cube = torch.norm(nearest_point2cube - grid_xyz.unsqueeze(2), p=1, dim=-1) # [n_envs, n_points, n_cubes]
+        dist2cube = torch.norm(nearest_point2cube - grid_xyz.unsqueeze(2), dim=-1) # [n_envs, n_points, n_cubes]
         occupancy_cube = torch.any(dist2cube < self.cube_size / 2, dim=-1) # [n_envs, n_points]
         occupancy_map = occupancy_sphere | occupancy_cube # [n_envs, n_points]
         if self.z_ground_plane is not None:
