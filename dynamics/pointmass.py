@@ -38,7 +38,7 @@ class PointMassModelBase:
         self.lmbda: float = cfg.lmbda # soft control latency
     
     def detach(self):
-        self._state.detach_()
+        self._state = self._state.detach()
         self._vel_ema.detach_()
     
     def reset_idx(self, env_idx: Tensor) -> None:
@@ -75,6 +75,21 @@ class PointMassModelBase:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")
         return torch.zeros_like(self.p)
 
+
+class GradientDecay(autograd.Function):
+    @staticmethod
+    def forward(ctx, state: Tensor, alpha: float, dt: float):
+        ctx.save_for_backward(torch.tensor(-alpha * dt, device=state.device).exp())
+        return state
+    
+    @staticmethod
+    def backward(ctx, grad_state: Tensor):
+        decay_factor = ctx.saved_tensors[0]
+        if ctx.needs_input_grad[0]:
+            grad_state = grad_state * decay_factor
+        return grad_state, None, None
+
+
 class ContinuousPointMassModel(PointMassModelBase):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
@@ -84,6 +99,7 @@ class ContinuousPointMassModel(PointMassModelBase):
             self.solver = EulerIntegral
         elif cfg.solver_type == "rk4":
             self.solver = rk4
+        self.alpha: float = cfg.alpha
     
     def dynamics(self, X: Tensor, U: Tensor) -> Tensor:
         # Unpacking state and input variables
@@ -101,6 +117,8 @@ class ContinuousPointMassModel(PointMassModelBase):
 
     def step(self, U: Tensor) -> None:
         new_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
+        if self.alpha > 0:
+            new_state = GradientDecay.apply(new_state, self.alpha, self.dt)
         self._state = new_state
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
 
