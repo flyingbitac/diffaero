@@ -138,8 +138,10 @@ class GridDecoder(nn.Module):
             B, C, L, W, H = reshaped_fmap.shape
         out = self.up_convs(reshaped_fmap)
         if flag:
-            out = out.reshape(B, T, *out.shape[1:])
-        return out.reshape(B, T, self.n_grids)
+            out = out.reshape(B, T, self.n_grids)
+        else:
+            out = out.reshape(B, self.n_grids)
+        return out
         
 
 class WorldModel(nn.Module):
