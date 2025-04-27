@@ -242,7 +242,7 @@ class TestRunner:
             action, policy_info = self.agent.act(obs, test=True)
             if self.cfg.algo.name != "yopo":
                 action = self.env.rescale_action(action)
-            obs, loss, terminated, env_info = self.env.step(action)
+            obs, loss, terminated, env_info = self.env.step(action, need_obs_before_reset=False)
             if self.cfg.algo.name != 'world' and hasattr(self.agent, "reset"):
                 self.agent.reset(env_info["reset"])
             l_episode = env_info["stats"].get("l_episode", 0.)
