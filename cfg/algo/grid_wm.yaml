@@ -16,6 +16,7 @@ actor:
   entropy_weight: 0.03
 
 wm:
+  compile: True
   l_rollout: ${algo.l_rollout}
   encoder:
     image:
@@ -75,11 +76,13 @@ wm:
     # weight of loss funcs
     rec_img_weight: 1.
     rec_state_weight: 1.
+    free_bits: 1.
     dyn_weight: 0.5
     rep_weight: 0.1
     rew_weight: 1.
     ter_weight: 1.
     grid_weight: 1.
+    soft_label: 0.
 
     batch_size: 256
     buffer_size: 1e4

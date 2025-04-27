@@ -43,6 +43,8 @@ class GRIDWM:
         
         # world model
         self.wm = WorldModel(obs_dim, cfg.wm, grid_cfg).to(device)
+        if cfg.wm.compile:
+            self.wm = torch.compile(self.wm, mode="reduce-overhead")
         # replay buffer
         self.buffer=RolloutBufferGRID(
             l_rollout=self.l_rollout,

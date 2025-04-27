@@ -232,7 +232,7 @@ class WorldModel(nn.Module):
         self.symlogtwohot = SymLogTwoHotLoss(255, -20, 20)
         self.term_loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([cfg.train.term_pos_weight]))
         self.grid_loss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([cfg.train.grid_pos_weight]))
-        self.kl_loss = CategoricalLossWithFreeBits()
+        self.kl_loss = CategoricalLossWithFreeBits(free_bits=cfg.train.free_bits)
     
         self.deter_dim = rssm_cfg.deter
         self.latent_dim = rssm_cfg.stoch*rssm_cfg.classes
@@ -244,7 +244,9 @@ class WorldModel(nn.Module):
         self.rew_weight: float = cfg.train.rew_weight
         self.ter_weight: float = cfg.train.ter_weight
         self.grid_weight: float = cfg.train.grid_weight
+        self.soft_label: float = cfg.train.soft_label
     
+    @torch.jit.export
     def encode(self, obs, state, deter):
         # type: (Tensor, Tensor, Tensor) -> Tensor
         tokens = torch.cat([self.image_encoder(obs), self.state_encoder(state)], dim=-1)
@@ -252,12 +254,19 @@ class WorldModel(nn.Module):
         return post_sample
     
     @torch.no_grad()
+    @torch.jit.export
     def recurrent(self, stoch, deter, action):
         # type: (Tensor, Tensor, Tensor) -> Tensor
         deter = self.rssm.recurrent(stoch, deter, action)
         return deter
     
-    @timeit
+    def forward(self, tokens, deter, actions):
+        # type: (Tensor, Tensor, Tensor) -> Tensor
+        post_samples, post_prob = self.rssm._post(tokens, deter)
+        prior_samples, prior_prob, deter = self.rssm._prior(deter, post_samples, actions)
+        return post_samples, post_prob, prior_samples, prior_prob, deter
+
+    @timeit    
     def update(
         self,
         obs: Tensor,        # [B L C H W]
@@ -273,8 +282,8 @@ class WorldModel(nn.Module):
         
         post_probs_list, prior_probs_list, feat_list = [], [], []
         for i in range(self.l_rollout):
-            post_samples, post_prob = self.rssm._post(tokens[:, i], deter)
-            prior_samples, prior_prob, deter = self.rssm._prior(deter, post_samples, actions[:, i])
+            post_samples, post_prob, prior_samples, prior_prob, deter = self.forward(
+                tokens[:, i], deter, actions[:, i])
             post_probs_list.append(post_prob)
             prior_probs_list.append(prior_prob)
             feat_list.append(torch.cat([deter, prior_samples], dim=-1))
@@ -300,7 +309,8 @@ class WorldModel(nn.Module):
             grid_logits = self.grid_decoder(feats)
             visible_grid_logits = grid_logits[visible_map]
             visible_gt_grid = gt_grids[visible_map]
-            grid_loss = self.grid_loss(visible_grid_logits, visible_gt_grid.float())
+            target = visible_gt_grid.float() * (1 - self.soft_label) + self.soft_label
+            grid_loss = self.grid_loss(visible_grid_logits, target)
             
             visible_pred_grid = visible_grid_logits > 0
             grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
