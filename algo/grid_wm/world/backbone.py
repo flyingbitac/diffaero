@@ -341,11 +341,6 @@ class WorldModel(nn.Module):
         self.optim.step()
         
         losses = {
-            'wm/image_recon': rec_img_loss.item(),
-            'wm/state_recon': rec_state_loss.item(),
-            'wm/grid_recon': grid_loss.item(),
-            'wm/grid_acc': grid_acc.item(),
-            'wm/grid_precision': grid_precision.item(),
             'wm/dyn_loss': dyn_loss.item(),
             'wm/rep_loss': rep_loss.item(),
             'wm/rew_loss': rew_loss.item(),
@@ -354,6 +349,16 @@ class WorldModel(nn.Module):
             'wm/term_precision': term_precision.item(),
             'wm/total_loss': total_loss.item(),
         }
+        
+        if self.recon_image:
+            losses['wm/image_recon'] = rec_img_loss.item()
+        if self.recon_state:
+            losses['wm/state_recon'] = rec_state_loss.item()
+        if self.recon_grid:
+            losses['wm/grid_recon'] = grid_loss.item()
+            losses['wm/grid_acc'] = grid_acc.item()
+            losses['wm/grid_precision'] = grid_precision.item()
+        
         grad_norms = {
             'wm/grad_norm': grad_norm.item()
         }
