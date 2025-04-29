@@ -214,7 +214,7 @@ class WorldModel(nn.Module):
                     norm=image_dec_cfg.norm)
         # state decoder
         if self.recon_state:
-            self.state_decoder = self._build_mlp(rssm_cfg, output_dim=obs_dim[0])
+            self.state_decoder = self._build_mlp(rssm_cfg, output_dim=obs_dim[0] - 3)
         # grid deocder
         if self.recon_grid:
             if grid_dec_cfg.use_mlp:
@@ -301,7 +301,7 @@ class WorldModel(nn.Module):
         rec_state_loss = torch.tensor(0)
         if self.recon_state:
             rec_states = self.state_decoder(feats)
-            rec_state_loss = mse(rec_states, state)
+            rec_state_loss = mse(rec_states, state[..., 3:])
         
         grid_loss, grid_acc, grid_precision = torch.tensor(0), torch.tensor(0), torch.tensor(0)
         if self.recon_grid:
