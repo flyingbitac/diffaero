@@ -282,8 +282,7 @@ class WorldModel(nn.Module):
         
         post_probs_list, prior_probs_list, feat_list = [], [], []
         for i in range(self.l_rollout):
-            post_samples, post_prob, prior_samples, prior_prob, deter = self.forward(
-                tokens[:, i], deter, actions[:, i])
+            post_samples, post_prob, prior_samples, prior_prob, deter = self(tokens[:, i], deter, actions[:, i])
             post_probs_list.append(post_prob)
             prior_probs_list.append(prior_prob)
             feat_list.append(torch.cat([deter, prior_samples], dim=-1))
@@ -323,7 +322,7 @@ class WorldModel(nn.Module):
         term_loss = self.term_loss(ter_logits, terminals.float())
         term_pred = ter_logits > 0
         term_acc = (term_pred == terminals).float().mean()
-        term_precision = term_pred[terminals].float().mean()
+        term_precision = term_pred[terminals].float().mean() if torch.any(terminals) else torch.tensor(1.0)
         
         total_loss = (
             self.rec_img_weight * rec_img_loss +
