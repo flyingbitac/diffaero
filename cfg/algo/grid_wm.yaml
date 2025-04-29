@@ -8,8 +8,8 @@ actor:
     hidden_dim: [256, 128]
   
   input_target_vel: True
-  input_quat: True
-  input_vel: True
+  input_quat: False
+  input_vel: False
 
   lr: 1e-3
   max_grad_norm: 1.
@@ -46,7 +46,7 @@ wm:
 
   decoder:
     image:
-      enable: True
+      enable: False
       use_mlp: True
       cnndecoder:
         channels: [64, 32, 16, 3]
