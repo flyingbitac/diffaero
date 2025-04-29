@@ -9,6 +9,7 @@ common:
   # checkpoint_path: /home/zxh/ws/wrqws/quaddif/outputs/2024-12-27/22-18-41/checkpoints
   checkpoint_path:
   is_test: False
+  use_amp: False
   
 world_state_env:
   _target_: algo.dreamerv3.wmenv.DepthStateEnvConfig
@@ -23,12 +24,14 @@ replaybuffer:
   perception_height: 9
   state_dim: 13
   action_dim: 3
+  grid_dim: 4000
   num_envs: 64
-  max_length: 4194304
+  max_length: 1048576
   warmup_length: 5000
   store_on_gpu: True
   device: "cuda:1"
   use_perception: True
+  use_grid: False
 
 state_predictor:
   state_model:
@@ -43,6 +46,10 @@ state_predictor:
     num_classes: 255
     use_simnorm: False
     only_state: False
+    img_recon_loss_weight: 1.
+    use_grid: False
+    grid_dim: 4000
+    enable_rec: True
 
   training:
     max_grad_norm: 100.0
@@ -50,6 +57,7 @@ state_predictor:
     batch_size: 64
     batch_length: 64
     worldmodel_update_freq: 1
+    use_amp: ${algo.common.use_amp}
 
   optimizer:
     lr: 1e-4
@@ -61,7 +69,7 @@ actor_critic:
     __target__: algo.dreamerv3.models.agent.ActorCriticConfig
     feat_dim: 1536 # hidden + latent
     num_layers: 2
-    hidden_dim: 512
+    hidden_dim: 256
     action_dim: 3
     gamma: 0.985
     lambd: 0.95
@@ -75,6 +83,7 @@ actor_critic:
     imagine_length: 16
     use_states: False
     scale_rewards: False
+    use_grid: False
 
 training:
   max_grad_norm: 1.0 
@@ -83,6 +92,7 @@ training:
   batch_length: 6    
   total_episodes: 1000
   imagine_period: 10000
+  use_amp: ${algo.common.use_amp}
 
 imagine:
   imagine_length: 64 # 实际imagine的长度是imagine_length-num_steps_conditioning

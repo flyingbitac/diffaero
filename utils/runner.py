@@ -1,6 +1,7 @@
 from typing import *
 from collections import defaultdict
 import os
+from copy import deepcopy
 
 import torch
 import torchvision
@@ -12,7 +13,6 @@ import imageio
 from omegaconf import DictConfig
 
 from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
-from quaddif.utils.exporter import PolicyExporter
 from quaddif.utils.logger import Logger
 
 def display_image(state, action, policy_info, env_info):
@@ -153,10 +153,19 @@ class TrainRunner:
             }
             if "value" in policy_info.keys():
                 log_info["value"] = policy_info["value"].mean().item()
+            if "grid" in policy_info.keys():
+                self.logger.log_images("grid", deepcopy(policy_info["grid"]), i+1)
+                del(policy_info["grid"])
             if "WorldModel/state_total_loss" in policy_info.keys():
-                log_info.update(policy_info)
+                log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
             if (i+1) % 10 == 0:
                 self.logger.log_scalars(log_info, i+1)
+            
+            if i % 100 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
+                grid_gt = self.env.visualize_grid(policy_info["grid_gt"])
+                grid_pred = self.env.visualize_grid(policy_info["grid_pred"])
+                grid = np.concatenate([grid_gt, grid_pred], axis=2)
+                self.logger.log_image("grid", grid, i+1)
             
             if success_rate >= self.max_success_rate:
                 self.max_success_rate = success_rate
@@ -175,11 +184,11 @@ class TrainRunner:
         print(f"The checkpoint is saved to {ckpt_path}.")
         print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
         if any(dict(self.cfg.export).values()):
-            PolicyExporter(self.agent.policy_net).export(
+            self.agent.export(
                 path=ckpt_path,
-                verbose=True,
                 export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx
+                export_onnx=self.cfg.export.onnx,
+                verbose=True
             )
         if self.env.renderer is not None:
             self.env.renderer.close()
@@ -233,7 +242,7 @@ class TestRunner:
             action, policy_info = self.agent.act(obs, test=True)
             if self.cfg.algo.name != "yopo":
                 action = self.env.rescale_action(action)
-            obs, loss, terminated, env_info = self.env.step(action)
+            obs, loss, terminated, env_info = self.env.step(action, need_obs_before_reset=False)
             if self.cfg.algo.name != 'world' and hasattr(self.agent, "reset"):
                 self.agent.reset(env_info["reset"])
             l_episode = env_info["stats"].get("l_episode", 0.)
@@ -283,15 +292,14 @@ class TestRunner:
                     env_info=env_info)
     
     def close(self):
-        if self.cfg.export:
+        if any(dict(self.cfg.export).values()):
             ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
-            PolicyExporter(self.agent.policy_net).export(
+            self.agent.export(
                 path=ckpt_path,
-                verbose=True,
                 export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx
+                export_onnx=self.cfg.export.onnx,
+                verbose=True
             )
-        
         if self.env.renderer is not None:
             self.env.renderer.close()
         

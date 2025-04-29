@@ -11,6 +11,7 @@ ENV_ALIAS = {
     "multi_agent_position_control": MultiAgentPositionControl,
     "obstacle_avoidance": ObstacleAvoidance,
     "obstacle_avoidance_yopo": ObstacleAvoidanceYOPO,
+    "obstacle_avoidance_grid": ObstacleAvoidanceGrid,
 }
 
 def build_env(cfg, device):

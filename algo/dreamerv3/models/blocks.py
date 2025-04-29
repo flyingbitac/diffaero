@@ -13,6 +13,21 @@ GN_GROUP_SIZE = 32
 GN_EPS = 1e-5
 ATTN_HEAD_DIM = 8
 
+#MLP
+class MLP(nn.Module):
+    def __init__(self, inp_dim:int, out_dim:int, hidden_dim:int, layers:int, act:str, norm:str, bias:bool=True):
+        super().__init__()
+        mlp_dims = [inp_dim] + (layers - 1)*[hidden_dim] + [out_dim]
+        module_list = nn.ModuleList()
+        for inp, out in zip(mlp_dims[:-1], mlp_dims[1:]):
+            module_list.append(nn.Linear(inp, out, bias=bias))
+            module_list.append(getattr(nn, norm)(out))
+            module_list.append(getattr(nn, act)())
+        self.mlp = nn.Sequential(*module_list)
+    
+    def forward(self, x:torch.Tensor):
+        return self.mlp(x)
+
 # Convs
 
 Conv1x1 = partial(nn.Conv2d, kernel_size=1, stride=1, padding=0)
@@ -363,4 +378,8 @@ def proj(input_dim, output_dim, hidden_dim=None):
         nn.SiLU(),
         nn.Linear(hidden_dim, output_dim)
     )        
-        
+
+if __name__ == '__main__':
+    mlp = MLP(13, 256, 512, 2, 'ReLU', 'LayerNorm')
+    out = mlp(torch.rand((64, 13))) 
+    print(out.shape) 

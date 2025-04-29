@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 import math
 
 import torch
@@ -103,7 +103,7 @@ def ray_directions_world2body(
     quat_xyzw: torch.Tensor,
     H: int,
     W: int
-):
+) -> Tensor: # [n_envs, n_rays, 3]
     quat_wxyz = quat_xyzw.roll(1, dims=-1) # [n_envs, 4]
     quat_wxyz = quat_wxyz.unsqueeze(1).expand(-1, H*W, -1) # [n_envs, n_rays, 4]
     return quaternion_apply(quat_wxyz, ray_directions.view(1, -1, 3)) # [n_envs, n_rays, 3]
@@ -115,22 +115,34 @@ def get_ray_dist(
     box_min: Tensor, # [n_envs, n_cubes, 3]
     box_max: Tensor, # [n_envs, n_cubes, 3]
     start: Tensor, # [n_envs, n_rays, 3]
-    ray_directions: Tensor, # [n_envs, n_rays, 3]
+    ray_directions_b: Tensor, # [n_envs, n_rays, 3]
     quat_xyzw: Tensor, # [n_envs, 4]
     max_dist: float,
     z_ground_plane: Optional[float] = None,
-) -> Tensor: # [n_envs, n_rays]
-    H, W = ray_directions.shape[:2]
-    ray_directions = ray_directions_world2body(ray_directions, quat_xyzw, H, W) # [n_envs, n_rays, 3]
-    raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions, max_dist) # [n_envs, n_rays]
-    raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions, max_dist) # [n_envs, n_rays]
+) -> Tensor: # [n_envs, H, W]
+    H, W = ray_directions_b.shape[:2]
+    ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
+    raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions_w, max_dist) # [n_envs, n_rays]
+    raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions_w, max_dist) # [n_envs, n_rays]
     raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
     if z_ground_plane is not None:
-        raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions, max_dist) # [n_envs, n_rays]
+        raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions_w, max_dist) # [n_envs, n_rays]
         raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
     raydist.clamp_(max=max_dist)
     depth = 1. - raydist.reshape(-1, H, W) / max_dist # [n_envs, H, W]
     return depth
+
+@torch.jit.script
+def get_contact_point(
+    depth: Tensor, # [n_envs, H, W]
+    ray_directions_w: Tensor, # [n_envs, n_rays, 3]
+    start: Tensor, # [n_envs, n_rays, 3]
+    max_dist: float,
+    H: int,
+    W: int
+):
+    raydist = (1. - depth.reshape(-1, H*W, 1)) * max_dist
+    return ray_directions_w * raydist + start # [n_envs, n_rays, 3]
 
 class Camera:
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -153,17 +165,26 @@ class Camera:
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
         z_ground_plane: Optional[float] = None
-    ) -> Tensor: # [n_envs, n_rays]
+    ) -> Tensor: # [n_envs, H, W]
         return get_ray_dist(
             sphere_pos=sphere_pos,
             sphere_r=sphere_r,
             box_min=box_min,
             box_max=box_max,
             start=start,
-            ray_directions=self.ray_directions,
+            ray_directions_b=self.ray_directions,
             quat_xyzw=quat_xyzw,
             max_dist=self.max_dist,
             z_ground_plane=z_ground_plane)
+    
+    def get_contact_point(
+        self,
+        depth: Tensor, # [n_envs, H, W]
+        start: Tensor, # [n_envs, n_rays, 3]
+        quat_xyzw: Tensor # [n_envs, 4]
+    ) -> Tensor: # [n_envs, n_rays, 3]
+        ray_directions_w = ray_directions_world2body(self.ray_directions, quat_xyzw, self.H, self.W) # [n_envs, n_rays, 3]
+        return get_contact_point(depth, ray_directions_w, start, self.max_dist, self.H, self.W)
         
     def _get_ray_directions_sphere(self):
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
@@ -212,14 +233,14 @@ class LiDAR:
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
         z_ground_plane: Optional[float] = None
-    ) -> Tensor: # [n_envs, n_rays]
+    ) -> Tensor: # [n_envs, H, W]
         return get_ray_dist(
             sphere_pos=sphere_pos,
             sphere_r=sphere_r,
             box_min=box_min,
             box_max=box_max,
             start=start,
-            ray_directions=self.ray_directions,
+            ray_directions_b=self.ray_directions,
             quat_xyzw=quat_xyzw,
             max_dist=self.max_dist,
             z_ground_plane=z_ground_plane)

@@ -40,6 +40,7 @@ class PositionControl(BaseEnv):
         reset_indices = reset.nonzero().view(-1)
         arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
+        avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
         success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
         extra = {
@@ -57,6 +58,7 @@ class PositionControl(BaseEnv):
                 "success_rate": success[reset],
                 "survive_rate": truncated[reset],
                 "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "avg_vel": avg_vel[success],
                 "arrive_time": self.arrive_time.clone()[success]
             },
         }
@@ -115,6 +117,7 @@ class PositionControl(BaseEnv):
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
         p_new = rand_range(-self.L+0.5, self.L-0.5, size=(self.n_envs, 3), device=self.device)
+        self.init_pos[env_idx] = p_new[env_idx]
         new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.dynamics.state_dim-3, device=self.device)], dim=-1)
         if self.dynamic_type == "pointmass":
             new_state[:, 8] = 9.8

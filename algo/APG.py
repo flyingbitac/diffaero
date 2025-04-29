@@ -11,6 +11,7 @@ from quaddif.network.agents import (
     DeterministicActor,
     StochasticActor)
 from quaddif.utils.runner import timeit
+from quaddif.utils.exporter import PolicyExporter
 
 class APG:
     def __init__(
@@ -92,9 +93,14 @@ class APG:
             l_rollout=cfg.l_rollout,
             device=device)
     
-    @property
-    def policy_net(self):
-        return self.actor
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        verbose=False,
+    ):
+        PolicyExporter(self.actor).export(path, export_jit, export_onnx, verbose)
 
 
 class APG_stochastic(APG):

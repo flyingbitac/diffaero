@@ -8,7 +8,7 @@ import copy
 from dataclasses import dataclass
 from torch.cuda.amp import autocast
 
-from .blocks import SymLogTwoHotLoss
+from .blocks import SymLogTwoHotLoss, MLP
 
 class EMAScalar():
     def __init__(self, decay) -> None:
@@ -112,39 +112,13 @@ class ActorCriticAgent(nn.Module):
 
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
 
-        actor_mean = [
-            nn.Linear(feat_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU()
-        ]
-        for i in range(num_layers - 1):
-            actor_mean.extend([
-                nn.Linear(hidden_dim, hidden_dim, bias=False),
-                nn.LayerNorm(hidden_dim),
-                nn.ReLU()
-            ])
-        self.actor_mean = nn.Sequential(
-            *actor_mean,
-            nn.Linear(hidden_dim, action_dim)
+        self.actor_mean_std = nn.Sequential(
+            MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm',bias=False),
+            nn.Linear(hidden_dim, action_dim*2),
         )
-
-        self.actor_logstd = nn.Parameter(torch.zeros(1,action_dim))
-
-        critic = [
-            nn.Linear(feat_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU()
-        ]
-        for i in range(num_layers - 1):
-            critic.extend([
-                nn.Linear(hidden_dim, hidden_dim, bias=False),
-                nn.LayerNorm(hidden_dim),
-                nn.ReLU()
-            ])
-
         self.critic = nn.Sequential(
-            *critic,
-            nn.Linear(hidden_dim, 255)
+            MLP(feat_dim, hidden_dim, hidden_dim, num_layers, 'ReLU', 'LayerNorm', bias=False),
+            nn.Linear(hidden_dim, 255),
         )
         self.slow_critic = copy.deepcopy(self.critic)
 
@@ -165,10 +139,12 @@ class ActorCriticAgent(nn.Module):
     def policy(self, x):
         LOG_STD_MAX = 3
         LOG_STD_MIN = -5
-        mean = self.actor_mean(x)
+        mean_std = self.actor_mean_std(x)
+        mean, std = torch.chunk(mean_std, 2, dim=-1)
         log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (
-            torch.tanh(self.actor_logstd) + 1)
-        std = torch.exp(log_std).expand_as(mean)
+            torch.tanh(std) + 1)
+        # std = torch.exp(log_std).expand_as(mean)
+        std = torch.exp(log_std)
         return mean,std
 
     def value(self, x):
@@ -203,8 +179,6 @@ class ActorCriticAgent(nn.Module):
 
     def sample_as_env_action(self, latent, greedy=False):
         action = self.sample(latent, greedy)
-        # print("action:",action)
-        # assert 0==1
         return action.to(torch.float32).detach().cpu().squeeze(0).numpy()
 
     def update(self, latent, action, reward, termination, logger=None):
@@ -214,7 +188,7 @@ class ActorCriticAgent(nn.Module):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             dist, raw_value = self.get_dist_raw_value(latent)
-            log_prob = dist.log_prob(action) - torch.log(1. - torch.tanh(action).pow(2) + 1e-8)
+            log_prob = dist.log_prob(action)
             log_prob = log_prob.sum(-1)
             entropy = dist.entropy().sum(-1)
 

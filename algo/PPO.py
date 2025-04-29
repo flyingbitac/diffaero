@@ -14,6 +14,7 @@ from quaddif.network.agents import (
     StochasticActorCriticV,
     RPLActorCritic)
 from quaddif.utils.runner import timeit
+from quaddif.utils.exporter import PolicyExporter
 
 class PPO:
     def __init__(
@@ -204,9 +205,14 @@ class PPO:
             l_rollout=cfg.l_rollout,
             device=device)
     
-    @property
-    def policy_net(self):
-        return self.agent.actor
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        verbose=False,
+    ):
+        PolicyExporter(self.agent.actor).export(path, export_jit, export_onnx, verbose)
 
 
 class PPO_RPL(PPO):

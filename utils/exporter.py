@@ -1,8 +1,6 @@
-import trace
 from typing import Tuple, Dict, Union, Optional, List
 from copy import deepcopy
 import os
-from collections import OrderedDict
 
 import torch
 from torch import Tensor
@@ -41,7 +39,10 @@ class PolicyExporter(nn.Module):
             ("max_action", torch.rand(1, 3))
         ]
         if perception_dim is not None:
-            self.named_inputs.insert(1, ("perception", torch.rand(1, perception_dim[0], perception_dim[1])))
+            if isinstance(self.actor, (MLP, RNN)):
+                self.named_inputs[0] = ("state", (torch.rand(1, state_dim), torch.rand(1, perception_dim[0], perception_dim[1])))
+            elif isinstance(self.actor, (CNN, RCNN)):
+                self.named_inputs.insert(1, ("perception", torch.rand(1, perception_dim[0], perception_dim[1])))
         self.output_names = [
             "action",
             "quat_xyzw_cmd",

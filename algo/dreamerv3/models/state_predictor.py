@@ -8,7 +8,7 @@ from typing import Optional
 from einops import rearrange,reduce
 from einops.layers.torch import Rearrange
 
-from .blocks import SymLogTwoHotLoss
+from .blocks import SymLogTwoHotLoss, MLP
 
 @dataclass
 class DepthStateModelCfg:
@@ -20,8 +20,13 @@ class DepthStateModelCfg:
     latent_dim: int
     categoricals: int
     num_classes: int
+    grid_loss_pos_weight: float
+    img_recon_loss_weight: float
+    grid_dim: int=4000
     use_simnorm: bool=False
     only_state: bool=False
+    use_grid: bool=False
+    enable_rec: bool=True
 
 @dataclass
 class Batch:
@@ -61,7 +66,8 @@ class ImageEncoder(nn.Module):
         
     def forward(self, depth_image:Tensor):
         depth_image = self.backbone(depth_image)
-        depth_image = rearrange(depth_image, "B C H W -> B (C H W)")
+        # depth_image = rearrange(depth_image, "B C H W -> B (C H W)")
+        depth_image = depth_image.view(depth_image.shape[0],-1)
         return depth_image
 
 class ImageDecoder(nn.Module):
@@ -90,12 +96,7 @@ class ImageDecoder(nn.Module):
 class ImageDecoderMLP(nn.Module):
     def __init__(self, feat_dim:int, hidden_dim:int, image_width:int, image_height:int):
         super().__init__()
-        self.backbone = nn.Sequential(nn.Linear(feat_dim, hidden_dim, bias=False),
-                                 nn.LayerNorm(hidden_dim),
-                                 nn.SiLU(inplace=True),
-                                 nn.Linear(hidden_dim,hidden_dim),
-                                 nn.LayerNorm(hidden_dim),
-                                 nn.SiLU(inplace=True))
+        self.backbone = MLP(feat_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim,image_height*image_width)
         self.image_height = image_height
 
@@ -138,14 +139,7 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
 class RewardDecoder(nn.Module):
     def __init__(self, num_classes, hidden_dim, latent_dim) -> None:
         super().__init__()
-        self.backbone = nn.Sequential(
-            nn.Linear(latent_dim+hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-        )
+        self.backbone = MLP(latent_dim+hidden_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, feat, hidden):
@@ -156,20 +150,24 @@ class RewardDecoder(nn.Module):
 class EndDecoder(nn.Module):
     def __init__(self, hidden_dim, latent_dim) -> None:
         super().__init__()
-        self.backbone = nn.Sequential(
-            nn.Linear(hidden_dim+latent_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(inplace=True),
-        )
+        self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
         self.head = nn.Linear(hidden_dim, 1)
     
     def forward(self, feat, hidden):
         feat = self.backbone(torch.cat([feat,hidden],dim=-1))
         end = self.head(feat)
         return end.squeeze(-1)
+
+class GridDecoder(nn.Module):
+    def __init__(self, hidden_dim, latent_dim, grid_dim) -> None:
+        super().__init__()
+        self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
+        self.head = nn.Linear(hidden_dim, grid_dim)
+    
+    def forward(self, feat, hidden):
+        feat = self.backbone(torch.cat([feat,hidden],dim=-1))
+        grid = self.head(feat)
+        return grid
 
 class MSELoss(nn.Module):
     def __init__(self) -> None:
@@ -181,7 +179,7 @@ class MSELoss(nn.Module):
         return loss.mean()
 
 class DepthStateModel(nn.Module):
-    def __init__(self, cfg:DepthStateModelCfg) -> None:
+    def __init__(self, cfg: DepthStateModelCfg) -> None:
         super().__init__()
         self.cfg = cfg
         self.use_simnorm = cfg.use_simnorm
@@ -189,7 +187,8 @@ class DepthStateModel(nn.Module):
         self.kl_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
         self.mse_loss = MSELoss()
         self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
-        self.endloss = nn.BCEWithLogitsLoss()
+        # self.endloss = nn.BCEWithLogitsLoss()
+        self.endloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(cfg.grid_loss_pos_weight))
 
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         if not cfg.only_state:
@@ -197,48 +196,40 @@ class DepthStateModel(nn.Module):
                                               image_height=cfg.image_height)
             # self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
             #                                 last_channels=self.image_encoder.last_channels,final_image_width=4)
-            self.image_decoder = ImageDecoderMLP(feat_dim=cfg.latent_dim+cfg.hidden_dim,hidden_dim=cfg.hidden_dim,
-                                                image_width=cfg.image_width,image_height=cfg.image_height)
+            if cfg.enable_rec:
+                self.image_decoder = ImageDecoderMLP(feat_dim=cfg.latent_dim+cfg.hidden_dim,hidden_dim=cfg.hidden_dim,
+                                                    image_width=cfg.image_width,image_height=cfg.image_height)
             state_emb_dim = 64
-            self.state_encoder = nn.Sequential(nn.Linear(cfg.state_dim,64,bias=False),
-                                            nn.LayerNorm(64),nn.SiLU())
+            self.state_encoder = MLP(cfg.state_dim, state_emb_dim, state_emb_dim, 1, 'SiLU', 'LayerNorm', bias=False)
             depth_flatten_dim = self.image_encoder.flatten_dim
         else:
             self.state_encoder = nn.Identity()
             state_emb_dim = 10
             depth_flatten_dim = 0
 
-
-        self.inp_proj = nn.Sequential(
-            nn.Linear(state_emb_dim + depth_flatten_dim + cfg.hidden_dim,cfg.latent_dim),
-            nn.LayerNorm(cfg.latent_dim),
-            nn.SiLU(),
-            nn.Linear(cfg.latent_dim,cfg.latent_dim)
-        )
+        self.inp_proj = nn.Sequential(MLP(state_emb_dim + depth_flatten_dim + cfg.hidden_dim, cfg.latent_dim, 
+                                          cfg.latent_dim, 1, 'SiLU', 'LayerNorm', bias=False),
+                                      nn.Linear(cfg.latent_dim, cfg.latent_dim))
         
         self.act_state_proj = nn.Sequential(
-            nn.Linear(cfg.latent_dim+cfg.action_dim,cfg.hidden_dim),
-            nn.LayerNorm(cfg.hidden_dim),
-            nn.SiLU(),
-            nn.Linear(cfg.hidden_dim,cfg.hidden_dim)
+            MLP(cfg.latent_dim+cfg.action_dim, cfg.hidden_dim, cfg.hidden_dim, 1, 'SiLU', 'LayerNorm', bias=False),
+            nn.Linear(cfg.hidden_dim, cfg.hidden_dim)
         )
         
         self.state_decoder = nn.Sequential(
-            nn.Linear(cfg.latent_dim+cfg.hidden_dim,cfg.latent_dim),
-            nn.LayerNorm(cfg.latent_dim),
-            nn.SiLU(),
+            MLP(cfg.latent_dim+cfg.hidden_dim, cfg.latent_dim, cfg.hidden_dim, 1, 'SiLU', 'LayerNorm', bias=False),
             nn.Linear(cfg.latent_dim,cfg.state_dim)
         )
         
         self.prior_proj = nn.Sequential(
-            nn.Linear(cfg.hidden_dim,cfg.latent_dim),
-            nn.LayerNorm(cfg.latent_dim),
-            nn.SiLU(),
-            nn.Linear(cfg.latent_dim,cfg.latent_dim)
+            MLP(cfg.hidden_dim, cfg.latent_dim, cfg.hidden_dim, 1, 'SiLU', 'LayerNorm', bias=False),
+            nn.Linear(cfg.latent_dim, cfg.latent_dim)
         )
 
         self.reward_predictor = RewardDecoder(cfg.num_classes,cfg.hidden_dim,cfg.latent_dim)
         self.end_predictor = EndDecoder(cfg.hidden_dim,cfg.latent_dim)
+        if cfg.use_grid:
+            self.grid_predictor = GridDecoder(cfg.hidden_dim,cfg.latent_dim,cfg.grid_dim)
     
     def straight_with_gradient(self,logits:Tensor):
         probs = F.softmax(logits,dim=-1)
@@ -255,7 +246,7 @@ class DepthStateModel(nn.Module):
         if hidden==None:
             hidden = torch.zeros(latent.shape[0],self.cfg.hidden_dim,device=latent.device)
         feat = torch.cat([latent,hidden],dim=-1)
-        if self.cfg.only_state:
+        if self.cfg.only_state or not self.cfg.enable_rec:
             return self.state_decoder(feat),None
         else:
             return self.state_decoder(feat),self.image_decoder(feat)
@@ -309,7 +300,7 @@ class DepthStateModel(nn.Module):
             return post_sample,post_logits
     
     @torch.no_grad()
-    def predict_next(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None):
+    def predict_next(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None,use_grid:bool=False):
         assert latent.ndim==act.ndim==2
         prior_sample,_,hidden = self.sample_with_prior(latent,act,hidden)
         flattend_prior_sample = self.flatten(prior_sample)
@@ -317,10 +308,25 @@ class DepthStateModel(nn.Module):
         end_logit = self.end_predictor(flattend_prior_sample,hidden)
         pred_reward = self.symlogtwohotloss.decode(reward_logit)
         pred_end = end_logit>0
-        return prior_sample,pred_reward,pred_end,hidden
+        if use_grid and hasattr(self, 'grid_predictor'):
+            grid_logits = self.grid_predictor(flattend_prior_sample,hidden)
+            grid_logits = grid_logits>0
+            grid_logits = grid_logits.float()
+        else:
+            grid_logits = None
+        return prior_sample,pred_reward,pred_end,hidden,grid_logits
 
-    def compute_loss(self,states:Tensor, depth_images:Tensor, actions:Tensor, rewards:Tensor, terminations:Tensor):
-        b,l,d = states.shape
+    def compute_loss(
+        self,
+        states: Tensor,
+        depth_images: Tensor,
+        actions: Tensor,
+        rewards: Tensor,
+        terminations: Tensor,
+        grid: Optional[Tensor] = None,
+        visible_map: Optional[Tensor] = None,
+    ):
+        b, l, d = states.shape
 
         hidden = torch.zeros(b,self.cfg.hidden_dim,device=states.device)
 
@@ -328,21 +334,25 @@ class DepthStateModel(nn.Module):
         prior_logits = []
         reward_logits = []
         end_logits = []
+        grid_logits = []
         rec_states = []
         rec_images = []
 
         for i in range(l):
             if depth_images!=None:
-                post_sample,post_logit = self.sample_with_post(states[:,i],depth_images[:,i],hidden)
+                post_sample,post_logit = self.sample_with_post(states[:, i], depth_images[:, i], hidden)
             else:
-                post_sample,post_logit = self.sample_with_post(states[:,i],None,hidden)
+                post_sample,post_logit = self.sample_with_post(states[:, i], None, hidden)
             flattend_post_sample = self.flatten(post_sample)
             rec_state,rec_image = self.decode(flattend_post_sample,hidden)
-            action = actions[:,i]
-            prior_sample,prior_logit,hidden = self.sample_with_prior(flattend_post_sample,action,hidden)
+            action = actions[:, i]
+            prior_sample, prior_logit, hidden = self.sample_with_prior(flattend_post_sample, action, hidden)
             flattened_prior_sample = self.flatten(prior_sample)
             reward_logit = self.reward_predictor(flattened_prior_sample,hidden)
             end_logit = self.end_predictor(flattened_prior_sample,hidden)
+            if hasattr(self, 'grid_predictor'):
+                grid_logit = self.grid_predictor(flattened_prior_sample,hidden)
+                grid_logits.append(grid_logit)
 
             rec_states.append(rec_state) 
             rec_images.append(rec_image)
@@ -363,16 +373,29 @@ class DepthStateModel(nn.Module):
         dyn_loss,_ = self.kl_loss(post_logits[:,1:].detach(),prior_logits[:,:-1])
         rew_loss = self.symlogtwohotloss(reward_logits,rewards)
         end_loss = self.endloss(end_logits,terminations)
-        if depth_images!=None:
-            rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()+self.mse_loss(rec_images,depth_images)
+        if hasattr(self, 'grid_predictor'):
+            grid_logits = torch.stack(grid_logits,dim=1)
+            grid_loss = self.endloss(grid_logits,grid.float())
+        else:
+            grid_loss, grid_acc, grid_precision = torch.zeros(()), torch.zeros(()), torch.zeros(())
+            
+        if rec_image!=None:
+            rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean() + self.mse_loss(rec_images,depth_images)
         else:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
-        total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss
-        return total_loss,rep_loss,dyn_loss,rec_loss,rew_loss,end_loss
+        total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss + grid_loss
+        
+        n_grid = grid.sum(dim=-1)
+        env_idx, time_idx = torch.where(n_grid == n_grid.max())
+        env_idx, time_idx = env_idx[0], time_idx[0]
+        grid_gt = grid[env_idx, time_idx].reshape(20, 20, 10)
+        grid_pred = (grid_logits > 0)[env_idx, time_idx].reshape(20, 20, 10)
+        
+        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision, (grid_gt, grid_pred)
 
 if __name__=='__main__':
 
-    cfg = DepthStateModelCfg
+    cfg = DepthStateModelCfg()
     cfg.action_dim = 4
     cfg.categoricals = 16
     cfg.hidden_dim = 256

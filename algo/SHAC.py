@@ -15,6 +15,7 @@ from quaddif.network.agents import (
     RPLActorCritic,
     StochasticActorCriticQ)
 from quaddif.utils.runner import timeit
+from quaddif.utils.exporter import PolicyExporter
 
 class SHAC:
     def __init__(
@@ -227,9 +228,14 @@ class SHAC:
             l_rollout=cfg.l_rollout,
             device=device)
     
-    @property
-    def policy_net(self):
-        return self.agent.actor
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        verbose=False,
+    ):
+        PolicyExporter(self.agent.actor).export(path, export_jit, export_onnx, verbose)
 
 
 class SHAC_PPO(SHAC):
@@ -539,6 +545,11 @@ class SHAC_Q:
             l_rollout=cfg.l_rollout,
             device=device)
     
-    @property
-    def policy_net(self):
-        return self.agent.actor
+    def export(
+        self,
+        path: str,
+        export_jit,
+        export_onnx,
+        verbose=False,
+    ):
+        PolicyExporter(self.agent.actor).export(path, export_jit, export_onnx, verbose)

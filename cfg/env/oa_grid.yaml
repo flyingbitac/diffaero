@@ -1,0 +1,38 @@
+name: obstacle_avoidance_grid
+
+sensor: ${sensor}
+dynamics: ${dynamics}
+dt: 0.0333
+length: 25
+height_scale: 0.25
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+max_time: 30
+max_target_vel: 8.
+min_target_vel: 5.
+r_drone: 0.2
+n_obstacles: 50
+ground_plane: True
+
+n_substeps: 1
+
+obstacles:
+  n_obstacles: ${env.n_obstacles}
+  sphere_percentage: 0.5
+  sphere_radius_range: [0.6, 4.0, 0.4] # [min, max, step]
+  cube_lwh_range: [0.6, 5.0, 0.4] # [min, max, step]
+  randpos_std_min: 6
+  randpos_std_max: 7
+
+defaults:
+  - render: oa_render
+  - _self_
+
+grid:
+  x_min: -6.
+  x_max:  6.
+  y_min: -6.
+  y_max:  6.
+  z_min: -3.
+  z_max:  3.
+  n_points: [20, 20, 10]
