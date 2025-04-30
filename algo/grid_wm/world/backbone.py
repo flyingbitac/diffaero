@@ -8,8 +8,9 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .module import *
+from .module import MiniGru, ImageEncoder, ImageDecoder, ImageDecoderMLP, StateEncoder, GridDecoder
 from .function import *
+from quaddif.network.networks import mlp
 from quaddif.utils.runner import timeit
 
 class RSSM(nn.Module):
@@ -26,23 +27,24 @@ class RSSM(nn.Module):
     ):
         super().__init__()
         self.post_proj = nn.Sequential(
-            MLP(token_dim + deter, hidden, [hidden], norm, act),
+            mlp(token_dim + deter, [hidden], hidden),
             nn.Linear(hidden, stoch*classes)
         )
         self.prior_proj = nn.Sequential(
-            MLP(deter, hidden, [hidden], norm, act),
+            mlp(deter, [hidden], hidden),
             nn.Linear(hidden, stoch*classes)
         )
         self.seq_model = MiniGru(deter, stoch*classes, action_dim, hidden, act, norm)
         self.stoch = stoch
+        self.classes = classes
     
     def straight_through_gradient(self, x:torch.Tensor):
-        x = rearrange(x, '... (S C) -> ... S C', S = self.stoch)
+        x = x.reshape(*x.shape[:-1], self.stoch, self.classes)
         logits = get_unimix_logits(x)
         probs= F.softmax(logits, dim=-1)
         onehot = torch.distributions.OneHotCategorical(probs = probs).sample()
         straight_sample = onehot - probs.detach() + probs
-        straight_sample = rearrange(straight_sample, '... S C -> ... (S C)')
+        straight_sample = straight_sample.reshape(*straight_sample.shape[:-2], -1)
         return straight_sample, probs
     
     def _post(self, token:torch.Tensor, deter:torch.Tensor):
@@ -73,102 +75,22 @@ class RSSM(nn.Module):
             norm=rssm_cfg.norm
         )
 
-class GridDecoder(nn.Module):
-    def __init__(self, rssm_cfg: DictConfig, grid_cfg: DictConfig):
-        super().__init__()
-        input_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
-        ds_rate = 4
-        self.n_grids = math.prod(grid_cfg.n_points)
-        self.fmap_shape = [i // ds_rate for i in grid_cfg.n_points]
-        self.fmap_channels = 8
-        
-        self.input_layer = nn.Sequential(
-            nn.Linear(input_dim, self.fmap_channels * math.prod(self.fmap_shape)),
-            nn.SiLU())
-        self.up_convs = nn.Sequential(
-            nn.ConvTranspose3d(
-                in_channels=self.fmap_channels,
-                out_channels=self.fmap_channels//2,
-                kernel_size=3,
-                stride=2,
-                padding=1,
-                output_padding=1
-            ),
-            nn.SiLU(),
-            nn.Conv3d(
-                in_channels=self.fmap_channels//2,
-                out_channels=self.fmap_channels//2,
-                kernel_size=3,
-                stride=1,
-                padding=1
-            ),
-            nn.SiLU(),
-            nn.ConvTranspose3d(
-                in_channels=self.fmap_channels//2,
-                out_channels=self.fmap_channels//4,
-                kernel_size=3,
-                stride=2,
-                padding=1,
-                output_padding=1
-            ),
-            nn.SiLU(),
-            nn.Conv3d(
-                in_channels=self.fmap_channels//4,
-                out_channels=1,
-                kernel_size=3,
-                stride=1,
-                padding=1
-            )
-        )
-    
-    def forward(self, x):
-        flattened_fmap = self.input_layer(x)
-        reshaped_fmap = rearrange(
-            flattened_fmap,
-            '... (c l w h) -> ... c l w h',
-            c=self.fmap_channels,
-            l=self.fmap_shape[0],
-            w=self.fmap_shape[1],
-            h=self.fmap_shape[2])
-        flag = reshaped_fmap.ndim == 6
-        if flag:
-            B, T, C, L, W, H = reshaped_fmap.shape
-            reshaped_fmap = reshaped_fmap.reshape(B*T, C, L, W, H)
-        else:
-            B, C, L, W, H = reshaped_fmap.shape
-        out = self.up_convs(reshaped_fmap)
-        if flag:
-            out = out.reshape(B, T, self.n_grids)
-        else:
-            out = out.reshape(B, self.n_grids)
-        return out
-        
-
 class WorldModel(nn.Module):
     @staticmethod
-    def _build_mlp(rssm_cfg: DictConfig, output_dim: int) -> MLP:
+    def _build_mlp(rssm_cfg: DictConfig, output_dim: int) -> nn.Sequential:
         return nn.Sequential(
-            MLP(
-                input_dim=rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes,
-                hidden_units=[rssm_cfg.hidden],
-                act=rssm_cfg.act,
-                norm=rssm_cfg.norm,
-                output_dim=rssm_cfg.hidden
+            mlp(
+                in_dim=rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes,
+                mlp_dims=[rssm_cfg.hidden],
+                out_dim=rssm_cfg.hidden
             ),
             nn.Linear(rssm_cfg.hidden, output_dim)
         )
     @staticmethod
     def _build_image_encoder(image_shape: Tuple[int, int], img_enc_cfg: DictConfig) -> ImageEncoder:
-        return ImageEncoder(
-            image_shape=[1, image_shape[0], image_shape[1]],
-            channels=img_enc_cfg.channels, 
-            stride=img_enc_cfg.stride,
-            kernel_size=img_enc_cfg.kernel_size,
-            act=img_enc_cfg.act,
-            norm=img_enc_cfg.norm
-        )
+        return ImageEncoder(image_shape)
     @staticmethod
-    def _build_state_encoder(state_enc_cfg: DictConfig) -> nn.Sequential:
+    def _build_state_encoder(state_enc_cfg: DictConfig) -> StateEncoder:
         return StateEncoder(state_enc_cfg)
     
     def __init__(self, obs_dim: Tuple[int, Tuple[int, int]], cfg: DictConfig, grid_cfg: DictConfig):
@@ -188,11 +110,15 @@ class WorldModel(nn.Module):
         fmap_final_shape = self.image_encoder.final_shape
         
         # state encoder
-        state_embed_dim = state_enc_cfg.embedding_dim
-        self.state_encoder = self._build_state_encoder(state_enc_cfg)
+        self.encode_state = state_enc_cfg.encode_target_vel or state_enc_cfg.encode_quat or state_enc_cfg.encode_vel
+        if self.encode_state:
+            state_embed_dim = state_enc_cfg.embedding_dim
+            self.state_encoder = self._build_state_encoder(state_enc_cfg)
+        else:
+            state_embed_dim = 0
         
         # sequence model
-        self.rssm = RSSM.build(token_dim=math.prod(fmap_final_shape) + state_embed_dim, rssm_cfg=rssm_cfg)
+        self.rssm = RSSM.build(token_dim=fmap_final_shape + state_embed_dim, rssm_cfg=rssm_cfg)
         
         # image decoder
         if self.recon_image:
@@ -249,7 +175,10 @@ class WorldModel(nn.Module):
     @torch.jit.export
     def encode(self, obs, state, deter):
         # type: (Tensor, Tensor, Tensor) -> Tensor
-        tokens = torch.cat([self.image_encoder(obs), self.state_encoder(state)], dim=-1)
+        tokens = [self.image_encoder(obs)]
+        if self.encode_state:
+            tokens.append(self.state_encoder(state))
+        tokens = torch.cat(tokens, dim=-1)
         post_sample, _ = self.rssm._post(tokens, deter)
         return post_sample
     
@@ -278,7 +207,10 @@ class WorldModel(nn.Module):
         visible_map: Tensor # [B L N_grids]
     ):
         deter = torch.zeros(obs.size(0), self.deter_dim, device=obs.device)
-        tokens = torch.cat([self.image_encoder(obs), self.state_encoder(state)], dim=-1)   
+        tokens = [self.image_encoder(obs)]
+        if self.encode_state:
+            tokens.append(self.state_encoder(state))
+        tokens = torch.cat(tokens, dim=-1)  
         
         post_probs_list, prior_probs_list, feat_list = [], [], []
         for i in range(self.l_rollout):
@@ -370,10 +302,11 @@ class WorldModel(nn.Module):
         state_dicts = {
             "rssm": self.rssm.state_dict(),
             "image_encoder": self.image_encoder.state_dict(),
-            "state_encoder": self.state_encoder.state_dict(),
             "reward_decoder": self.reward_decoder.state_dict(),
             "termination_decoder": self.termination_decoder.state_dict()
         }
+        if self.encode_state:
+            state_dicts["state_encoder"] = self.state_encoder.state_dict()
         if self.recon_image:
             state_dicts["image_decoder"] = self.img_decoder.state_dict()
         if self.recon_state:
@@ -386,10 +319,11 @@ class WorldModel(nn.Module):
         state_dicts = torch.load(os.path.join(path, "world_model.pth"))
         self.rssm.load_state_dict(state_dicts["rssm"])
         self.image_encoder.load_state_dict(state_dicts["image_encoder"])
-        self.state_encoder.load_state_dict(state_dicts["state_encoder"])
         self.grid_decoder.load_state_dict(state_dicts["grid_decoder"])
         self.reward_decoder.load_state_dict(state_dicts["reward_decoder"])
         self.termination_decoder.load_state_dict(state_dicts["termination_decoder"])
+        if self.encode_state:
+            self.state_encoder.load_state_dict(state_dicts["state_encoder"])
         if self.recon_image:
             self.img_decoder.load_state_dict(state_dicts["image_decoder"])
         if self.recon_state:
@@ -413,11 +347,15 @@ class WorldModelTesttime(nn.Module):
         fmap_final_shape = self.img_encoder.final_shape
         
         # state encoder
-        state_embed_dim = state_enc_cfg.embedding_dim
-        self.state_encoder = WorldModel._build_state_encoder(state_enc_cfg)
+        self.encode_state = state_enc_cfg.encode_target_vel or state_enc_cfg.encode_quat or state_enc_cfg.encode_vel
+        if self.encode_state:
+            state_embed_dim = state_enc_cfg.embedding_dim
+            self.state_encoder = WorldModel._build_state_encoder(state_enc_cfg)
+        else:
+            state_embed_dim = 0
         
         # sequence model
-        self.rssm = RSSM.build(token_dim=math.prod(fmap_final_shape) + state_embed_dim, rssm_cfg=rssm_cfg)
+        self.rssm = RSSM.build(token_dim=fmap_final_shape + state_embed_dim, rssm_cfg=rssm_cfg)
     
     def encode(self, obs, state, deter):
         # type: (Tensor, Tensor, Tensor) -> Tensor

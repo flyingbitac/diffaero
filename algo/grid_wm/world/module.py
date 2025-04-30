@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
+from quaddif.network.networks import CNNBackbone, mlp
+
 class MLP(nn.Module):
     def __init__(self, input_dim:int, output_dim:int, hidden_units: List, norm:str=None, act:str=None):
         super().__init__()
@@ -27,10 +29,7 @@ class MLP(nn.Module):
 class MiniGru(nn.Module):
     def __init__(self, deter:int, stoch:int, action_dim:int, hidden:int, act:str, norm:str):
         super().__init__()
-        self.stoch_action_proj = MLP(input_dim = stoch + action_dim,
-                                     output_dim = hidden,
-                                     hidden_units = [],
-                                     act = act)
+        self.stoch_action_proj = mlp(stoch+action_dim, [], hidden)
         self._core = nn.Linear(hidden + deter, 3 * deter, bias = False)
         self._core_norm = nn.LayerNorm(3*deter)
     
@@ -45,43 +44,24 @@ class MiniGru(nn.Module):
         deter = update * cand + (1 - update) * deter
         return deter
 
+
 class ImageEncoder(nn.Module):
-    def __init__(self, image_shape:List, channels:List[int], stride:int, kernel_size:int, act:str, norm:str):
+    def __init__(self, image_shape:List):
         super().__init__()
-        if len(image_shape) == 2:
-            image_shape = [1, image_shape[0], image_shape[1]]
-        flex_img_shape = deepcopy(image_shape)
-        module_list = nn.ModuleList()
-        channels = [flex_img_shape[0]] + channels
-        for in_channel, out_channel in zip(channels[:-1], channels[1:]):
-            module_list.append(nn.Conv2d(in_channel, out_channel, kernel_size, stride, padding = stride // 2, bias = False))
-            module_list.append(getattr(nn, norm)(out_channel))
-            module_list.append(getattr(nn, act)())
-            flex_img_shape[1] = flex_img_shape[1] // stride
-            flex_img_shape[2] = flex_img_shape[2] // stride
-        flex_img_shape[0] = channels[-1]
-        self.final_shape = flex_img_shape
-        self.encoder = nn.Sequential(*module_list)
+        self.encoder = CNNBackbone([0, image_shape])
+        self.final_shape = self.encoder.out_dim
     
     def forward(self, x:torch.Tensor):
         if x.ndim == 3:
-            x = x.unsqueeze(1)
-            x = self.encoder(x)
-            x = rearrange(x, '... c h w -> ... (c h w)')
+            x = self.encoder(x.unsqueeze(1))
         elif x.ndim == 4:
             B, L, H, W = x.shape
-            x = rearrange(x, 'b l h w -> (b l) 1 h w')
-            x = self.encoder(x)
-            x = rearrange(x, '... c h w -> ... (c h w)')
-            x = rearrange(x, '(b l) ... -> b l ...', b = B)
-        # elif x.ndim == 5:
-        #     batch_size = x.size(0)
-        #     x = rearrange(x, 'b t ... -> (b t) ...')
-        #     x = self.encoder(x)
-        #     x = rearrange(x, '(b t) c h w -> b t (c h w)', b = batch_size)
+            x = self.encoder(x.reshape(B*L, 1, H, W))
+            x = x.reshape(B, L, -1)
         else:
             raise ValueError(f'Invalid input dimension {x.ndim}')
         return x
+
 
 class ImageDecoder(nn.Module):
     def __init__(self, final_image_shape:List, feat_dim:int, channels:List[int], stride:int, kernel_size:int, act:str, norm:str):
@@ -112,7 +92,8 @@ class ImageDecoder(nn.Module):
 class ImageDecoderMLP(nn.Module):
     def __init__(self, final_image_shape:List, feat_dim:int, hidden_units:List[int], act:str, norm:str):
         super().__init__()
-        self.backbone = MLP(feat_dim, hidden_units[-1], hidden_units[:-1], norm, act)
+        # self.backbone = MLP(feat_dim, hidden_units[-1], hidden_units[:-1], norm, act)
+        self.backbone = mlp(feat_dim, hidden_units[:-1], hidden_units[-1])
         self.proj = nn.Linear(hidden_units[-1], math.prod(final_image_shape))
         self.final_shape = final_image_shape
     
@@ -121,6 +102,72 @@ class ImageDecoderMLP(nn.Module):
         x = rearrange(x, '... (c h w) -> ... c h w', c=self.final_shape[0], h=self.final_shape[1])
         x = F.sigmoid(x)
         return x
+
+
+class GridDecoder(nn.Module):
+    def __init__(self, rssm_cfg: DictConfig, grid_cfg: DictConfig):
+        super().__init__()
+        input_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
+        ds_rate = 4
+        self.n_grids = math.prod(grid_cfg.n_points)
+        self.fmap_shape = [i // ds_rate for i in grid_cfg.n_points]
+        self.fmap_channels = 8
+        
+        self.input_layer = nn.Sequential(
+            nn.Linear(input_dim, self.fmap_channels * math.prod(self.fmap_shape)),
+            nn.SiLU())
+        self.up_convs = nn.Sequential(
+            nn.ConvTranspose3d(
+                in_channels=self.fmap_channels,
+                out_channels=self.fmap_channels//2,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                output_padding=1
+            ),
+            nn.SiLU(),
+            nn.Conv3d(
+                in_channels=self.fmap_channels//2,
+                out_channels=self.fmap_channels//2,
+                kernel_size=3,
+                stride=1,
+                padding=1
+            ),
+            nn.SiLU(),
+            nn.ConvTranspose3d(
+                in_channels=self.fmap_channels//2,
+                out_channels=self.fmap_channels//4,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                output_padding=1
+            ),
+            nn.SiLU(),
+            nn.Conv3d(
+                in_channels=self.fmap_channels//4,
+                out_channels=1,
+                kernel_size=3,
+                stride=1,
+                padding=1
+            )
+        )
+    
+    def forward(self, x):
+        flattened_fmap = self.input_layer(x)
+        reshaped_fmap = flattened_fmap.reshape(
+            *flattened_fmap.shape[:-1], self.fmap_channels, *self.fmap_shape)
+        flag = reshaped_fmap.ndim == 6
+        if flag:
+            B, T, C, L, W, H = reshaped_fmap.shape
+            reshaped_fmap = reshaped_fmap.reshape(B*T, C, L, W, H)
+        else:
+            B, C, L, W, H = reshaped_fmap.shape
+        out = self.up_convs(reshaped_fmap)
+        if flag:
+            out = out.reshape(B, T, self.n_grids)
+        else:
+            out = out.reshape(B, self.n_grids)
+        return out
 
 
 class StateEncoder(nn.Module):
@@ -135,14 +182,7 @@ class StateEncoder(nn.Module):
             self.encode_quat * 4 +
             self.encode_vel * 3
         )
-        
-        self.state_encoder = MLP(
-            input_dim=input_dim,
-            output_dim=state_enc_cfg.embedding_dim,
-            hidden_units=state_enc_cfg.hidden_units,
-            act=state_enc_cfg.act,
-            norm=state_enc_cfg.norm
-        )
+        self.state_encoder = mlp(input_dim, state_enc_cfg.hidden_units, state_enc_cfg.embedding_dim)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         target_vel, quat, vel = x[..., 0:3], x[..., 3:7], x[..., 7:10]
