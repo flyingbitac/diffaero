@@ -1,14 +1,16 @@
 import math
 from typing import List, Dict
-from copy import deepcopy
 
 from omegaconf import DictConfig
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 from einops import rearrange
 
-from quaddif.network.networks import CNNBackbone, mlp
+from quaddif.network.networks import CNNBackbone
+from quaddif.utils.nn import mlp
+from quaddif.utils.math import quat_rotate
 
 class MLP(nn.Module):
     def __init__(self, input_dim:int, output_dim:int, hidden_units: List, norm:str=None, act:str=None):
@@ -33,7 +35,7 @@ class MiniGru(nn.Module):
         self._core = nn.Linear(hidden + deter, 3 * deter, bias = False)
         self._core_norm = nn.LayerNorm(3*deter)
     
-    def forward(self, deter:torch.Tensor, stoch:torch.Tensor, action:torch.Tensor):
+    def forward(self, deter:Tensor, stoch:Tensor, action:Tensor):
         tokens = torch.cat([stoch, action], dim = -1)
         tokens = self.stoch_action_proj(tokens)
         parts = self._core_norm(self._core(torch.cat([tokens, deter], dim = -1)))
@@ -51,9 +53,9 @@ class ImageEncoder(nn.Module):
         self.encoder = CNNBackbone([0, image_shape])
         self.final_shape = self.encoder.out_dim
     
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:Tensor):
         if x.ndim == 3:
-            x = self.encoder(x.unsqueeze(1))
+            x = self.encoder(x.unsqueeze(1)) # 
         elif x.ndim == 4:
             B, L, H, W = x.shape
             x = self.encoder(x.reshape(B*L, 1, H, W))
@@ -77,7 +79,7 @@ class ImageDecoder(nn.Module):
         dconv_list.append(nn.ConvTranspose2d(channels[-2], channels[-1], kernel_size, stride, padding = stride // 2))
         self.decoder = nn.Sequential(*dconv_list)
     
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:Tensor):
         x = self.proj(x)
         x = rearrange(x, '... (c h w) -> ... c h w', c=self.final_shape[0], h=self.final_shape[1])
         if x.ndim == 5:
@@ -88,21 +90,31 @@ class ImageDecoder(nn.Module):
         else:
             x = F.sigmoid(self.decoder(x))
         return x
+    
+    def compute_loss(self, inputs: Tensor, targets: Tensor):
+        preds = self.forward(inputs)
+        loss = F.mse_loss(preds, targets.reshape_as(preds), reduction="none").flatten(start_dim=2).sum(dim=-1).mean()
+        return loss
 
 class ImageDecoderMLP(nn.Module):
     def __init__(self, final_image_shape:List, feat_dim:int, hidden_units:List[int], act:str, norm:str):
         super().__init__()
-        # self.backbone = MLP(feat_dim, hidden_units[-1], hidden_units[:-1], norm, act)
         self.backbone = mlp(feat_dim, hidden_units[:-1], hidden_units[-1])
         self.proj = nn.Linear(hidden_units[-1], math.prod(final_image_shape))
         self.final_shape = final_image_shape
     
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:Tensor):
         x = self.proj(self.backbone(x))
-        x = rearrange(x, '... (c h w) -> ... c h w', c=self.final_shape[0], h=self.final_shape[1])
+        B, T, _ = x.shape
+        C, H, W = self.final_shape
+        x = x.reshape(B, T, C, H, W)
         x = F.sigmoid(x)
         return x
-
+    
+    def compute_loss(self, inputs: Tensor, targets: Tensor):
+        preds = self.forward(inputs)
+        loss = F.mse_loss(preds, targets.reshape_as(preds), reduction="none").flatten(start_dim=2).sum(dim=-1).mean()
+        return loss
 
 class GridDecoder(nn.Module):
     def __init__(self, rssm_cfg: DictConfig, grid_cfg: DictConfig):
@@ -171,20 +183,20 @@ class GridDecoder(nn.Module):
 
 
 class StateEncoder(nn.Module):
-    def __init__(self, state_enc_cfg: DictConfig):
+    def __init__(self, cfg: DictConfig):
         super().__init__()
-        self.encode_target_vel: bool = state_enc_cfg.encode_target_vel
-        self.encode_quat: bool = state_enc_cfg.encode_quat
-        self.encode_vel: bool = state_enc_cfg.encode_vel
+        self.encode_target_vel: bool = cfg.encode_target_vel
+        self.encode_quat: bool = cfg.encode_quat
+        self.encode_vel: bool = cfg.encode_vel
         assert self.encode_target_vel or self.encode_quat or self.encode_vel
         input_dim = (
             self.encode_target_vel * 3 +
             self.encode_quat * 4 +
             self.encode_vel * 3
         )
-        self.state_encoder = mlp(input_dim, state_enc_cfg.hidden_units, state_enc_cfg.embedding_dim)
+        self.state_encoder = mlp(input_dim, cfg.hidden_units, cfg.embedding_dim)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         target_vel, quat, vel = x[..., 0:3], x[..., 3:7], x[..., 7:10]
         inputs = []
         if self.encode_target_vel:
@@ -195,6 +207,37 @@ class StateEncoder(nn.Module):
             inputs.append(vel)
         return self.state_encoder(torch.cat(inputs, dim=-1))
 
+
+class StateDecoder(nn.Module):
+    def __init__(self, state_dim: int, rssm_cfg: DictConfig, cfg: DictConfig):
+        super().__init__()
+        self.decode_target_vel: bool = cfg.decode_target_vel
+        self.decode_quat: bool = cfg.decode_quat
+        self.decode_vel: bool = cfg.decode_vel
+        self.decode_vel_in_body_frame: bool = cfg.decode_vel_in_body_frame
+        assert self.decode_target_vel or self.decode_quat or self.decode_vel
+        self.state_decoder = mlp(
+            in_dim=rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes,
+            mlp_dims=[rssm_cfg.hidden, rssm_cfg.hidden],
+            out_dim=state_dim
+        )
+    
+    def forward(self, x: Tensor) -> Tensor:
+        return self.state_decoder(x)
+
+    def compute_loss(self, inputs: Tensor, targets: Tensor) -> Tensor:
+        preds = self.forward(inputs)
+        target_vel, quat, vel_w = targets[..., 0:3], targets[..., 3:7], targets[..., 7:10]
+        pred_target_vel, pred_quat, pred_vel = preds[..., 0:3], preds[..., 3:7], preds[..., 7:10]
+        loss = 0.
+        if self.decode_target_vel:
+            loss = loss + F.mse_loss(pred_target_vel, target_vel)
+        if self.decode_quat:
+            loss = loss + F.mse_loss(pred_quat, quat)
+        if self.decode_vel:
+            vel_target = quat_rotate(quat, vel_w) if self.decode_vel_in_body_frame else vel_w
+            loss = loss + F.mse_loss(pred_vel, vel_target)
+        return loss
 
 class Encoder(nn.Module):
     def __init__(self, obs_space:Dict, channels:List[int], stride:int, kernel_size:int, 
@@ -240,7 +283,7 @@ class Decoder(nn.Module):
             else:
                 raise NotImplementedError
     
-    def forward(self, feats:torch.Tensor):
+    def forward(self, feats: Tensor):
         rec = {}
         if hasattr(self, 'img_decoder'):
             image = self.img_decoder(feats)

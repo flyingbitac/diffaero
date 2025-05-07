@@ -27,9 +27,10 @@ wm:
       norm: BatchNorm2d
 
     state:
-      encode_target_vel: ${algo.actor.input_target_vel}
-      encode_quat: ${algo.actor.input_quat}
-      encode_vel: ${algo.actor.input_vel}
+      encode_target_vel: False
+      encode_quat: False
+      encode_vel: False
+      
       embedding_dim: 64
       hidden_units: [64]
       act: SiLU
@@ -61,16 +62,22 @@ wm:
         norm: LayerNorm
     
     state:
-      enable: True
+      decode_target_vel: False
+      decode_quat: True
+      decode_vel: True
+      decode_vel_in_body_frame: False
     
     grid: 
       enable: True
       use_mlp: True
+    
+    reward:
+      enable: False
 
   train:
     lr: 3e-4
     grad_norm: 100.
-    grid_pos_weight: 30
+    grid_pos_weight: 15
     term_pos_weight: 100
 
     # weight of loss funcs
