@@ -90,19 +90,9 @@ class ObstacleAvoidance(BaseEnv):
     @timeit
     def step(self, action, need_obs_before_reset=True):
         # type: (Tensor, bool) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-        self.dynamics.step(action)
-        terminated, truncated = self.terminated(), self.truncated()
-        self.progress += 1
-        if self.renderer is not None:
-            self.renderer.step(**self.state_for_render())
-            self.renderer.render()
-            truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
+        terminated, truncated, success, avg_vel = super().step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
-        self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
-        avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
-        success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
         self.update_sensor_data()
         extra = {
@@ -482,11 +472,13 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             self.renderer.step(**self.state_for_render())
             self.renderer.render()
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
-        reset = terminated | truncated
-        reset_indices = reset.nonzero().view(-1)
         arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
+        truncated |= arrived & ((self.progress.float() * self.dt) > (self.arrive_time + self.wait_before_truncate))
+        avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
         success = arrived & truncated
+        reset = terminated | truncated
+        reset_indices = reset.nonzero().view(-1)
         loss, loss_components, _ = self.loss_fn(self.p.unsqueeze(1), self.v.unsqueeze(1), self.a.unsqueeze(1))
         self.update_sensor_data()
         extra = {
@@ -501,6 +493,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
                 "success_rate": success[reset],
                 "survive_rate": truncated[reset],
                 "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "avg_vel": avg_vel[success],
                 "arrive_time": self.arrive_time.clone()[success],
             },
             "sensor": self.sensor_tensor.clone()

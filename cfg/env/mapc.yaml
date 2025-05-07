@@ -6,6 +6,7 @@ length: 10
 n_envs: ${n_envs}
 n_agents: ${n_agents}
 max_time: 20
+wait_before_truncate: 5.
 max_target_vel: 5.
 min_target_vel: 5.
 

@@ -8,6 +8,7 @@ height_scale: 0.25
 n_envs: ${n_envs}
 n_agents: ${n_agents}
 max_time: 30
+wait_before_truncate: 5.
 max_target_vel: 10.
 min_target_vel: 5.
 r_drone: 0.2

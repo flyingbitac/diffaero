@@ -1,4 +1,4 @@
-from typing import Tuple, Dict, Union
+from typing import Tuple, Dict, Union, Optional
 
 from omegaconf import DictConfig
 import torch
@@ -7,6 +7,7 @@ from tensordict import TensorDict
 
 from quaddif.dynamics import build_dynamics
 from quaddif.dynamics.pointmass import point_mass_quat
+from quaddif.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
 
 class BaseEnv:
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -26,11 +27,13 @@ class BaseEnv:
         self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.long)
         self.arrive_time = torch.zeros(self.n_envs, device=device, dtype=torch.float)
         self.max_steps: int = int(cfg.max_time / cfg.dt)
+        self.wait_before_truncate: float = cfg.wait_before_truncate
         self.cfg = cfg
         self.device = device
         self.max_vel = torch.zeros(self.n_envs, device=device)
         self.min_target_vel: float = cfg.min_target_vel
         self.max_target_vel: float = cfg.max_target_vel
+        self.renderer: Optional[Union[PositionControlRenderer, ObstacleAvoidanceRenderer]]
     
     def get_observations(self, with_grad=False):
         raise NotImplementedError
@@ -73,13 +76,30 @@ class BaseEnv:
         target_dist = target_relpos.norm(dim=-1) # [n_envs]
         return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
 
-    def step(self, action, need_obs_before_reset=True) -> Tuple[
-        Union[Tensor, TensorDict],
-        Tensor,
-        Tensor,
-        Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]
-    ]:
-        raise NotImplementedError
+    def step(self, action: Tensor) -> Tuple[torch.BoolTensor, torch.BoolTensor, torch.BoolTensor, torch.FloatTensor]:
+        """Common step logic for single agent environments."""
+        # simulation step
+        self.dynamics.step(action)
+        # termination and truncation logic
+        terminated, truncated = self.terminated(), self.truncated()
+        self.progress += 1
+        if self.renderer is not None:
+            self.renderer.step(**self.state_for_render())
+            self.renderer.render()
+            # truncate if `reset_all` is commanded by the user from GUI
+            truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
+        # arrival flag denoting if the agent has reached the target position
+        arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
+        curr_time = self.progress.float() * self.dt
+        # time that the agents approached the target positions for the first time
+        self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), curr_time, self.arrive_time))
+        # truncate if the agents have been at the target positions for a while
+        truncated |= arrived & (curr_time > (self.arrive_time + self.wait_before_truncate))
+        # average velocity of the agents
+        avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
+        # success flag denoting whether the agent has reached the target position at the end of the episode
+        success = arrived & truncated
+        return terminated, truncated, success, avg_vel
     
     def state_for_render(self):
         # type: () -> Tensor

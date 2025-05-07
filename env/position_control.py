@@ -29,19 +29,9 @@ class PositionControl(BaseEnv):
     @timeit
     def step(self, action, need_obs_before_reset=True):
         # type: (Tensor, bool) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
-        self.dynamics.step(action)
-        terminated, truncated = self.terminated(), self.truncated()
-        self.progress += 1
-        if self.renderer is not None:
-            self.renderer.step(**self.state_for_render())
-            self.renderer.render()
-            truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
+        terminated, truncated, success, avg_vel = super().step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
-        self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
-        avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
-        success = arrived & truncated
         loss, loss_components = self.loss_fn(action)
         extra = {
             "truncated": truncated,
@@ -217,11 +207,12 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             self.renderer.step(**self.state_for_render())
             self.renderer.render()
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
-        reset = terminated | truncated
-        reset_indices = reset.nonzero().view(-1)
         arrived = torch.norm(self.p - self.target_pos, dim=-1).lt(0.5).all(dim=-1) # [n_envs, ]
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
+        truncated |= arrived & ((self.progress.float() * self.dt) > (self.arrive_time + 5))
         success = arrived & truncated
+        reset = terminated | truncated
+        reset_indices = reset.nonzero().view(-1)
         loss, loss_components = self.loss_fn(action)
         
         extra = {
