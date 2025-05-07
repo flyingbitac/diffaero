@@ -294,6 +294,8 @@ class TestRunner:
     def close(self):
         if any(dict(self.cfg.export).values()):
             ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
+            if not os.path.exists(ckpt_path):
+                os.makedirs(ckpt_path)
             self.agent.export(
                 path=ckpt_path,
                 export_jit=self.cfg.export.jit,
