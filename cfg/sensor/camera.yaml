@@ -4,7 +4,7 @@ name: camera
 width: 16
 height: 9
 horizontal_fov: 86.0
-max_dist: 10.0
+max_dist: 5.0
 
 onboard_position: [0.2, 0., 0.05]
 onboard_attitude: [0., 0., 0., 1.] # xyzw quaternion
