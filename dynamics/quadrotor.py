@@ -9,19 +9,17 @@ class QuadrotorModel:
     def __init__(
         self,
         cfg: DictConfig,
-        n_envs: int,
-        dt: float,
-        n_substeps: int,
         device: torch.device
     ):
         self.type = "quadrotor"
         self.device = device
         self.state_dim = 13
         self.action_dim = 4
-        self._state = torch.zeros(n_envs, self.state_dim, device=device)
-        self._acc = torch.zeros(n_envs, 3, device=device)
-        self.dt = dt
-        self.n_substeps = n_substeps
+        self.n_envs: int = cfg.n_envs
+        self.dt: float = cfg.dt
+        self.n_substeps: int = cfg.n_substeps
+        self._state = torch.zeros(self.n_envs, self.state_dim, device=device)
+        self._acc = torch.zeros(self.n_envs, 3, device=device)
         
         if cfg.solver_type == "euler":
             self.solver = EulerIntegral
