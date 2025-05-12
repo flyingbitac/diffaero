@@ -217,7 +217,12 @@ class ObstacleAvoidance(BaseEnv):
         self.dynamics._state = torch.where(state_mask, new_state, self.dynamics._state)
         self.dynamics.reset_idx(env_idx)
         
-        min_init_dist = 1.3 * self.L
+        # min_init_dist = 1.2 * self.L
+        min_init_dist = (
+            ((xy_max - xy_min - 1) / 2) ** 2 + 
+            ((xy_max - xy_min - 1) / 2) ** 2 + 
+            ((z_max - z_min - 1) / 2) ** 2
+        ) ** 0.5
         # randomly select a target position that meets the minimum distance constraint
         N = 10
         x = y = torch.linspace(xy_min, xy_max, N, device=self.device)
@@ -278,8 +283,10 @@ class ObstacleAvoidance(BaseEnv):
         return self.collision()
     
     def truncated(self) -> torch.Tensor:
-        out_of_bound = torch.any(self.p < -1.5*self.L, dim=-1) | \
-                       torch.any(self.p >  1.5*self.L, dim=-1)
+        out_of_bound = torch.any(self.p[..., :2] < -1.5*self.L, dim=-1) | \
+                       torch.any(self.p[..., :2] >  1.5*self.L, dim=-1) | \
+                       (self.p[..., -1] < -self.L * self.height_scale) | \
+                       (self.p[..., -1] >  self.L * self.height_scale)
         return (self.progress >= self.max_steps) | out_of_bound
 
 class ObstacleAvoidanceGrid(ObstacleAvoidance):
