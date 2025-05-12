@@ -188,9 +188,9 @@ class BaseRenderer:
         self._init_drone_model()
         
         if self.ground_plane:
-            ground_plane_size = int(N.item() * self.L * 2 + self.L)
             edge_length = 5
-            self.n_plane: int = torch.ceil(torch.tensor(ground_plane_size / edge_length)).int().item()
+            ground_plane_size = max(edge_length*2, int(N.item() * self.L * 2 + self.L))
+            self.n_plane: int = max(2, int(ground_plane_size / edge_length + 1))
             n_ground_faces = self.n_plane * self.n_plane
             n_ground_vertices = n_ground_faces * 4
             n_ground_indices = n_ground_faces * 6
@@ -253,7 +253,7 @@ class BaseRenderer:
         self.gui_handle = self.gui_window.get_gui()
         self.gui_scene = self.gui_window.get_scene()
         self.gui_camera = ti.ui.make_camera()
-        env_bound = self.env_origin.max().item()
+        env_bound = max(5, self.env_origin.max().item())
         self.gui_camera.position(-1.5*env_bound, 0.5*env_bound, -1.8*env_bound)  # x, y, z
         self.gui_camera.lookat(0, -0.1*env_bound, 0)
         self.gui_camera.up(0, 1, 0) 
