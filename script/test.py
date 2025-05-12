@@ -22,7 +22,7 @@ def main(cfg: DictConfig):
     if cfg.device is None and cfg.n_jobs > 1:
         sleep(random.random() * 3)
     device_idx = get_idle_device() if cfg.device is None else cfg.device
-    device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != "-1" else "cpu"
+    device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != -1 else "cpu"
     print(f"Using device {device}.")
     device = torch.device(device)
     
