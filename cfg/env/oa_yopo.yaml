@@ -18,7 +18,10 @@ ground_plane: True
 n_substeps: 1
 
 obstacles:
+  walls: False
+  ceiling: False
   n_obstacles: ${env.n_obstacles}
+  height_scale: ${env.height_scale}
   sphere_percentage: 0.5
   sphere_radius_range: [0.6, 2.0, 0.2] # [min, max, step]
   cube_lwh_range: [0.6, 3.0, 0.4] # [min, max, step]

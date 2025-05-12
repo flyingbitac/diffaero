@@ -7,13 +7,16 @@ from torch.nn import functional as F
 
 class ObstacleManager:
     def __init__(self, cfg: DictConfig, n_envs: int, env_spacing: float, device: torch.device):
-        self.cfg = cfg
         self.n_envs = n_envs
         self.env_spacing = env_spacing
         self.obst_cfg = cfg
-        self.n_obstacles: int = self.obst_cfg.n_obstacles
-        self.n_spheres: int = int(self.n_obstacles * self.obst_cfg.sphere_percentage)
-        self.n_cubes: int = self.n_obstacles - self.n_spheres
+        self.walls: bool = cfg.walls
+        self.ceiling: bool = cfg.ceiling
+        self.height_scale: float = cfg.height_scale
+        n_obstacles: int = self.obst_cfg.n_obstacles
+        self.n_spheres: int = int(n_obstacles * self.obst_cfg.sphere_percentage)
+        self.n_cubes: int = n_obstacles - self.n_spheres + 4 * int(self.walls) + int(self.ceiling)
+        self.n_obstacles = self.n_cubes + self.n_spheres
         self.sphere_rmin, self.sphere_rmax, self.sphere_rstep = list(self.obst_cfg.sphere_radius_range)
         # lwh for Length(along x axis), Width(along y axis) and Height(along z axis)
         self.cube_lwhmin, self.cube_lwhmax, self.cube_lwhstep = list(self.obst_cfg.cube_lwh_range)
@@ -46,6 +49,19 @@ class ObstacleManager:
         selected_lwh = np.random.choice(lwh, size=(self.n_envs, self.n_cubes, 3), replace=True)
         self.lwh_cubes.copy_(torch.from_numpy(selected_lwh).to(self.device))
         self.r_obstacles[:, self.n_spheres:] = self.lwh_cubes.pow(2).sum(dim=-1).sqrt()
+        
+        L, H = self.env_spacing, self.height_scale * self.env_spacing
+        if self.walls:
+            self.lwh_cubes[:, :4] = torch.tensor([
+                [2*L, 0.1, 2*H],
+                [2*L, 0.1, 2*H],
+                [0.1, 2*L, 2*H],
+                [0.1, 2*L, 2*H]
+            ], device=self.device, dtype=self.lwh_cubes.dtype).unsqueeze(0)
+        if self.ceiling:
+            self.lwh_cubes[:, int(self.walls)*4] = torch.tensor([
+                [2*L, 2*L, 0.1],
+            ], device=self.device, dtype=self.lwh_cubes.dtype)
     
     def randomize_asset_pose(
         self,
@@ -107,6 +123,20 @@ class ObstacleManager:
         
         # assert torch.all(torch.norm(self.p_obstacles[env_idx] - target_pos.unsqueeze(1), dim=-1) >= safety_range)
         # assert torch.all(torch.norm(self.p_obstacles[env_idx] - drone_init_pos.unsqueeze(1), dim=-1) >= safety_range)
+        
+        L, H = self.env_spacing, self.height_scale * self.env_spacing
+        if self.walls:
+            self.p_obstacles[env_idx, self.n_spheres:self.n_spheres+4] = torch.tensor([
+                [0, L, 0],
+                [0, -L, 0],
+                [L, 0, 0],
+                [-L, 0, 0],
+            ], device=self.p_obstacles.device, dtype=self.p_obstacles.dtype).unsqueeze(0)
+        if self.ceiling:
+            self.p_obstacles[env_idx, self.n_spheres+4*int(self.walls)] = torch.tensor([
+                [0, 0, H],
+            ], device=self.p_obstacles.device, dtype=self.p_obstacles.dtype)
+            
         
         self.box_min[env_idx] = self.p_cubes[env_idx] - self.lwh_cubes[env_idx] / 2.
         self.box_max[env_idx] = self.p_cubes[env_idx] + self.lwh_cubes[env_idx] / 2.
