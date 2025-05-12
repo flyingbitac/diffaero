@@ -145,7 +145,7 @@ class ObstacleAvoidance(BaseEnv):
         avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
         oa_loss = approaching_penalty - 0.5 * avoiding_reward
         
-        collision_loss = self.collision().float() * 10.
+        collision_loss = self.collision().float()
         
         if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
@@ -156,7 +156,13 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
-            total_loss = 0.5 * vel_loss + 4 * oa_loss + 0.005 * jerk_loss + 5 * pos_loss + collision_loss
+            total_loss = (
+                self.loss_cfg.pointmass.vel * vel_loss +
+                self.loss_cfg.pointmass.oa * oa_loss +
+                self.loss_cfg.pointmass.jerk * jerk_loss +
+                self.loss_cfg.pointmass.pos * pos_loss +
+                self.loss_cfg.pointmass.collision * collision_loss
+            )
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -173,7 +179,13 @@ class ObstacleAvoidance(BaseEnv):
             
             jerk_loss = self._w.norm(dim=-1)
             
-            total_loss = vel_loss + 3 * oa_loss + jerk_loss + 5 * pos_loss
+            total_loss = (
+                self.loss_cfg.quadrotor.vel * vel_loss +
+                self.loss_cfg.quadrotor.oa * oa_loss +
+                self.loss_cfg.quadrotor.jerk * jerk_loss +
+                self.loss_cfg.quadrotor.pos * pos_loss +
+                self.loss_cfg.quadrotor.collision * collision_loss
+            )
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -231,8 +243,7 @@ class ObstacleAvoidance(BaseEnv):
         mask = self.obstacle_manager.randomize_asset_pose(
             env_idx=env_idx,
             drone_init_pos=self.p[env_idx],
-            target_pos=self.target_pos[env_idx],
-            safety_range=self.r_drone+1.5
+            target_pos=self.target_pos[env_idx]
         )
             
         self.progress[env_idx] = 0
@@ -543,7 +554,12 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         collision = collision | (p[..., 2] - self.r_drone < self.z_ground_plane)
         # out_of_bound = torch.any(p < -1.5*self.L, dim=-1) | torch.any(p > 1.5*self.L, dim=-1)
         
-        total_loss = vel_loss + 4 * oa_loss + 0 * pos_loss + collision.float() * 0
+        total_loss = (
+            self.loss_cfg.pointmass.vel * vel_loss +
+            self.loss_cfg.pointmass.oa * oa_loss +
+            self.loss_cfg.pointmass.pos * pos_loss +
+            self.loss_cfg.pointmass.collision * collision.float()
+        )
         loss_components = {
             "vel_loss": vel_loss.mean().item(),
             "pos_loss": pos_loss.mean().item(),

@@ -71,8 +71,11 @@ class PositionControl(BaseEnv):
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
-            
-            total_loss = vel_loss + 0.005 * jerk_loss + pos_loss
+            total_loss = (
+                self.loss_cfg.pointmass.vel * vel_loss +
+                self.loss_cfg.pointmass.jerk * jerk_loss +
+                self.loss_cfg.pointmass.pos * pos_loss
+            )
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -82,7 +85,7 @@ class PositionControl(BaseEnv):
         else:
             rotation_matrix_b2i = T.quaternion_to_matrix(self._q.roll(1, dims=-1)).clamp_(min=-1.0+1e-6, max=1.0-1e-6)
             yaw, pitch, roll = T.matrix_to_euler_angles(rotation_matrix_b2i, "ZYX").unbind(dim=-1)
-            attitute_loss = roll**2 + pitch**2
+            attitude_loss = roll**2 + pitch**2
             
             vel_diff = (self._v - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
@@ -91,11 +94,16 @@ class PositionControl(BaseEnv):
             
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            total_loss = vel_loss + 0.2 * jerk_loss + pos_loss + 0.1 * attitute_loss
+            total_loss = (
+                self.loss_cfg.quadrotor.vel * vel_loss +
+                self.loss_cfg.quadrotor.jerk * jerk_loss +
+                self.loss_cfg.quadrotor.pos * pos_loss +
+                self.loss_cfg.quadrotor.attitude * attitude_loss
+            )
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
-                "attitute_loss": attitute_loss.mean().item(),
+                "attitute_loss": attitude_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
@@ -302,7 +310,12 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
 
             collide_loss = ( -10 * (self.internal_min_distance-0.5) ).exp()
 
-            total_loss = (vel_loss + 0.005 * jerk_loss + pos_loss + collide_loss * 16).sum(dim=-1)
+            total_loss = (
+                self.loss_cfg.pointmass.vel * vel_loss +
+                self.loss_cfg.pointmass.jerk * jerk_loss +
+                self.loss_cfg.pointmass.pos * pos_loss +
+                self.loss_cfg.pointmass.collision * collide_loss
+            ).sum(dim=-1)
 
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),

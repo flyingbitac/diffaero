@@ -13,6 +13,17 @@ min_target_vel: 5.
 solver_type: 
 n_substeps: 1
 
+loss:
+  pointmass:
+    vel: 1.
+    jerk: 0.005
+    pos: 0.1
+  quadrotor:
+    vel: 1.
+    jerk: 0.001
+    pos: 3.
+    attitude: 0.1
+
 defaults:
   - render: pc_render
   - _self_

@@ -671,12 +671,13 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.cube_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
         
         # initialize meshes of the spheres
+        xyz = torch.zeros_like(self.obstacle_manager.p_spheres[:self.n_envs])
         vertices_tensor, indices_tensor, color_tensor = add_sphere(
-            xyz=torch.zeros_like(self.obstacle_manager.p_spheres[:self.n_envs]),
+            xyz=xyz,
             radius=self.obstacle_manager.r_spheres[:self.n_envs],
             lat_segments=self.sphere_n_segments,
             lon_segments=self.sphere_n_segments * 2,
-            color=torch.tensor([[self.sphere_color]], device=self.device).expand_as(lwh)
+            color=torch.tensor([[self.sphere_color]], device=self.device).expand_as(xyz)
         )
         self.sphere_vertices_tensor.copy_(vertices_tensor)
         self.sphere_mesh_dict["indices"].from_torch(indices_tensor.flatten())

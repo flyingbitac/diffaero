@@ -24,6 +24,14 @@ obstacles:
   cube_lwh_range: [0.6, 3.0, 0.4] # [min, max, step]
   randpos_std_min: 2
   randpos_std_max: 3
+  safety_range: 1.7
+
+loss:
+  pointmass:
+    vel: 1.
+    oa: 4.
+    pos: 0.
+    collision: 0.
 
 defaults:
   - render: oa_render

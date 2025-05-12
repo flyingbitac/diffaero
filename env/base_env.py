@@ -29,6 +29,7 @@ class BaseEnv:
         self.max_steps: int = int(cfg.max_time / cfg.dt)
         self.wait_before_truncate: float = cfg.wait_before_truncate
         self.cfg = cfg
+        self.loss_cfg: DictConfig = cfg.loss
         self.device = device
         self.max_vel = torch.zeros(self.n_envs, device=device)
         self.min_target_vel: float = cfg.min_target_vel

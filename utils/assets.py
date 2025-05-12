@@ -19,6 +19,7 @@ class ObstacleManager:
         self.cube_lwhmin, self.cube_lwhmax, self.cube_lwhstep = list(self.obst_cfg.cube_lwh_range)
         self.randpos_minstd: float = self.obst_cfg.randpos_std_min
         self.randpos_maxstd: float = self.obst_cfg.randpos_std_max
+        self.safety_range: float = cfg.safety_range
         self.device = device
         
         self.r_obstacles = torch.empty(self.n_envs, self.n_obstacles, device=self.device)
@@ -52,12 +53,13 @@ class ObstacleManager:
         drone_init_pos: torch.Tensor, # [num_resets, 3]
         target_pos: torch.Tensor, # [num_resets, 3]
         n_enabled_obstacles: Optional[torch.Tensor] = None, # [num_resets]
-        safety_range: float = 0.5
     ) -> torch.Tensor:
         if self.n_obstacles == 0:
             return self.p_obstacles[env_idx]
         
-        safety_range: torch.Tensor = self.r_obstacles[env_idx] + safety_range # [n_resets, n_obstacles]
+        n_resets = len(env_idx)
+        
+        safety_range: torch.Tensor = self.r_obstacles[env_idx] + self.safety_range # [n_resets, n_obstacles]
         
         rel_pos = target_pos - drone_init_pos
         # target_axis: unit vector in the direction of the target's relative position
@@ -66,20 +68,20 @@ class ObstacleManager:
         horizontal_axis = F.normalize(torch.stack([
             -rel_pos[:, 1],
             rel_pos[:, 0],
-            torch.zeros(len(env_idx), device=self.device)], dim=-1), dim=-1)
+            torch.zeros(n_resets, device=self.device)], dim=-1), dim=-1)
         # third_axis: unit vector perpendicular to two other vectors
         third_axis = torch.cross(target_axis, horizontal_axis, dim=-1)
         
         # sample uniformally along the target axis
-        target_axis_ratio = torch.rand(len(env_idx), self.n_obstacles, 1, device=self.device)
+        target_axis_ratio = torch.rand(n_resets, self.n_obstacles, 1, device=self.device)
         target_axis_pos = target_axis_ratio * rel_pos.unsqueeze(1)
         
         # sample from gaussian distribution
         std = torch.abs(target_axis_ratio - 0.5) * 2 * (self.randpos_maxstd - self.randpos_minstd) + self.randpos_minstd
         horizontal_axis_ratio = torch.randn(
-            len(env_idx), self.n_obstacles, 1, device=self.device) * std
+            n_resets, self.n_obstacles, 1, device=self.device) * std
         third_axis_ratio = torch.randn(
-            len(env_idx), self.n_obstacles, 1, device=self.device) * std
+            n_resets, self.n_obstacles, 1, device=self.device) * std
         
         horizontal_axis_pos = horizontal_axis_ratio * horizontal_axis.unsqueeze(1)
         third_axis_pos = third_axis_ratio * third_axis.unsqueeze(1)
@@ -112,7 +114,7 @@ class ObstacleManager:
         # move disabled obstacles under the ground plane
         if n_enabled_obstacles is not None:
             enabled_obstacles_idx = torch.randperm(self.n_obstacles, device=self.device)
-            indices = torch.arange(self.n_obstacles, device=self.device).expand(len(env_idx), -1)
+            indices = torch.arange(self.n_obstacles, device=self.device).expand(n_resets, -1)
             mask = (indices >= n_enabled_obstacles.unsqueeze(-1))[:, enabled_obstacles_idx]
             mask = mask.unsqueeze(-1).expand(-1, -1, 3).clone()
             mask[:, :, :2] = False
