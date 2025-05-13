@@ -123,66 +123,21 @@ class ContinuousPointMassModel(PointMassModelBase):
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
 
 
-class PointMassStep(autograd.Function):
-    @staticmethod
-    def forward(
-        ctx,
-        pos: Tensor,
-        vel: Tensor,
-        acc: Tensor,
-        cmd: Tensor,
-        dt: float,
-        lmbda: float,
-        G: Tensor,
-        alpha: float = 1.
-    ):
-        ctx.save_for_backward(
-            torch.tensor(dt, device=pos.device),
-            torch.tensor(-alpha * dt, device=pos.device).exp(),
-            torch.tensor(lmbda, device=pos.device)
-        )
-        pos_ = pos + dt * (vel + 0.5 * (acc + G) * dt)
-        acc_ = torch.lerp(acc, cmd, lmbda)
-        vel_ = vel + dt * (0.5 * (acc + acc_) + G)
-        return pos_, vel_, acc_
-    
-    @staticmethod
-    def backward(ctx, grad_pos_, grad_vel_, grad_acc_):
-        dt, decay_factor, lmbda = ctx.saved_tensors
-        grad_pos = grad_vel = grad_acc = grad_cmd = None
-        # variables with underline are gradients
-        # propagated back from downstream operations
-        grad_pos = grad_pos_
-        grad_vel = grad_vel_ + dt * grad_pos_
-        grad_acc = (
-            0.5 * grad_pos_ * dt ** 2 +
-            0.5 * (2 - lmbda) * dt * grad_vel_ +
-            (1 - lmbda) * grad_acc_
-        )
-        grad_cmd = lmbda * (0.5 * dt * grad_vel_ + grad_acc_)
-        
-        decayed_grad_pos = decay_factor * grad_pos if ctx.needs_input_grad[0] else None
-        decayed_grad_vel = decay_factor * grad_vel if ctx.needs_input_grad[1] else None
-        decayed_grad_acc = decay_factor * grad_acc if ctx.needs_input_grad[2] else None
-        decayed_grad_cmd = decay_factor * grad_cmd if ctx.needs_input_grad[3] else None
-        
-        return decayed_grad_pos, decayed_grad_vel, decayed_grad_acc, decayed_grad_cmd, None, None, None, None
-
-
 class DiscretePointMassModel(PointMassModelBase):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
         self.alpha: float = cfg.alpha
-    
-    def detach(self):
-        self._state.detach_()
-        self._vel_ema.detach_()
 
     def step(self, U: Tensor) -> None:
-        pos, vel, acc = self._state.chunk(3, dim=-1)
-        pos, vel, acc = PointMassStep.apply(
-            pos, vel, acc, U, self.dt, self.lmbda, self._G_vec, self.alpha)
-        self._state = torch.cat([pos, vel, acc], dim=-1)
+        p, v, a = self._state.chunk(3, dim=-1)
+        
+        next_p = p + self.dt * (v + 0.5 * (a + self._G_vec) * self.dt)
+        next_a = torch.lerp(a, U, self.lmbda)
+        next_v = v + self.dt * (0.5 * (a + next_a) + self._G_vec)
+        next_state = torch.cat([next_p, next_v, next_a], dim=-1)
+        if self.alpha > 0:
+            next_state = GradientDecay.apply(next_state, self.alpha, self.dt)
+        self._state = next_state
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor)
 
 
