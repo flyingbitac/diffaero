@@ -14,8 +14,8 @@ from quaddif.utils.runner import timeit
 class PositionControl(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super(PositionControl, self).__init__(cfg, device)
-        self.obs_dim = 10
-        self.action_dim = self.dynamics.action_dim
+        self.last_action_in_obs: bool = cfg.last_action_in_obs
+        self.obs_dim = 10 + self.action_dim * int(self.last_action_in_obs)
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
     
     @timeit
@@ -24,6 +24,8 @@ class PositionControl(BaseEnv):
             obs = torch.cat([self.target_vel, self.q, self._v], dim=-1)
         else:
             obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+        if self.last_action_in_obs:
+            obs = torch.cat([obs, self.last_action], dim=-1)
         return obs if with_grad else obs.detach()
     
     @timeit
@@ -142,12 +144,14 @@ class PositionControl(BaseEnv):
 class MultiAgentPositionControl(BaseEnvMultiAgent):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super(MultiAgentPositionControl, self).__init__(cfg, device)
+        self.last_action_in_obs: bool = cfg.last_action_in_obs
         self.obs_dim = (
             3 * self.n_agents + # target velocities of all agents
             4 + # quaternion of its own
             3 + # velocity of its own
             (3 + 3) * (self.n_agents - 1) + # relative positions and velocities of all OTHER agents
-            3 * self.n_agents # targets' relative positions of all agents
+            3 * self.n_agents + # targets' relative positions of all agents
+            self.action_dim * int(self.last_action_in_obs) # last action
         )
         self.global_state_dim = (
             (3 + 4 + 3) * self.n_agents + # positions, quaternions, velocities of all agents
@@ -187,6 +191,8 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
                 rel_vel_all_others, # [n_envs, n_agents, (n_agents-1)*3]
                 related_pos         # [n_envs, n_agents, n_agents*3]
             ], dim=-1)
+            if self.last_action_in_obs:
+                obs = torch.cat([obs, self.last_action], dim=-1)
         else:
             raise NotImplementedError("Observations for quadrotor dynamics are not implemented yet")
         return obs if with_grad else obs.detach()

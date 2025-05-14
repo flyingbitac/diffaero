@@ -38,7 +38,8 @@ class ObstacleAvoidance(BaseEnv):
             # relative position of obstacles as additional observation
             H, W = self.n_obstacles, 3
         
-        self.obs_dim = (10, (H, W)) # flattened depth image as additional observation
+        self.last_action_in_obs: bool = cfg.last_action_in_obs
+        self.obs_dim = (10 + self.action_dim * int(self.last_action_in_obs), (H, W)) # flattened depth image as additional observation
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
         need_renderer = (not cfg.render.headless) or (hasattr(cfg.render, "record_video") and cfg.render.record_video)
@@ -52,7 +53,6 @@ class ObstacleAvoidance(BaseEnv):
         else:
             self.renderer = None
         
-        self.action_dim = self.dynamics.action_dim
         self.r_drone: float = cfg.r_drone
     
     @timeit
@@ -61,6 +61,8 @@ class ObstacleAvoidance(BaseEnv):
             obs = torch.cat([self.target_vel, self.q, self._v], dim=-1)
         else:
             obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+        if self.last_action_in_obs:
+            obs = torch.cat([obs, self.last_action], dim=-1)
         obs = TensorDict({
             "state": obs, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
         obs = obs if with_grad else obs.detach()

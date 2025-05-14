@@ -9,6 +9,7 @@ max_time: 20
 wait_before_truncate: 5.
 max_target_vel: 5.
 min_target_vel: 5.
+last_action_in_obs: False
 
 solver_type: 
 n_substeps: 1

@@ -13,6 +13,7 @@ class BaseEnv:
     def __init__(self, cfg: DictConfig, device: torch.device):
         self.dynamics = build_dynamics(cfg.dynamics, device)
         self.dynamic_type: str = self.dynamics.type
+        self.action_dim = self.dynamics.action_dim
         self.n_agents: int = cfg.n_agents
         self.dt: float = cfg.dt
         self.L: float = cfg.length
@@ -21,8 +22,10 @@ class BaseEnv:
             assert self.n_agents == 1
             self.target_pos = torch.zeros(self.n_envs, 3, device=device)
             self.init_pos = torch.zeros(self.n_envs, 3, device=device)
+            self.last_action = torch.zeros(self.n_envs, self.action_dim, device=device)
         if self.n_agents > 1:
             self.init_pos = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
+            self.last_action = torch.zeros(self.n_envs, self.n_agents, self.action_dim, device=device)
             assert isinstance(self, BaseEnvMultiAgent)
         self.progress = torch.zeros(self.n_envs, device=device, dtype=torch.long)
         self.arrive_time = torch.zeros(self.n_envs, device=device, dtype=torch.float)
@@ -100,6 +103,8 @@ class BaseEnv:
         avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
         # success flag denoting whether the agent has reached the target position at the end of the episode
         success = arrived & truncated
+        # update last action
+        self.last_action.copy_(action.detach())
         return terminated, truncated, success, avg_vel
     
     def state_for_render(self):
