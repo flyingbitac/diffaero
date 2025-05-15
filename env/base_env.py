@@ -7,10 +7,12 @@ from tensordict import TensorDict
 
 from quaddif.dynamics import build_dynamics
 from quaddif.dynamics.pointmass import point_mass_quat
+from quaddif.utils.randomizer import RandomizerManager
 from quaddif.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
 
 class BaseEnv:
     def __init__(self, cfg: DictConfig, device: torch.device):
+        self.randomizer = RandomizerManager(cfg.randomizer)
         self.dynamics = build_dynamics(cfg.dynamics, device)
         self.dynamic_type: str = self.dynamics.type
         self.action_dim = self.dynamics.action_dim
@@ -80,7 +82,7 @@ class BaseEnv:
         target_dist = target_relpos.norm(dim=-1) # [n_envs]
         return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
 
-    def step(self, action: Tensor) -> Tuple[torch.BoolTensor, torch.BoolTensor, torch.BoolTensor, torch.FloatTensor]:
+    def step(self, action: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Common step logic for single agent environments."""
         # simulation step
         self.dynamics.step(action)
@@ -108,7 +110,7 @@ class BaseEnv:
         return terminated, truncated, success, avg_vel
     
     def state_for_render(self):
-        # type: () -> Tensor
+        # type: () -> Dict[str, Tensor]
         raise NotImplementedError
     
     def loss_fn(self, target_vel, action):

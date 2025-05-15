@@ -54,4 +54,5 @@ grid:
 
 defaults:
   - render: oa_render
+  - randomizer: default_randomizer
   - _self_

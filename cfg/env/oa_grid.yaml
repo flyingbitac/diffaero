@@ -43,10 +43,6 @@ loss:
     jerk: 1.
     pos: 5.
 
-defaults:
-  - render: oa_render
-  - _self_
-
 grid:
   x_min: -6.
   x_max:  6.
@@ -55,3 +51,8 @@ grid:
   z_min: -3.
   z_max:  3.
   n_points: [20, 20, 10]
+
+defaults:
+  - render: oa_render
+  - randomizer: default_randomizer
+  - _self_

@@ -40,6 +40,8 @@ env:
   dt: 0.0333
   min_target_vel: ${max_vel}
   max_target_vel: ${max_vel}
+  randomizer:
+    enable: False
 
 hydra:
   run:

@@ -60,7 +60,7 @@ class PositionControl(BaseEnv):
             self.reset_idx(reset_indices)
         return self.get_observations(), loss, terminated, extra
     
-    def state_for_render(self) -> Tensor:
+    def state_for_render(self) -> Dict[str, Tensor]:
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
     @timeit
@@ -113,6 +113,7 @@ class PositionControl(BaseEnv):
 
     @timeit
     def reset_idx(self, env_idx):
+        self.randomizer.randomize(env_idx)
         n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
@@ -258,6 +259,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
     
     @timeit
     def reset_idx(self, env_idx):
+        self.randomizer.randomize(env_idx)
         n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
