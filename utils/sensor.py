@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
-from quaddif.utils.math import quaternion_apply
+from quaddif.utils.math import quaternion_apply, mat_vec_mul
 
 @torch.jit.script
 def raydist3d_sphere(
@@ -44,8 +44,9 @@ def raydist3d_sphere(
 
 @torch.jit.script
 def raydist3d_cube(
-    box_min: Tensor, # [n_envs, n_cubes, 3]
-    box_max: Tensor, # [n_envs, n_cubes, 3]
+    p_cubes: Tensor, # [n_envs, n_cubes, 3]
+    lwh_cubes: Tensor, # [n_envs, n_cubes, 3]
+    rpy_cubes: Tensor, # [n_envs, n_cubes, 3]
     start: Tensor, # [n_envs, n_rays, 3]
     direction: Tensor, # [n_envs, n_rays, 3]
     max_dist: float
@@ -55,8 +56,9 @@ def raydist3d_cube(
     the cubic obstacles.
 
     Args:
-        obst_pos (torch.Tensor): The center position of the sphcubicere obstacles.
-        obst_lwh (torch.Tensor): The length, width and height of the cubic obstacles.
+        p_cubes (torch.Tensor): The center position of the cube obstacles.
+        lwh_cubes (torch.Tensor): The length, width, and height of the cube obstacles.
+        rpy_cubes (torch.Tensor): The roll, pitch, and yaw angles of the cube obstacles.
         start (torch.Tensor): The start point of the ray.
         direction (torch.Tensor): The direction of the ray.
         max_dist (float): The maximum traveling distance of the ray.
@@ -64,10 +66,15 @@ def raydist3d_cube(
     Returns:
         torch.Tensor: The distance of the ray to the nearest obstacle's surface.
     """
-    _tmin = (box_min.unsqueeze(1) - start.unsqueeze(2)) / direction.unsqueeze(2) # [n_envs, n_rays, n_cubes, 3]
-    _tmax = (box_max.unsqueeze(1) - start.unsqueeze(2)) / direction.unsqueeze(2) # [n_envs, n_rays, n_cubes, 3]
-    tmin = torch.where(direction.unsqueeze(2) < 0, _tmax, _tmin) # [n_envs, n_rays, n_cubes, 3]
-    tmax = torch.where(direction.unsqueeze(2) < 0, _tmin, _tmax) # [n_envs, n_rays, n_cubes, 3]
+    rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2) # [n_envs, n_cubes, 3, 3]
+    start_rotated = mat_vec_mul(rotmat.unsqueeze(1), (start.unsqueeze(2)-p_cubes.unsqueeze(1))) # [n_envs, n_rays, n_cubes, 3]
+    direction_rotated = mat_vec_mul(rotmat.unsqueeze(1), direction.unsqueeze(2)) # [n_envs, n_rays, n_cubes, 3]
+    box_min = -lwh_cubes / 2. # [n_envs, n_cubes, 3]
+    box_max =  lwh_cubes / 2. # [n_envs, n_cubes, 3]
+    _tmin = (box_min.unsqueeze(1) - start_rotated) / direction_rotated # [n_envs, n_rays, n_cubes, 3]
+    _tmax = (box_max.unsqueeze(1) - start_rotated) / direction_rotated # [n_envs, n_rays, n_cubes, 3]
+    tmin = torch.where(direction_rotated < 0, _tmax, _tmin) # [n_envs, n_rays, n_cubes, 3]
+    tmax = torch.where(direction_rotated < 0, _tmin, _tmax) # [n_envs, n_rays, n_cubes, 3]
     tentry = torch.max(tmin, dim=-1).values # [n_envs, n_rays, n_cubes]
     texit = torch.min(tmax, dim=-1).values # [n_envs, n_rays, n_cubes]
     valid = torch.logical_and(tentry <= texit, texit >= 0) # [n_envs, n_rays, n_cubes]
@@ -112,8 +119,9 @@ def ray_directions_world2body(
 def get_ray_dist(
     sphere_pos: Tensor, # [n_envs, n_spheres, 3]
     sphere_r: Tensor, # [n_envs, n_spheres]
-    box_min: Tensor, # [n_envs, n_cubes, 3]
-    box_max: Tensor, # [n_envs, n_cubes, 3]
+    cube_pos: Tensor, # [n_envs, n_cubes, 3]
+    cube_lwh: Tensor, # [n_envs, n_cubes, 3]
+    cube_rpy: Tensor, # [n_envs, n_cubes, 3]
     start: Tensor, # [n_envs, n_rays, 3]
     ray_directions_b: Tensor, # [n_envs, n_rays, 3]
     quat_xyzw: Tensor, # [n_envs, 4]
@@ -123,7 +131,7 @@ def get_ray_dist(
     H, W = ray_directions_b.shape[:2]
     ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
     raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions_w, max_dist) # [n_envs, n_rays]
-    raydist_cube: Tensor = raydist3d_cube(box_min, box_max, start, ray_directions_w, max_dist) # [n_envs, n_rays]
+    raydist_cube: Tensor = raydist3d_cube(cube_pos, cube_lwh, cube_rpy, start, ray_directions_w, max_dist) # [n_envs, n_rays]
     raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
     if z_ground_plane is not None:
         raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions_w, max_dist) # [n_envs, n_rays]
@@ -160,8 +168,9 @@ class Camera:
         self,
         sphere_pos: Tensor, # [n_envs, n_spheres, 3]
         sphere_r: Tensor, # [n_envs, n_spheres]
-        box_min: Tensor, # [n_envs, n_cubes, 3]
-        box_max: Tensor, # [n_envs, n_cubes, 3]
+        cube_pos: Tensor, # [n_envs, n_cubes, 3]
+        cube_lwh: Tensor, # [n_envs, n_cubes, 3]
+        cube_rpy: Tensor, # [n_envs, n_cubes, 3]
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
         z_ground_plane: Optional[float] = None
@@ -169,8 +178,9 @@ class Camera:
         return get_ray_dist(
             sphere_pos=sphere_pos,
             sphere_r=sphere_r,
-            box_min=box_min,
-            box_max=box_max,
+            cube_pos=cube_pos,
+            cube_lwh=cube_lwh,
+            cube_rpy=cube_rpy,
             start=start,
             ray_directions_b=self.ray_directions,
             quat_xyzw=quat_xyzw,
@@ -228,8 +238,9 @@ class LiDAR:
         self,
         sphere_pos: Tensor, # [n_envs, n_spheres, 3]
         sphere_r: Tensor, # [n_envs, n_spheres]
-        box_min: Tensor, # [n_envs, n_cubes, 3]
-        box_max: Tensor, # [n_envs, n_cubes, 3]
+        cube_pos: Tensor, # [n_envs, n_cubes, 3]
+        cube_lwh: Tensor, # [n_envs, n_cubes, 3]
+        cube_rpy: Tensor, # [n_envs, n_cubes, 3]
         start: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
         z_ground_plane: Optional[float] = None
@@ -237,8 +248,9 @@ class LiDAR:
         return get_ray_dist(
             sphere_pos=sphere_pos,
             sphere_r=sphere_r,
-            box_min=box_min,
-            box_max=box_max,
+            cube_pos=cube_pos,
+            cube_lwh=cube_lwh,
+            cube_rpy=cube_rpy,
             start=start,
             ray_directions_b=self.ray_directions,
             quat_xyzw=quat_xyzw,

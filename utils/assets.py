@@ -28,6 +28,7 @@ class ObstacleManager:
         self.r_obstacles = torch.empty(self.n_envs, self.n_obstacles, device=self.device)
         self.p_obstacles = torch.zeros(self.n_envs, self.n_obstacles, 3, device=device)
         self.lwh_cubes = torch.empty(self.n_envs, self.n_cubes, 3, device=device)
+        self.rpy_cubes = torch.zeros(self.n_envs, self.n_cubes, 3, device=device)
         self.box_min = torch.zeros(self.n_envs, self.n_cubes, 3, device=device)
         self.box_max = torch.zeros(self.n_envs, self.n_cubes, 3, device=device)
         self.generate_obstacles()
@@ -124,6 +125,8 @@ class ObstacleManager:
         # assert torch.all(torch.norm(self.p_obstacles[env_idx] - target_pos.unsqueeze(1), dim=-1) >= safety_range)
         # assert torch.all(torch.norm(self.p_obstacles[env_idx] - drone_init_pos.unsqueeze(1), dim=-1) >= safety_range)
         
+        self.rpy_cubes[env_idx] = torch.rand(n_resets, self.n_cubes, 3, device=self.device) * 2 * torch.pi
+
         L, H = self.env_spacing, self.height_scale * self.env_spacing
         if self.walls:
             self.p_obstacles[env_idx, self.n_spheres:self.n_spheres+4] = torch.tensor([

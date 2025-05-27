@@ -79,8 +79,9 @@ class ObstacleAvoidance(BaseEnv):
             self.sensor_tensor.copy_(sensor(
                 sphere_pos=self.obstacle_manager.p_spheres,
                 sphere_r=self.obstacle_manager.r_spheres,
-                box_min=self.obstacle_manager.box_min,
-                box_max=self.obstacle_manager.box_max,
+                cube_pos=self.obstacle_manager.p_cubes,
+                cube_lwh=self.obstacle_manager.lwh_cubes,
+                cube_rpy=self.obstacle_manager.rpy_cubes,
                 start=self.p.unsqueeze(1).expand(-1, H*W, -1),
                 quat_xyzw=self.q,
                 z_ground_plane=self.z_ground_plane))

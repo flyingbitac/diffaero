@@ -657,11 +657,11 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
     def _init_obstacles(self):
         # initialize meshes of the cubes
         lwh = self.obstacle_manager.lwh_cubes[:self.n_envs]
-        xyz = rpy = torch.zeros_like(lwh)
+        xyz = torch.zeros_like(lwh)
         vertices_tensor, indices_tensor, color_tensor = add_box(
             xyz=xyz,
             lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
-            rpy=rpy,
+            rpy=self.obstacle_manager.rpy_cubes[:self.n_envs],
             color=torch.tensor([[self.cube_color]], device=self.device).expand_as(lwh)
         )
         self.cube_vertices_tensor.copy_(vertices_tensor)
@@ -691,6 +691,15 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self._update_obstacles()
     
     def _update_obstacles(self):
+        # update the pose of the cubes
+        vertices_tensor, indices_tensor, color_tensor = add_box(
+            xyz=torch.zeros(self.n_envs, self.obstacle_manager.n_cubes, 3, device=self.device),
+            lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
+            rpy=self.obstacle_manager.rpy_cubes[:self.n_envs],
+            color=torch.tensor([[self.cube_color]], device=self.device).expand(self.n_envs, self.obstacle_manager.n_cubes, -1)
+        )
+        self.cube_vertices_tensor.copy_(vertices_tensor)
+        
         idx = self.gui_states["tracking_env_idx"]
         cube_vertices_tensor = (
             self.cube_vertices_tensor + 

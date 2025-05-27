@@ -166,3 +166,19 @@ def quaternion_apply(quat_wxyz: Tensor, point: Tensor) -> Tensor:
         quaternion_invert(quat_wxyz),
     )
     return out[..., 1:]
+
+@torch.jit.script
+def mat_vec_mul(mat: Tensor, vec: Tensor) -> Tensor:
+    """
+    Multiply a matrix with a vector.
+    
+    Args:
+        mat: A tensor of shape (..., n, m).
+        vec: A tensor of shape (..., m).
+    
+    Returns:
+        A tensor of shape (..., n).
+    """
+    if mat.dim() < 2 or vec.dim() < 1:
+        raise ValueError("Input dimensions are not compatible for matrix-vector multiplication.")
+    return torch.matmul(mat, vec.unsqueeze(-1)).squeeze(-1)
