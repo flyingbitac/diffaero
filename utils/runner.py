@@ -15,10 +15,10 @@ from omegaconf import DictConfig
 from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
 from quaddif.utils.logger import Logger
 
-def display_image(state, action, policy_info, env_info):
+def display_image(obs, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
     if "sensor" in env_info.keys():
-        N, C = min(64, state.size(0)), 1
+        N, C = min(64, obs['perception'].size(0)), 1
         H, W = env_info["sensor"].shape[-2:]
         NH = NW = int(N**0.5)
         scale = 4
