@@ -155,12 +155,12 @@ class PPO:
         with torch.no_grad():
             for t in range(cfg.l_rollout):
                 action, policy_info = self.act(obs)
-                next_obs, loss, terminated, env_info = env.step(env.rescale_action(action))
+                next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
                 self.add(
                     obs=obs,
                     sample=policy_info["sample"],
                     logprob=policy_info["logprob"],
-                    reward=1-loss*0.1,
+                    reward=reward,
                     done=terminated,
                     value=policy_info["value"],
                     next_value=self.agent.get_value(tensordict2tuple(env_info["next_obs_before_reset"])))

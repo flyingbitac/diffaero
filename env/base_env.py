@@ -6,7 +6,7 @@ from torch import Tensor
 from tensordict import TensorDict
 
 from quaddif.dynamics import build_dynamics
-from quaddif.dynamics.pointmass import point_mass_quat
+from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
 from quaddif.utils.randomizer import RandomizerManager
 from quaddif.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
 
@@ -34,7 +34,8 @@ class BaseEnv:
         self.max_steps: int = int(cfg.max_time / cfg.dt)
         self.wait_before_truncate: float = cfg.wait_before_truncate
         self.cfg = cfg
-        self.loss_cfg: DictConfig = cfg.loss
+        self.loss_weights: DictConfig = cfg.loss_weights
+        self.reward_weights: DictConfig = cfg.reward_weights
         self.device = device
         self.max_vel = torch.zeros(self.n_envs, device=device)
         self.min_target_vel: float = cfg.min_target_vel
@@ -57,7 +58,7 @@ class BaseEnv:
     def w(self): return self.dynamics.w
     @property
     def q(self) -> Tensor:
-        if self.dynamic_type == "pointmass" and self.dynamics.align_yaw_with_target_direction:
+        if isinstance(self.dynamics, PointMassModelBase) and self.dynamics.align_yaw_with_target_direction:
             return point_mass_quat(self.a, orientation=self.target_vel)
         else:
             return self.dynamics.q
@@ -71,7 +72,7 @@ class BaseEnv:
     def _w(self): return self.dynamics._w
     @property
     def _q(self) -> Tensor:
-        if self.dynamic_type == "pointmass" and self.dynamics.align_yaw_with_target_direction:
+        if isinstance(self.dynamics, PointMassModelBase) and self.dynamics.align_yaw_with_target_direction:
             return point_mass_quat(self._a, orientation=self.target_vel)
         else:
             return self.dynamics._q
@@ -82,7 +83,7 @@ class BaseEnv:
         target_dist = target_relpos.norm(dim=-1) # [n_envs]
         return target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
 
-    def step(self, action: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    def _step(self, action: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """Common step logic for single agent environments."""
         # simulation step
         self.dynamics.step(action)
@@ -113,8 +114,8 @@ class BaseEnv:
         # type: () -> Dict[str, Tensor]
         raise NotImplementedError
     
-    def loss_fn(self, target_vel, action):
-        # type: (Tensor, Tensor) -> Tuple[Tensor, Dict[str, float]]
+    def loss_and_reward(self, target_vel, action):
+        # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
         raise NotImplementedError
 
     def reset_idx(self, env_idx: Tensor):
@@ -139,10 +140,6 @@ class BaseEnvMultiAgent(BaseEnv):
         assert self.n_agents > 1
         self.target_pos_base = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
         self.target_pos_rel  = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
-
-    def step(self, action, need_global_state_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-        raise NotImplementedError
 
     @property
     def target_pos(self):

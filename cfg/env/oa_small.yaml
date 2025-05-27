@@ -30,7 +30,21 @@ obstacles:
   randpos_std_max: 1.5
   safety_range: 1.0
 
-loss:
+loss_weights:
+  pointmass:
+    vel: 1.
+    oa: 2.
+    jerk: 0.005
+    pos: 5.
+    collision: 10.
+  quadrotor:
+    vel: 1.
+    oa: 1.
+    jerk: 1.
+    pos: 5.
+
+reward_weights:
+  constant: 4.
   pointmass:
     vel: 1.
     oa: 2.

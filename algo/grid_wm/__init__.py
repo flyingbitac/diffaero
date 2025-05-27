@@ -68,7 +68,7 @@ class GRIDWM:
         self.entropy_loss = torch.zeros(1, device=device)
         self.actor_loss = torch.zeros(1, device=device)
         self.device = device
-        self.deter: Tensor = None
+        self.deter: Tensor | None = None
     
     def make_state_input(self, obs: TensorDict) -> Tensor:
         state = obs["state"]
@@ -154,7 +154,7 @@ class GRIDWM:
         rollout_obs, rollout_dones, rollout_actions, rollout_rewards = [], [], [], []
         for _ in range(self.l_rollout):
             action, policy_info = self.act(obs)
-            next_obs, loss, terminated, env_info = env.step(env.rescale_action(action), need_obs_before_reset=False)
+            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), need_obs_before_reset=False)
             self.reset(env_info['reset'])
             self.record_loss(loss, policy_info, env_info)
             rollout_obs.append(obs)

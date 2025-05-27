@@ -173,7 +173,7 @@ class SHAC:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(obs)
-            next_obs, loss, terminated, env_info = env.step(env.rescale_action(action))
+            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(

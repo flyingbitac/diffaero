@@ -14,7 +14,15 @@ last_action_in_obs: False
 solver_type: 
 n_substeps: 1
 
-loss:
+loss_weights:
+  pointmass:
+    vel: 1.
+    jerk: 0.005
+    pos: 1.
+    collision: 16.
+
+reward_weights:
+  constant: 4.
   pointmass:
     vel: 1.
     jerk: 0.005

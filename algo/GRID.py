@@ -275,7 +275,7 @@ class GRID:
         rollout_obs, rollout_dones, rollout_actions = [], [], []
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(obs)
-            next_obs, loss, terminated, env_info = env.step(env.rescale_action(action), need_obs_before_reset=False)
+            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), need_obs_before_reset=False)
             self.record_loss(loss, policy_info, env_info)
             rollout_obs.append(obs)
             rollout_actions.append(action)

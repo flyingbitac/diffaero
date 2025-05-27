@@ -91,11 +91,11 @@ class ObstacleAvoidance(BaseEnv):
     
     @timeit
     def step(self, action, need_obs_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-        terminated, truncated, success, avg_vel = super().step(action)
+        # type: (Tensor, bool) -> Tuple[TensorDict, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+        terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        loss, loss_components = self.loss_fn(action)
+        loss, reward, loss_components = self.loss_and_reward(action)
         self.update_sensor_data()
         extra = {
             "truncated": truncated,
@@ -118,14 +118,14 @@ class ObstacleAvoidance(BaseEnv):
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.get_observations(), loss, terminated, extra
+        return self.get_observations(), (loss, reward), terminated, extra
     
     def state_for_render(self):
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
     @timeit
-    def loss_fn(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
+    def loss_and_reward(self, action):
+        # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
         virtual_radius = 0.2
         # calculating the closest point on each sphere to the quadrotor
         sphere_relpos = self.obstacle_manager.p_spheres - self.p.unsqueeze(1) # [n_envs, n_spheres, 3]
@@ -159,12 +159,20 @@ class ObstacleAvoidance(BaseEnv):
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             
             total_loss = (
-                self.loss_cfg.pointmass.vel * vel_loss +
-                self.loss_cfg.pointmass.oa * oa_loss +
-                self.loss_cfg.pointmass.jerk * jerk_loss +
-                self.loss_cfg.pointmass.pos * pos_loss +
-                self.loss_cfg.pointmass.collision * collision_loss
+                self.loss_weights.pointmass.vel * vel_loss +
+                self.loss_weights.pointmass.oa * oa_loss +
+                self.loss_weights.pointmass.jerk * jerk_loss +
+                self.loss_weights.pointmass.pos * pos_loss +
+                self.loss_weights.pointmass.collision * collision_loss
             )
+            total_reward = (
+                self.reward_weights.constant - 
+                self.reward_weights.pointmass.vel * vel_loss -
+                self.reward_weights.pointmass.oa * oa_loss -
+                self.reward_weights.pointmass.jerk * jerk_loss -
+                self.reward_weights.pointmass.pos * pos_loss -
+                self.reward_weights.pointmass.collision * collision_loss
+            ).detach()
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -182,12 +190,20 @@ class ObstacleAvoidance(BaseEnv):
             jerk_loss = self._w.norm(dim=-1)
             
             total_loss = (
-                self.loss_cfg.quadrotor.vel * vel_loss +
-                self.loss_cfg.quadrotor.oa * oa_loss +
-                self.loss_cfg.quadrotor.jerk * jerk_loss +
-                self.loss_cfg.quadrotor.pos * pos_loss +
-                self.loss_cfg.quadrotor.collision * collision_loss
+                self.loss_weights.quadrotor.vel * vel_loss +
+                self.loss_weights.quadrotor.oa * oa_loss +
+                self.loss_weights.quadrotor.jerk * jerk_loss +
+                self.loss_weights.quadrotor.pos * pos_loss +
+                self.loss_weights.quadrotor.collision * collision_loss
             )
+            total_reward = (
+                self.reward_weights.constant - 
+                self.reward_weights.quadrotor.vel * vel_loss -
+                self.reward_weights.quadrotor.oa * oa_loss -
+                self.reward_weights.quadrotor.jerk * jerk_loss -
+                self.reward_weights.quadrotor.pos * pos_loss -
+                self.reward_weights.quadrotor.collision * collision_loss
+            ).detach()
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -196,7 +212,7 @@ class ObstacleAvoidance(BaseEnv):
                 "oa_loss": oa_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
-        return total_loss, loss_components
+        return total_loss, total_reward, loss_components
 
     @timeit
     def reset_idx(self, env_idx):
@@ -565,10 +581,10 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         # out_of_bound = torch.any(p < -1.5*self.L, dim=-1) | torch.any(p > 1.5*self.L, dim=-1)
         
         total_loss = (
-            self.loss_cfg.pointmass.vel * vel_loss +
-            self.loss_cfg.pointmass.oa * oa_loss +
-            self.loss_cfg.pointmass.pos * pos_loss +
-            self.loss_cfg.pointmass.collision * collision.float()
+            self.loss_weights.pointmass.vel * vel_loss +
+            self.loss_weights.pointmass.oa * oa_loss +
+            self.loss_weights.pointmass.pos * pos_loss +
+            self.loss_weights.pointmass.collision * collision.float()
         )
         loss_components = {
             "vel_loss": vel_loss.mean().item(),

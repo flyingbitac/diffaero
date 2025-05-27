@@ -73,7 +73,7 @@ class RecordEpisodeStatistics:
         return getattr(self.env, name)
     
     def step(self, *args, **kwargs):
-        state, loss, terminated, extra = self.env.step(*args, **kwargs)
+        state, (loss, reward), terminated, extra = self.env.step(*args, **kwargs)
         # dictionary to be used to store scalar metrics
         extra["stats"] = {} # Dict[str, float]
         # traverse through all metrics to be sliding-window-averaged
@@ -89,7 +89,7 @@ class RecordEpisodeStatistics:
             if l_window > 0:
                 extra["stats"][k] = self.stats[k][-l_window:].mean().item()
             self.window_length[k] = l_window
-        return state, loss, terminated, extra
+        return state, (loss, reward), terminated, extra
 
 
 class TrainRunner:

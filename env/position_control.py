@@ -7,6 +7,7 @@ from torch import Tensor
 from pytorch3d import transforms as T
 
 from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
+from quaddif.dynamics.pointmass import PointMassModelBase
 from quaddif.utils.render import PositionControlRenderer
 from quaddif.utils.math import rand_range
 from quaddif.utils.runner import timeit
@@ -30,11 +31,11 @@ class PositionControl(BaseEnv):
     
     @timeit
     def step(self, action, need_obs_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
-        terminated, truncated, success, avg_vel = super().step(action)
+        # type: (Tensor, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
+        terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        loss, loss_components = self.loss_fn(action)
+        loss, reward, loss_components = self.loss_and_reward(action)
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
@@ -58,26 +59,31 @@ class PositionControl(BaseEnv):
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.get_observations(), loss, terminated, extra
+        return self.get_observations(), (loss, reward), terminated, extra
     
     def state_for_render(self) -> Dict[str, Tensor]:
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
     
     @timeit
-    def loss_fn(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
-        if self.dynamic_type == "pointmass":
+    def loss_and_reward(self, action):
+        # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
+        if isinstance(self.dynamics, PointMassModelBase):
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-            
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
-            
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             total_loss = (
-                self.loss_cfg.pointmass.vel * vel_loss +
-                self.loss_cfg.pointmass.jerk * jerk_loss +
-                self.loss_cfg.pointmass.pos * pos_loss
+                self.loss_weights.pointmass.vel * vel_loss +
+                self.loss_weights.pointmass.jerk * jerk_loss +
+                self.loss_weights.pointmass.pos * pos_loss
             )
+            total_reward = (
+                self.reward_weights.constant - 
+                self.reward_weights.pointmass.vel * vel_loss -
+                self.reward_weights.pointmass.jerk * jerk_loss -
+                self.reward_weights.pointmass.pos * pos_loss
+            ).detach()
+            
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
@@ -88,20 +94,25 @@ class PositionControl(BaseEnv):
             rotation_matrix_b2i = T.quaternion_to_matrix(self._q.roll(1, dims=-1)).clamp_(min=-1.0+1e-6, max=1.0-1e-6)
             yaw, pitch, roll = T.matrix_to_euler_angles(rotation_matrix_b2i, "ZYX").unbind(dim=-1)
             attitude_loss = roll**2 + pitch**2
-            
             vel_diff = (self._v - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-            
             jerk_loss = self._w.norm(dim=-1)
-            
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
             total_loss = (
-                self.loss_cfg.quadrotor.vel * vel_loss +
-                self.loss_cfg.quadrotor.jerk * jerk_loss +
-                self.loss_cfg.quadrotor.pos * pos_loss +
-                self.loss_cfg.quadrotor.attitude * attitude_loss
+                self.loss_weights.quadrotor.vel * vel_loss +
+                self.loss_weights.quadrotor.jerk * jerk_loss +
+                self.loss_weights.quadrotor.pos * pos_loss +
+                self.loss_weights.quadrotor.attitude * attitude_loss
             )
+            total_reward = (
+                self.reward_weights.constant - 
+                self.reward_weights.quadrotor.vel * vel_loss -
+                self.reward_weights.quadrotor.jerk * jerk_loss -
+                self.reward_weights.quadrotor.pos * pos_loss -
+                self.reward_weights.quadrotor.attitude * attitude_loss
+            ).detach()
+            
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
@@ -109,7 +120,7 @@ class PositionControl(BaseEnv):
                 "pos_loss": pos_loss.mean().item(),
                 "total_loss": total_loss.mean().item()
             }
-        return total_loss, loss_components
+        return total_loss, total_reward, loss_components
 
     @timeit
     def reset_idx(self, env_idx):
@@ -214,7 +225,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
     
     @timeit
     def step(self, action, need_global_state_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tensor, Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
+        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         self.dynamics.step(action)
         (terminated, collision, out_of_bound), truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -228,7 +239,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         success = arrived & truncated
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        loss, loss_components = self.loss_fn(action)
+        loss, reward, loss_components = self.loss_and_reward(action)
         
         extra = {
             "truncated": truncated,
@@ -255,7 +266,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             extra["next_global_state_before_reset"] = self.get_global_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.get_obs_and_state(), loss, terminated, extra
+        return self.get_obs_and_state(), (loss, reward), terminated, extra
     
     @timeit
     def reset_idx(self, env_idx):
@@ -302,9 +313,9 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
 
     @timeit
-    def loss_fn(self, action):
-        # type: (Tensor) -> Tuple[Tensor, Dict[str, float]]
-        if self.dynamic_type == "pointmass":
+    def loss_and_reward(self, action):
+        # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
+        if isinstance(self.dynamics, PointMassModelBase):
 
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
@@ -319,11 +330,19 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             collide_loss = ( -10 * (self.internal_min_distance-0.5) ).exp()
 
             total_loss = (
-                self.loss_cfg.pointmass.vel * vel_loss +
-                self.loss_cfg.pointmass.jerk * jerk_loss +
-                self.loss_cfg.pointmass.pos * pos_loss +
-                self.loss_cfg.pointmass.collision * collide_loss
+                self.loss_weights.pointmass.vel * vel_loss +
+                self.loss_weights.pointmass.jerk * jerk_loss +
+                self.loss_weights.pointmass.pos * pos_loss +
+                self.loss_weights.pointmass.collision * collide_loss
             ).sum(dim=-1)
+            
+            total_reward = (
+                self.reward_weights.constant - 
+                self.reward_weights.pointmass.vel * vel_loss -
+                self.reward_weights.pointmass.jerk * jerk_loss -
+                self.reward_weights.pointmass.pos * pos_loss -
+                self.reward_weights.pointmass.collision * collide_loss
+            ).sum(dim=-1).detach()
 
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
@@ -335,7 +354,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             }
         else:
             raise NotImplementedError
-        return total_loss, loss_components
+        return total_loss, total_reward, loss_components
 
     @timeit
     def terminated(self) -> Tensor:

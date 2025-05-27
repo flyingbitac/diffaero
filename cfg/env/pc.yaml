@@ -14,7 +14,7 @@ last_action_in_obs: False
 solver_type: 
 n_substeps: 1
 
-loss:
+loss_weights:
   pointmass:
     vel: 1.
     jerk: 0.005
@@ -24,6 +24,21 @@ loss:
     jerk: 0.001
     pos: 3.
     attitude: 0.1
+
+reward_weights:
+  constant: 4.
+  pointmass:
+    vel: 1.
+    jerk: 0.005
+    pos: 0.1
+  quadrotor:
+    vel: 1.
+    jerk: 0.001
+    pos: 3.
+    attitude: 0.1
+
+render:
+  env_spacing: 0.5
 
 defaults:
   - render: pc_render

@@ -213,8 +213,7 @@ class World_Agent:
                     self.grid = self.grid.float()
             else:
                 action = torch.randn(self.n_envs,3,device=state.device)
-            next_obs,rewards,terminated,env_info = env.step(env.rescale_action(action))
-            rewards = 10.*(1-rewards*0.1)
+            next_obs, (loss, rewards), terminated, env_info = env.step(env.rescale_action(action))
             self.replaybuffer.append(state, action, rewards, terminated, perception, grid, visible_map)
             
             if terminated.any():
