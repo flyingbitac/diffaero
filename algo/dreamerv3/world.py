@@ -72,7 +72,7 @@ def train_worldmodel(
         for _ in range(training_hyper.worldmodel_update_freq):
             sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid, sample_visible_map = \
                 replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
-            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision, (grid_gt, grid_pred) = \
+            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision = \
                 world_model.compute_loss(
                     sample_state,
                     sample_perception,
@@ -103,7 +103,7 @@ def train_worldmodel(
         'WorldModel/state_grid_precision':grid_precision.item(),
     }
 
-    return world_info, grid_gt, grid_pred
+    return world_info
 
 class World_Agent:
     def __init__(self, cfg: DictConfig, env: Union[PositionControl, ObstacleAvoidance], device: torch.device):
@@ -222,14 +222,10 @@ class World_Agent:
                         self.hidden[i] = 0
         
         if self.replaybuffer.ready():
-            world_info, grid_gt, grid_pred = train_worldmodel(self.state_model, self.replaybuffer, self.opt, self.training_hyper, self.scaler)
+            world_info = train_worldmodel(self.state_model, self.replaybuffer, self.opt, self.training_hyper, self.scaler)
             agent_info = train_agents(self.agent, self.world_model_env, self.world_agent_cfg)
             policy_info.update(world_info)
             policy_info.update(agent_info)
-            policy_info.update({
-                "grid_gt": grid_gt,
-                "grid_pred": grid_pred
-            })
 
         obs = next_obs
         self.num_steps+=1

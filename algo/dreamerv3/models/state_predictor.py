@@ -385,13 +385,7 @@ class DepthStateModel(nn.Module):
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
         total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss + grid_loss
         
-        n_grid = grid.sum(dim=-1)
-        env_idx, time_idx = torch.where(n_grid == n_grid.max())
-        env_idx, time_idx = env_idx[0], time_idx[0]
-        grid_gt = grid[env_idx, time_idx].reshape(20, 20, 10)
-        grid_pred = (grid_logits > 0)[env_idx, time_idx].reshape(20, 20, 10)
-        
-        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision, (grid_gt, grid_pred)
+        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision
 
 if __name__=='__main__':
 

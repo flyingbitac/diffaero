@@ -1,4 +1,5 @@
 name: world
+n_envs: ${n_envs}
 
 common:
   device: cuda:1
@@ -47,6 +48,7 @@ state_predictor:
     use_simnorm: False
     only_state: False
     img_recon_loss_weight: 1.
+    grid_loss_pos_weight: 30
     use_grid: False
     grid_dim: 4000
     enable_rec: True
