@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 import math
 import os
 
@@ -207,7 +207,7 @@ class WorldModel(nn.Module):
         terminals: Tensor,  # [B T]
         gt_grids: Tensor,   # [B T N_grids]
         visible_map: Tensor # [B T N_grids]
-    ):
+    ) -> Tuple[Dict[str, float], Dict[str, float], Optional[Tensor]]:
         deter = torch.zeros(obs.size(0), self.deter_dim, device=obs.device)
         tokens = [self.image_encoder(obs)]
         if self.encode_state:

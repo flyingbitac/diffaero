@@ -13,5 +13,5 @@ DYNAMICS_ALIAS = {
 }
 
 def build_dynamics(cfg, device):
-    # type: (DictConfig, torch.device) -> Union[PointMassModelBase, QuadrotorModel]
+    # type: (DictConfig, torch.device) -> Union[ContinuousPointMassModel, DiscretePointMassModel, QuadrotorModel]
     return DYNAMICS_ALIAS[cfg.name](cfg, device)

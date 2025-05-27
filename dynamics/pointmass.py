@@ -112,6 +112,14 @@ class PointMassModelBase:
     def _w(self) -> Tensor:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")
         return torch.zeros_like(self.p)
+    
+    def step(self, U: Tensor) -> None:
+        """Step the model with the given action U.
+
+        Args:
+            U (Tensor): The action tensor of shape (n_envs, n_agents, 3).
+        """
+        raise NotImplementedError("This method should be implemented in subclasses.")
 
 
 class ContinuousPointMassModel(PointMassModelBase):

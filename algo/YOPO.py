@@ -1,4 +1,4 @@
-from typing import *
+from typing import Tuple, Optional
 import os
 import sys
 sys.path.append('..')
@@ -260,7 +260,6 @@ class YOPO:
                 # pva_w = self.dynamics_step(env, pva_w, a_t_w)
                 # loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
                 loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
-                torch.cum
                 loss.mean().backward()
                 losses.append(loss.mean().item())
                 coef_best = coef_best - 1 * coef_best.grad

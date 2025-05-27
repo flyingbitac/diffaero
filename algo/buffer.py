@@ -209,6 +209,6 @@ class RolloutBufferGRID:
         self.size = min(self.size + n, self.max_size)
     
     def sample(self, batch_size):
-        # type: (int) -> Tuple[Tensor]
+        # type: (int) -> Tuple[TensorDict, Tensor, Tensor, Tensor]
         ind = torch.randint(0, self.size, size=(batch_size,), device=self.device)
         return self.obs[ind], self.actions[ind], self.dones[ind], self.rewards[ind]
