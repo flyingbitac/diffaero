@@ -29,9 +29,8 @@ class BaseController:
         # upper bound of controller output (actual normed force & torque)
         self.max_thrust = torch.tensor(cfg.max_normed_thrust, device=device)
         self.max_torque = torch.tensor(list(cfg.max_normed_torque), device=device)
-
-    def __call__(self, state, action):
-        # type: (torch.Tensor, torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]
+    
+    def __call__(self, *args, **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
     def postprocess(self, normed_thrust, normed_torque):
@@ -95,10 +94,10 @@ class RateController(BaseController):
         angvel_err = desired_angvel_b - actual_angvel_b
         
         # Ω × JΩ
-        cross = torch.cross(actual_angvel_b, (self.inertia @ actual_angvel_b.T).T, dim=1)
+        cross = torch.cross(actual_angvel_b, (self.inertia @ actual_angvel_b.unsqueeze(-1)).squeeze(-1), dim=1)
         cross.div_(torch.max(cross.norm(dim=-1, keepdim=True) / 100,
                              torch.tensor(1., device=cross.device)).detach())
         angacc = self.torque_ratio * self.K_angvel * angvel_err
-        torque = (self.inertia @ angacc.T).T + cross
+        torque = (self.inertia @ angacc.unsqueeze(-1)).squeeze(-1) + cross
         thrust = action[:, 0] * self.thrust_ratio * self.gravity * self.mass
         return thrust, torque
