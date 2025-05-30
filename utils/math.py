@@ -1,4 +1,4 @@
-from typing import Callable, Union, Optional, Tuple
+from typing import Callable, Union, Optional, Tuple, List
 
 import torch
 from torch import Tensor
@@ -137,7 +137,14 @@ def axis_rotmat(axis: str, angle: Tensor) -> Tensor:
 
     return torch.stack(R_flat, -1).reshape(angle.shape + (3, 3))
 
-def rand_range(min: float, max: float, size: Tuple[int, int], device: Optional[torch.device]=None):
+def rand_range(
+    min: float,
+    max: float,
+    size: Union[int, Tuple[int, ...]],
+    device: torch.device
+):
+    if isinstance(size, int):
+        size = (size,)
     return torch.rand(*size, device=device) * (max - min) + min
 
 @torch.jit.script

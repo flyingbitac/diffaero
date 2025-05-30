@@ -82,6 +82,41 @@ def raydist3d_cube(
     return raydist.min(dim=-1).values # [n_envs, n_rays]
 
 @torch.jit.script
+def raydist3d_cube_no_rotation(
+    p_cubes: Tensor, # [n_envs, n_cubes, 3]
+    lwh_cubes: Tensor, # [n_envs, n_cubes, 3]
+    start: Tensor, # [n_envs, n_rays, 3]
+    direction: Tensor, # [n_envs, n_rays, 3]
+    max_dist: float
+) -> Tensor:
+    """Compute the ray distance based on the start of the ray,
+    the direction of the ray, and the position and radius of 
+    the cubic obstacles.
+
+    Args:
+        p_cubes (torch.Tensor): The center position of the cube obstacles.
+        lwh_cubes (torch.Tensor): The length, width, and height of the cube obstacles.
+        start (torch.Tensor): The start point of the ray.
+        direction (torch.Tensor): The direction of the ray.
+        max_dist (float): The maximum traveling distance of the ray.
+
+    Returns:
+        torch.Tensor: The distance of the ray to the nearest obstacle's surface.
+    """
+    box_min = (p_cubes - lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
+    box_max = (p_cubes + lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
+    start, direction = start.unsqueeze(2), direction.unsqueeze(2) # [n_envs, n_rays, 3]
+    _tmin = (box_min - start) / direction # [n_envs, n_rays, n_cubes, 3]
+    _tmax = (box_max - start) / direction # [n_envs, n_rays, n_cubes, 3]
+    tmin = torch.where(direction < 0, _tmax, _tmin) # [n_envs, n_rays, n_cubes, 3]
+    tmax = torch.where(direction < 0, _tmin, _tmax) # [n_envs, n_rays, n_cubes, 3]
+    tentry = torch.max(tmin, dim=-1).values # [n_envs, n_rays, n_cubes]
+    texit = torch.min(tmax, dim=-1).values # [n_envs, n_rays, n_cubes]
+    valid = torch.logical_and(tentry <= texit, texit >= 0) # [n_envs, n_rays, n_cubes]
+    raydist = torch.where(valid, tentry, max_dist) # [n_envs, n_rays, n_cubes]
+    return raydist.min(dim=-1).values # [n_envs, n_rays]
+
+@torch.jit.script
 def raydist3d_ground_plane(
     z_ground_plane: float,
     start: Tensor, # [n_envs, n_rays, 3]
@@ -131,7 +166,10 @@ def get_ray_dist(
     H, W = ray_directions_b.shape[:2]
     ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
     raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions_w, max_dist) # [n_envs, n_rays]
-    raydist_cube: Tensor = raydist3d_cube(cube_pos, cube_lwh, cube_rpy, start, ray_directions_w, max_dist) # [n_envs, n_rays]
+    if torch.all(cube_rpy == 0.):
+        raydist_cube: Tensor = raydist3d_cube_no_rotation(cube_pos, cube_lwh, start, ray_directions_w, max_dist)
+    else:
+        raydist_cube: Tensor = raydist3d_cube(cube_pos, cube_lwh, cube_rpy, start, ray_directions_w, max_dist) # [n_envs, n_rays]
     raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
     if z_ground_plane is not None:
         raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions_w, max_dist) # [n_envs, n_rays]

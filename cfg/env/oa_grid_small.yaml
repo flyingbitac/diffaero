@@ -24,8 +24,11 @@ obstacles:
   n_obstacles: ${env.n_obstacles}
   height_scale: ${env.height_scale}
   sphere_percentage: 0.5
-  sphere_radius_range: [0.1, 0.5, 0.1] # [min, max, step]
-  cube_lwh_range: [0.1, 1.0, 0.1] # [min, max, step]
+  sphere_radius_range: [0.6, 2.0, 0.4] # [min, max, step]
+  cube_lw_range: [0.1, 1.0, 0.1] # [min, max, step]
+  cube_h_range: [3.0, 5.0, 1.0] # [min, max, step]
+  randomize_cube_pose: True
+  cube_roll_pitch_range: 15. # degrees
   randpos_std_min: 1
   randpos_std_max: 1.5
   safety_range: 1.0
