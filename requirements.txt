@@ -15,6 +15,7 @@ wandb
 gpustat
 opencv-python
 pytorch3d
+open3d
 numpy
 moviepy
 imageio

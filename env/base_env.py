@@ -114,8 +114,8 @@ class BaseEnv:
         # type: () -> Dict[str, Tensor]
         raise NotImplementedError
     
-    def loss_and_reward(self, target_vel, action):
-        # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
+    def loss_and_reward(self, action):
+        # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
         raise NotImplementedError
 
     def reset_idx(self, env_idx: Tensor):

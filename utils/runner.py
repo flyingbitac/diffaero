@@ -164,7 +164,7 @@ class TrainRunner:
             if i % 100 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
                 grid_gt = self.env.visualize_grid(policy_info["grid_gt"])
                 grid_pred = self.env.visualize_grid(policy_info["grid_pred"])
-                grid = np.concatenate([grid_gt, grid_pred], axis=2)
+                grid = np.concatenate([grid_gt, grid_pred], axis=1).transpose(2, 0, 1)
                 self.logger.log_image("grid", grid, i+1)
             
             if success_rate >= self.max_success_rate:

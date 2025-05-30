@@ -1,4 +1,5 @@
 from typing import Tuple, Dict, Union, List
+import os
 import math
 
 from omegaconf import DictConfig
@@ -6,12 +7,11 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from tensordict import TensorDict
-import matplotlib.pyplot as plt
+import open3d as o3d
 import numpy as np
-from io import BytesIO
-from PIL import Image
 
 from quaddif.env.base_env import BaseEnv
+from quaddif.dynamics.pointmass import PointMassModelBase
 from quaddif.utils.sensor import Camera, LiDAR
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.assets import ObstacleManager
@@ -37,9 +37,11 @@ class ObstacleAvoidance(BaseEnv):
         elif self.sensor_type == "relpos":
             # relative position of obstacles as additional observation
             H, W = self.n_obstacles, 3
+        else:
+            raise ValueError(f"Unknown sensor type: {self.sensor_type}")
         
         self.last_action_in_obs: bool = cfg.last_action_in_obs
-        self.obs_dim = (10 + self.action_dim * int(self.last_action_in_obs), (H, W)) # flattened depth image as additional observation
+        self.obs_dim = (10 + self.action_dim * int(self.last_action_in_obs), (H, W))
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
         need_renderer = (not cfg.render.headless) or (hasattr(cfg.render, "record_video") and cfg.render.record_video)
@@ -154,7 +156,7 @@ class ObstacleAvoidance(BaseEnv):
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
             vel_diff = self.dynamics._vel_ema - self.target_vel
-            vel_diff = torch.norm(vel_diff * torch.tensor([[1, 1, 2]], device=self.device), dim=-1)
+            vel_diff = torch.norm(vel_diff * torch.tensor([[1, 1, 3]], device=self.device), dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
@@ -334,38 +336,25 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         n_segments = math.ceil(self.camera.max_dist / self.cube_size)
         self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device)
         
-        self.prev_pos = torch.zeros(self.n_envs, 3, device=self.device)
         self.prev_visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
         self.visible_points = torch.zeros(self.n_envs, self.n_grid_points, 3, device=self.device)
+        
+        self.vis = o3d.visualization.Visualizer()
+        self.vis.create_window(width=270, height=270, left=50, top=350, visible=self.renderer is not None)
     
     def visualize_grid(self, grid):
-        fig = plt.figure(figsize=(8, 7), dpi=100)
-        ax = fig.add_subplot(111, projection="3d")
-        ax.set_xlim3d([self.cfg.grid.x_min, self.cfg.grid.x_max])
-        ax.set_ylim3d([self.cfg.grid.y_min, self.cfg.grid.y_max])
-        ax.set_zlim3d([self.cfg.grid.z_min, self.cfg.grid.z_max])
-        x = torch.linspace(self.cfg.grid.x_min, self.cfg.grid.x_max, self.cfg.grid.n_points[0] + 1, device=self.device).cpu()
-        y = torch.linspace(self.cfg.grid.y_min, self.cfg.grid.y_max, self.cfg.grid.n_points[1] + 1, device=self.device).cpu()
-        z = torch.linspace(self.cfg.grid.z_min, self.cfg.grid.z_max, self.cfg.grid.n_points[2] + 1, device=self.device).cpu()
-        x, y, z = torch.meshgrid(x, y, z, indexing='ij')
-        # Create a boolean array representing the occupancy
-        occupancy = grid.reshape(*self.cfg.grid.n_points).cpu().numpy()
-        # Plot the voxels
-        r, g, b, a = [np.zeros(self.cfg.grid.n_points, dtype=np.float32) for _ in range(4)]
-        r.fill(1)
-        a.fill(0.2)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        ax.voxels(x, y, z, occupancy, facecolors=np.stack([r, g, b, a], axis=-1))
+        xyz = self.local_grid_centers.squeeze(0)
+        points = xyz[grid.flatten()].cpu().numpy()
+        pcd_o3d = o3d.geometry.PointCloud()
+        pcd_o3d.points = o3d.utility.Vector3dVector(points)
+        # o3d.visualization.draw_geometries([pcd_o3d])
+
+        self.vis.clear_geometries()
+        self.vis.add_geometry(pcd_o3d)
+        self.vis.poll_events()
+        self.vis.update_renderer()
         
-        buf = BytesIO()
-        plt.savefig(buf, format='png')
-        plt.close(fig)
-        image = np.array(Image.open(buf))
-        buf.close()
-        
-        return image[..., :3].transpose(2, 0, 1)
+        return np.asarray(self.vis.capture_screen_float_buffer(do_render=self.renderer is not None))
     
     @timeit
     def get_occupancy_map(self): 
