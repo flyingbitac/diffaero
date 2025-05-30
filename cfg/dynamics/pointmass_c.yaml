@@ -5,24 +5,21 @@ n_agents: ${n_agents}
 dt: ${env.dt}
 m: 1.0                  # total mass
 g: 9.81                 # gravity
-# D: 0.6                  # drag coef normed by mass
 D:                      # drag coef normed by mass
   default: 0.6
-  min: 0.2
-  max: 1.0
-# lmbda: 2.5              # acc exp smoothing
+  min: 0.5
+  max: 0.7
 lmbda:                  # acc exp smoothing
   default: 2.5
-  min: 1.5
-  max: 3.5
+  min: 2.25
+  max: 2.75
 alpha: 0.0              # gradient decay factor
 align_yaw_with_target_direction: False
 align_yaw_with_vel_ema: True
-# vel_ema_factor: 0.1
 vel_ema_factor:
   default: 0.1
-  min: 0.05
-  max: 0.15
+  min: 0.09
+  max: 0.11
 
 max_acc:
   xy:
