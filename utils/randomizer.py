@@ -52,15 +52,19 @@ class UniformRandomizer(RandomizerBase):
         shape: Union[int, List[int], torch.Size],
         default_value: Union[float, bool],
         device: torch.device,
+        enabled: bool = True,
         low: float = 0.0,
         high: float = 1.0,
         dtype: torch.dtype = torch.float,
     ):
         self.low = low
         self.high = high
+        self.enabled = enabled
         super().__init__(shape, default_value, device, dtype)
     
     def randomize(self, idx: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if not self.enabled:
+            return self.default()
         if idx is not None:
             mask = torch.zeros_like(self.value, dtype=torch.bool)
             mask[idx] = True
@@ -106,7 +110,7 @@ class RandomizerManager:
         self, 
         cfg: DictConfig,
     ):
-        self.enabled: bool = cfg.enable
+        self.enabled: bool = cfg.enabled
         
     def randomize(self, idx: Optional[torch.Tensor] = None):
         if self.enabled:
@@ -135,6 +139,7 @@ def build_randomizer(
             shape=shape,
             default_value=cfg.default,
             device=device,
+            enabled=cfg.enabled,
             low=cfg.min,
             high=cfg.max,
             dtype=dtype,
@@ -144,6 +149,7 @@ def build_randomizer(
             shape=shape,
             default_value=cfg.default,
             device=device,
+            enabled=cfg.enabled,
             mean=cfg.mean,
             std=cfg.std,
             dtype=dtype,

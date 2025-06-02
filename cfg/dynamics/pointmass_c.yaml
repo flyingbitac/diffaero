@@ -7,10 +7,12 @@ m: 1.0                  # total mass
 g: 9.81                 # gravity
 D:                      # drag coef normed by mass
   default: 0.6
+  enabled: True
   min: 0.5
   max: 0.7
 lmbda:                  # acc exp smoothing
   default: 2.5
+  enabled: True
   min: 2.25
   max: 2.75
 alpha: 0.0              # gradient decay factor
@@ -18,16 +20,19 @@ align_yaw_with_target_direction: False
 align_yaw_with_vel_ema: True
 vel_ema_factor:
   default: 0.1
+  enabled: True
   min: 0.09
   max: 0.11
 
 max_acc:
   xy:
     default: 20
+    enabled: True
     min: 10
     max: 20
   z:
     default: 40
+    enabled: True
     min: 25
     max: 40
 
