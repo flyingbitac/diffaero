@@ -130,16 +130,12 @@ class ObstacleAvoidance(BaseEnv):
     def loss_and_reward(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
         virtual_radius = 0.2
-        # calculating the closest point on each sphere to the quadrotor
-        dist2surface_sphere, nearest_points_sphere = self.obstacle_manager.nearest_distance_to_spheres(self.p.unsqueeze(1))
-        sphere_relpos = nearest_points_sphere.squeeze(1) - self.p.unsqueeze(1) # [n_envs, n_spheres, 3]
-        # calculating the closest point on each cube to the quadrotor
-        dist2surface_cube, nearest_points_cube = self.obstacle_manager.nearest_distance_to_cubes(self.p.unsqueeze(1))
-        cube_relpos = nearest_points_cube.squeeze(1) - self.p.unsqueeze(1) # [n_envs, n_cubes, 3]
-        # concatenate the relative direction and distance to the surface of both type of obstacles
-        obstacle_reldirection = F.normalize(torch.cat([sphere_relpos, cube_relpos], dim=1), dim=-1) # [n_envs, n_obstacles, 3]
-        dist2surface = torch.cat([dist2surface_sphere.squeeze(1), dist2surface_cube.squeeze(1)], dim=1) # [n_envs, n_obstacles]
-        dist2surface_inflated = (dist2surface - self.r_drone - virtual_radius).clamp(min=0)
+        # calculate the nearest points on the obstacles to the drone
+        dist2obstacles, nearest_points2obstacles = self.obstacle_manager.nearest_distance_to_obstacles(self.p.unsqueeze(1))
+        self.obstacle_nearest_points.copy_(nearest_points2obstacles.squeeze(1)) # [n_envs, n_obstacles, 3]
+        obstacle_reldirection = F.normalize(nearest_points2obstacles.squeeze(1) - self.p.unsqueeze(1), dim=-1) # [n_envs, n_obstacles, 3]
+        
+        dist2surface_inflated = (dist2obstacles.squeeze(1) - self.r_drone - virtual_radius).clamp(min=0)
         dangerous_factor = dist2surface_inflated.neg().exp()
         # calculate the obstacle avoidance loss
         approaching_vel = torch.sum(obstacle_reldirection * self._v.unsqueeze(1), dim=-1) # [n_envs, n_obstacles]
@@ -286,14 +282,9 @@ class ObstacleAvoidance(BaseEnv):
     
     @timeit
     def collision(self) -> Tensor:
-        # check if the distance between the drone's mass center and the sphere's center is less than the sum of their radius
-        min_dist2sphere = self.obstacle_manager.nearest_distance_to_spheres(self.p.unsqueeze(1))[0].squeeze(1).min(dim=-1).values
-        collision_sphere = min_dist2sphere < self.r_drone # [n_envs]
-        # check if the distance between the drone's mass center and the closest point on the cube is less than the drone's radius
-        min_dist2cube = self.obstacle_manager.nearest_distance_to_cubes(self.p.unsqueeze(1))[0].squeeze(1).min(dim=-1).values
-        collision_cube = min_dist2cube < self.r_drone # [n_envs]
-        
-        collision = collision_sphere | collision_cube
+        dist2obstacles, nearest_points2obstacles = self.obstacle_manager.nearest_distance_to_obstacles(self.p.unsqueeze(1))
+        min_dist2obstacle = dist2obstacles.squeeze(1).min(dim=-1).values
+        collision = min_dist2obstacle < self.r_drone # [n_envs]
         
         if self.z_ground_plane is not None:
             collision = collision | (self.p[..., 2] - self.r_drone < self.z_ground_plane)
@@ -360,9 +351,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def get_occupancy_map(self): 
         # get occupancy map
         grid_xyz = self.p.unsqueeze(1) + self.local_grid_centers # [n_envs, n_points, 3]
-        occupancy_sphere = self.obstacle_manager.are_points_inside_spheres(grid_xyz) # [n_envs, n_points]
-        occupancy_cube = self.obstacle_manager.are_points_inside_cubes(grid_xyz)
-        occupancy_map = torch.logical_or(occupancy_sphere, occupancy_cube) # [n_envs, n_points]
+        occupancy_map = self.obstacle_manager.are_points_inside_obstacles(grid_xyz) # [n_envs, n_points]
         if self.z_ground_plane is not None:
             occupancy_ground_plane = ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane)
             occupancy_map = torch.logical_or(occupancy_map, occupancy_ground_plane)

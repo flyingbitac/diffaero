@@ -47,7 +47,7 @@ def nearest_distance_to_spheres(
     r_spheres: Tensor # [n_envs, n_spheres]
 ) -> Tuple[Tensor, Tensor]:
     relpos = p_spheres.unsqueeze(1) - points.unsqueeze(2)  # [n_envs, n_points, n_spheres, 3]
-    vector_center2surface = F.normalize(relpos, dim=-1) * r_spheres.reshape(p_spheres.shape[0], 1, p_spheres.shape[1], 1)  # [n_envs, n_points, n_spheres, 3]
+    vector_center2surface = F.normalize(-relpos, dim=-1) * r_spheres.reshape(p_spheres.shape[0], 1, p_spheres.shape[1], 1)  # [n_envs, n_points, n_spheres, 3]
     nearest_points = p_spheres.unsqueeze(1) + vector_center2surface  # [n_envs, n_points, n_spheres, 3]
     dist2sphere_center = torch.norm(relpos, dim=-1)  # [n_envs, n_points, n_spheres]
     dist2surface = dist2sphere_center - r_spheres.unsqueeze(1)  # [n_envs, n_points, n_spheres]
@@ -67,9 +67,8 @@ def nearest_distance_to_cubes(
         nearest_points_cube_frame = torch.clamp(points_cube_frame, box_min.unsqueeze(1), box_max.unsqueeze(1))  # [n_envs, n_points, n_cubes, 3]
         nearest_points = mat_vec_mul(rotmat.unsqueeze(1).transpose(-1, -2), nearest_points_cube_frame) + p_cubes.unsqueeze(1)  # [n_envs, n_points, n_cubes, 3]
     else:
-        box_min, box_max = p_cubes - lwh_cubes / 2, p_cubes + lwh_cubes / 2  # [n_envs, n_cubes, 3]]
-        points_cube_frame = points.unsqueeze(2)  # [n_envs, n_points, n_cubes, 3]
-        nearest_points = torch.clamp(points_cube_frame, box_min.unsqueeze(1), box_max.unsqueeze(1)) + p_cubes.unsqueeze(1) # [n_envs, n_points, n_cubes, 3]
+        box_min, box_max = p_cubes - lwh_cubes / 2, p_cubes + lwh_cubes / 2  # [n_envs, n_cubes, 3]
+        nearest_points = torch.clamp(points.unsqueeze(2), box_min.unsqueeze(1), box_max.unsqueeze(1)) # [n_envs, n_points, n_cubes, 3]
     dist2surface = torch.norm(nearest_points - points.unsqueeze(2), dim=-1)  # [n_envs, n_points, n_cubes]
     return dist2surface, nearest_points
 
@@ -109,19 +108,19 @@ class ObstacleManager:
     @property
     def p_cubes(self): return self.p_obstacles[:, self.n_spheres:]
     
-    def are_points_inside_spheres(self, points: Tensor) -> Tensor: # [n_envs, n_points, 3] 
-        return are_points_inside_spheres(points, self.p_spheres, self.r_spheres)
-
-    def are_points_inside_cubes(self, points: Tensor): # [n_envs, n_points, 3]
+    def are_points_inside_obstacles(self, points: Tensor) -> Tensor: # [n_envs, n_points]
         rpy_cubes = self.rpy_cubes if self.randomize_cube_pose else None
-        return are_points_inside_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes)
+        inside_spheres = are_points_inside_spheres(points, self.p_spheres, self.r_spheres) # [n_envs, n_points]
+        inside_cubes = are_points_inside_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes)  # [n_envs, n_points]
+        return torch.logical_or(inside_spheres, inside_cubes)  # [n_envs, n_points]
     
-    def nearest_distance_to_spheres(self, points: Tensor): # [n_envs, n_points, 3]
-        return nearest_distance_to_spheres(points, self.p_spheres, self.r_spheres)
-
-    def nearest_distance_to_cubes(self, points: Tensor): # [n_envs, n_points, 3]
+    def nearest_distance_to_obstacles(self, points: Tensor) -> Tuple[Tensor, Tensor]: # [n_envs, n_points, n_obstacle(, 3)]
         rpy_cubes = self.rpy_cubes if self.randomize_cube_pose else None
-        return nearest_distance_to_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes)
+        nearest_dist_spheres, nearest_points_spheres = nearest_distance_to_spheres(points, self.p_spheres, self.r_spheres)    # [n_envs, n_points, n_spheres]
+        nearest_dist_cubes, nearest_points_cubes = nearest_distance_to_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes) # [n_envs, n_points, n_cubes]
+        nearest_dist = torch.cat([nearest_dist_spheres, nearest_dist_cubes], dim=-1)       # [n_envs, n_points, n_obstacles]
+        nearest_points = torch.cat([nearest_points_spheres, nearest_points_cubes], dim=-2) # [n_envs, n_points, n_obstacles, 3]
+        return nearest_dist, nearest_points
 
     def generate_obstacles(self):
         # randomly generate spheral obstacles
@@ -251,10 +250,12 @@ class ObstacleManager:
                 [L, 0, 0],
                 [-L, 0, 0],
             ], device=self.p_obstacles.device, dtype=self.p_obstacles.dtype).unsqueeze(0)
+            self.rpy_cubes[env_idx, :4] = 0
         if self.ceiling:
             self.p_obstacles[env_idx, self.n_spheres+4*int(self.walls)] = torch.tensor([
                 [0, 0, H],
             ], device=self.p_obstacles.device, dtype=self.p_obstacles.dtype)
+            self.rpy_cubes[env_idx, 4*int(self.walls)] = 0
         
         # move disabled obstacles under the ground plane
         if n_enabled_obstacles is not None:
