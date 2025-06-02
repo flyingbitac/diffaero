@@ -653,6 +653,9 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.target_line_vertices_one_env = ti.Vector.field(3, ti.f32, shape=(2, ))
         self.target_line_colors_one_env   = ti.Vector.field(3, ti.f32, shape=(2, ))
         self.target_line_color_tensor = torch.empty(self.n_envs, 3, device=self.device)
+        
+        self.nearest_points_field = ti.Vector.field(3, ti.f32, shape=(self.n_envs * self.obstacle_manager.n_obstacles))
+        self.nearest_points_field_one_env = ti.Vector.field(3, ti.f32, shape=(self.obstacle_manager.n_obstacles))
     
     def _init_obstacles(self):
         # initialize meshes of the cubes
@@ -685,10 +688,14 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.sphere_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
         self.sphere_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
     
-    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor):
+    def step(self, drone_pos: Tensor, drone_quat_xyzw: Tensor, target_pos: Tensor, nearest_points: Optional[Tensor] = None):
         super().step(drone_pos, drone_quat_xyzw, target_pos)
         if self.enable_rendering:
             self._update_obstacles()
+        if nearest_points is not None:
+            nearest_points_tensor = nearest_points[:self.n_envs] + self.env_origin.unsqueeze(-2) # [n_envs, n_obstacles, 3]
+            self.nearest_points_field.from_torch(torch2ti(nearest_points_tensor.flatten(end_dim=-2)))
+            self.nearest_points_field_one_env.from_torch(torch2ti(nearest_points_tensor[self.gui_states["tracking_env_idx"]].flatten(end_dim=-2)))
     
     def _update_obstacles(self):
         # update the pose of the cubes
@@ -721,9 +728,19 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         if self.gui_states["tracking_view"]:
             self.gui_scene.mesh(**self.cube_mesh_dict_one_env)
             self.gui_scene.mesh(**self.sphere_mesh_dict_one_env)
+            self.gui_scene.particles(
+                centers=self.nearest_points_field_one_env,
+                radius=0.1,
+                color=(0.2, 0.8, 0.2),
+            )
         else:
             self.gui_scene.mesh(**self.cube_mesh_dict)
             self.gui_scene.mesh(**self.sphere_mesh_dict)
+            self.gui_scene.particles(
+                centers=self.nearest_points_field,
+                radius=0.1,
+                color=(0.2, 0.8, 0.2),
+            )
     
     def render_fpp(self):
         assert self.record_video

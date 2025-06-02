@@ -56,6 +56,7 @@ class ObstacleAvoidance(BaseEnv):
             self.renderer = None
         
         self.r_drone: float = cfg.r_drone
+        self.obstacle_nearest_points = torch.empty(self.n_envs, self.n_obstacles, 3, device=device)
     
     @timeit
     def get_observations(self, with_grad=False):
@@ -124,7 +125,12 @@ class ObstacleAvoidance(BaseEnv):
         return self.get_observations(), (loss, reward), terminated, extra
     
     def state_for_render(self):
-        return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
+        return {
+            "drone_pos": self.p.clone(),
+            "drone_quat_xyzw": self.q.clone(),
+            "target_pos": self.target_pos.clone(),
+            "nearest_points": self.obstacle_nearest_points.clone(),
+        }
     
     @timeit
     def loss_and_reward(self, action):
