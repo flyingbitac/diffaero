@@ -25,29 +25,18 @@ def are_points_inside_cubes(
     points: Tensor, # [n_envs, n_points, 3]
     p_cubes: Tensor, # [n_envs, n_cubes, 3]
     lwh_cubes: Tensor, # [n_envs, n_cubes, 3]
-    rpy_cubes: Tensor # [n_envs, n_cubes, 3]
+    rpy_cubes: Optional[Tensor] = None # [n_envs, n_cubes, 3]
 ) -> Tensor:
-    rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2)  # [n_envs, n_cubes, 3, 3]
-    points_rotated = mat_vec_mul(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
-    box_min = -lwh_cubes / 2  # [n_envs, n_cubes, 3]
-    box_max =  lwh_cubes / 2  # [n_envs, n_cubes, 3]
+    if rpy_cubes is not None:
+        rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2)  # [n_envs, n_cubes, 3, 3]
+        points_cube_frame = mat_vec_mul(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
+        box_min, box_max = -lwh_cubes / 2, lwh_cubes / 2  # [n_envs, n_cubes, 3]
+    else:
+        box_min, box_max = p_cubes - lwh_cubes / 2, p_cubes + lwh_cubes / 2  # [n_envs, n_cubes, 3]]
+        points_cube_frame = points.unsqueeze(2)  # [n_envs, n_points, n_cubes, 3]
     inside = torch.any(torch.logical_and(
-        torch.all(points_rotated >= box_min.unsqueeze(1), dim=-1),  # [n_envs, n_points, n_cubes]
-        torch.all(points_rotated <= box_max.unsqueeze(1), dim=-1)   # [n_envs, n_points, n_cubes]
-    ), dim=-1)  # [n_envs, n_points]
-    return inside
-
-@torch.jit.script
-def are_points_inside_cubes_no_rot(
-    points: Tensor, # [n_envs, n_points, 3]
-    p_cubes: Tensor, # [n_envs, n_cubes, 3]
-    lwh_cubes: Tensor # [n_envs, n_cubes, 3]
-) -> Tensor:
-    box_min = p_cubes - lwh_cubes / 2  # [n_envs, n_cubes, 3]
-    box_max = p_cubes + lwh_cubes / 2  # [n_envs, n_cubes, 3]
-    inside = torch.any(torch.logical_and(
-        torch.all(points.unsqueeze(2) >= box_min.unsqueeze(1), dim=-1),  # [n_envs, n_points, n_cubes]
-        torch.all(points.unsqueeze(2) <= box_max.unsqueeze(1), dim=-1)   # [n_envs, n_points, n_cubes]
+        torch.all(points_cube_frame >= box_min.unsqueeze(1), dim=-1),  # [n_envs, n_points, n_cubes]
+        torch.all(points_cube_frame <= box_max.unsqueeze(1), dim=-1)   # [n_envs, n_points, n_cubes]
     ), dim=-1)  # [n_envs, n_points]
     return inside
 
@@ -69,26 +58,18 @@ def nearest_distance_to_cubes(
     points: Tensor, # [n_envs, n_points, 3]
     p_cubes: Tensor, # [n_envs, n_cubes, 3]
     lwh_cubes: Tensor, # [n_envs, n_cubes, 3]
-    rpy_cubes: Tensor # [n_envs, n_cubes, 3]
+    rpy_cubes: Optional[Tensor] = None # [n_envs, n_cubes, 3]
 ) -> Tuple[Tensor, Tensor]:
-    rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2)  # [n_envs, n_cubes, 3, 3]
-    points_rotated = mat_vec_mul(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
-    box_min = -lwh_cubes / 2  # [n_envs, n_cubes, 3]
-    box_max =  lwh_cubes / 2  # [n_envs, n_cubes, 3]
-    nearest_points_rotated = torch.clamp(points_rotated, box_min.unsqueeze(1), box_max.unsqueeze(1))  # [n_envs, n_points, n_cubes, 3]
-    nearest_points = mat_vec_mul(rotmat.unsqueeze(1).transpose(-1, -2), nearest_points_rotated) + p_cubes.unsqueeze(1)  # [n_envs, n_points, n_cubes, 3]
-    dist2surface = torch.norm(nearest_points - points.unsqueeze(2), dim=-1)  # [n_envs, n_points, n_cubes]
-    return dist2surface, nearest_points
-
-@torch.jit.script
-def nearest_distance_to_cubes_no_rot(
-    points: Tensor, # [n_envs, n_points, 3]
-    p_cubes: Tensor, # [n_envs, n_cubes, 3]
-    lwh_cubes: Tensor # [n_envs, n_cubes, 3]
-) -> Tuple[Tensor, Tensor]:
-    box_min = points - lwh_cubes / 2  # [n_envs, n_cubes, 3]
-    box_max = points + lwh_cubes / 2  # [n_envs, n_cubes, 3]
-    nearest_points = torch.clamp(points.unsqueeze(2), box_min.unsqueeze(1), box_max.unsqueeze(1)) + p_cubes.unsqueeze(1) # [n_envs, n_points, n_cubes, 3]
+    if rpy_cubes is not None:
+        rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2)  # [n_envs, n_cubes, 3, 3]
+        points_cube_frame = mat_vec_mul(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
+        box_min, box_max = -lwh_cubes / 2, lwh_cubes / 2  # [n_envs, n_cubes, 3]
+        nearest_points_cube_frame = torch.clamp(points_cube_frame, box_min.unsqueeze(1), box_max.unsqueeze(1))  # [n_envs, n_points, n_cubes, 3]
+        nearest_points = mat_vec_mul(rotmat.unsqueeze(1).transpose(-1, -2), nearest_points_cube_frame) + p_cubes.unsqueeze(1)  # [n_envs, n_points, n_cubes, 3]
+    else:
+        box_min, box_max = p_cubes - lwh_cubes / 2, p_cubes + lwh_cubes / 2  # [n_envs, n_cubes, 3]]
+        points_cube_frame = points.unsqueeze(2)  # [n_envs, n_points, n_cubes, 3]
+        nearest_points = torch.clamp(points_cube_frame, box_min.unsqueeze(1), box_max.unsqueeze(1)) + p_cubes.unsqueeze(1) # [n_envs, n_points, n_cubes, 3]
     dist2surface = torch.norm(nearest_points - points.unsqueeze(2), dim=-1)  # [n_envs, n_points, n_cubes]
     return dist2surface, nearest_points
 
@@ -96,23 +77,22 @@ class ObstacleManager:
     def __init__(self, cfg: DictConfig, n_envs: int, env_spacing: float, device: torch.device):
         self.n_envs = n_envs
         self.env_spacing = env_spacing
-        self.obst_cfg = cfg
         self.walls: bool = cfg.walls
         self.ceiling: bool = cfg.ceiling
         self.height_scale: float = cfg.height_scale
-        n_obstacles: int = self.obst_cfg.n_obstacles
-        self.n_spheres: int = int(n_obstacles * self.obst_cfg.sphere_percentage)
+        n_obstacles: int = cfg.n_obstacles
+        self.n_spheres: int = int(n_obstacles * cfg.sphere_percentage)
         self.n_cubes: int = n_obstacles - self.n_spheres + 4 * int(self.walls) + int(self.ceiling)
         self.n_obstacles = self.n_cubes + self.n_spheres
-        self.sphere_rmin, self.sphere_rmax, self.sphere_rstep = list(self.obst_cfg.sphere_radius_range)
+        self.sphere_rmin, self.sphere_rmax, self.sphere_rstep = list(cfg.sphere_radius_range)
         # lwh for Length(along x axis), Width(along y axis) and Height(along z axis)
-        self.cube_lwmin, self.cube_lwmax, self.cube_lwstep = list(self.obst_cfg.cube_lw_range)
-        self.cube_hmin,  self.cube_hmax,  self.cube_hstep  = list(self.obst_cfg.cube_h_range)
-        self.randomize_cube_pose: bool = self.obst_cfg.randomize_cube_pose
-        self.cube_roll_pitch_range = self.obst_cfg.cube_roll_pitch_range * torch.pi / 180.0
+        self.cube_lwmin, self.cube_lwmax, self.cube_lwstep = list(cfg.cube_lw_range)
+        self.cube_hmin,  self.cube_hmax,  self.cube_hstep  = list(cfg.cube_h_range)
+        self.randomize_cube_pose: bool = cfg.randomize_cube_pose
+        self.cube_roll_pitch_range = cfg.cube_roll_pitch_range * torch.pi / 180.0
         
-        self.randpos_minstd: float = self.obst_cfg.randpos_std_min
-        self.randpos_maxstd: float = self.obst_cfg.randpos_std_max
+        self.randpos_minstd: float = cfg.randpos_std_min
+        self.randpos_maxstd: float = cfg.randpos_std_max
         self.safety_range: float = cfg.safety_range
         self.device = device
         
@@ -133,19 +113,15 @@ class ObstacleManager:
         return are_points_inside_spheres(points, self.p_spheres, self.r_spheres)
 
     def are_points_inside_cubes(self, points: Tensor): # [n_envs, n_points, 3]
-        if self.randomize_cube_pose:
-            return are_points_inside_cubes(points, self.p_cubes, self.lwh_cubes, self.rpy_cubes)
-        else:
-            return are_points_inside_cubes_no_rot(points, self.p_cubes, self.lwh_cubes)
+        rpy_cubes = self.rpy_cubes if self.randomize_cube_pose else None
+        return are_points_inside_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes)
     
     def nearest_distance_to_spheres(self, points: Tensor): # [n_envs, n_points, 3]
         return nearest_distance_to_spheres(points, self.p_spheres, self.r_spheres)
 
     def nearest_distance_to_cubes(self, points: Tensor): # [n_envs, n_points, 3]
-        if self.randomize_cube_pose:
-            return nearest_distance_to_cubes(points, self.p_cubes, self.lwh_cubes, self.rpy_cubes)
-        else:
-            return nearest_distance_to_cubes_no_rot(points, self.p_cubes, self.lwh_cubes)
+        rpy_cubes = self.rpy_cubes if self.randomize_cube_pose else None
+        return nearest_distance_to_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes)
 
     def generate_obstacles(self):
         # randomly generate spheral obstacles
