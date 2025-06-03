@@ -17,7 +17,18 @@ class PositionControl(BaseEnv):
         super(PositionControl, self).__init__(cfg, device)
         self.last_action_in_obs: bool = cfg.last_action_in_obs
         self.obs_dim = 10 + self.action_dim * int(self.last_action_in_obs)
+        self.state_dim = 13
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
+    
+    @timeit
+    def get_state(self, with_grad=False):
+        state = torch.cat([
+            self.target_pos - self.p,
+            self.q,
+            self._v,
+            self._a if isinstance(self.dynamics, PointMassModelBase) else self._w,
+        ], dim=-1)
+        return state if with_grad else state.detach()
     
     @timeit
     def get_observations(self, with_grad=False):
@@ -57,6 +68,7 @@ class PositionControl(BaseEnv):
         }
         if need_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+            extra["next_state_before_reset"] = self.get_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_observations(), (loss, reward), terminated, extra

@@ -45,6 +45,9 @@ class BaseEnv:
     def get_observations(self, with_grad=False):
         raise NotImplementedError
     
+    def get_state(self, with_grad=False):
+        raise NotImplementedError
+    
     def detach(self):
         self.dynamics.detach()
     

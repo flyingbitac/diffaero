@@ -42,6 +42,7 @@ class ObstacleAvoidance(BaseEnv):
         
         self.last_action_in_obs: bool = cfg.last_action_in_obs
         self.obs_dim = (10 + self.action_dim * int(self.last_action_in_obs), (H, W))
+        self.state_dim = 13 + H * W + self.n_obstacles * 3
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
         need_renderer = (not cfg.render.headless) or (hasattr(cfg.render, "record_video") and cfg.render.record_video)
@@ -58,6 +59,19 @@ class ObstacleAvoidance(BaseEnv):
         self.r_drone: float = cfg.r_drone
         self.obstacle_nearest_points = torch.empty(self.n_envs, self.n_obstacles, 3, device=device)
     
+    @timeit
+    def get_state(self, with_grad=False):
+        dist2obstacles, nearest_points2obstacles = self.obstacle_manager.nearest_distance_to_obstacles(self.p.unsqueeze(1))
+        state = torch.cat([
+            self.sensor_tensor.flatten(start_dim=-2),
+            (nearest_points2obstacles.squeeze(1) - self.p.unsqueeze(1)).flatten(start_dim=-2),
+            self.target_pos - self.p,
+            self.q,
+            self._v,
+            self._a if isinstance(self.dynamics, PointMassModelBase) else self._w,
+        ], dim=-1)
+        return state if with_grad else state.detach()
+
     @timeit
     def get_observations(self, with_grad=False):
         if self.dynamic_type == "pointmass":
@@ -120,6 +134,7 @@ class ObstacleAvoidance(BaseEnv):
         }
         if need_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+            extra["next_state_before_reset"] = self.get_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_observations(), (loss, reward), terminated, extra
