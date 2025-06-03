@@ -137,11 +137,12 @@ class SHAC:
         total_loss = actor_loss + self.entropy_weight * entropy_loss
         self.actor_optim.zero_grad()
         total_loss.backward()
-        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
         if self.actor_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+        else:
+            grad_norm = torch.nn.utils.get_total_norm(self.agent.actor.parameters())
         self.actor_optim.step()
-        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm}
+        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm.item()}
 
     def update_critic(self, target_values: Tensor) -> Tuple[Dict[str, float], Dict[str, float]]:
         T, N = self.l_rollout, self.n_envs
@@ -160,11 +161,13 @@ class SHAC:
             critic_loss.backward()
             grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
             if self.critic_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+            else:
+                grad_norm = torch.nn.utils.get_total_norm(self.agent.critic.parameters())
             self.critic_optim.step()
         for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
             p_t.data.lerp_(p.data, self.target_update_rate)
-        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
+        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm.item()}
     
     @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
@@ -300,7 +303,7 @@ class SHAC_PPO(SHAC):
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return obs, policy_info, env_info, losses, grad_norms
     
-    def update_actor(self, advantages: Tensor) -> Dict[str, float]:
+    def update_actor(self, advantages: Tensor) -> Tuple[Dict[str, float], Dict[str, float]]:
         self.actor_loss /= self.l_rollout
         
         obs = self.buffer.obs.flatten(0, 1)
@@ -324,14 +327,16 @@ class SHAC_PPO(SHAC):
         total_loss = self.actor_loss + pg_loss + self.entropy_weight * entropy_loss
         self.actor_optim.zero_grad()
         total_loss.backward()
-        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
         if self.actor_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+        else:
+            grad_norm = torch.nn.utils.get_total_norm(self.agent.actor.parameters())
         self.actor_optim.step()
-        return {"actor_loss": self.actor_loss.item(),
-                "entropy_loss": entropy_loss.item(),
-                "pg_loss": pg_loss.item()
-               }, {"actor_grad_norm": grad_norm}
+        return {
+            "actor_loss": self.actor_loss.item(),
+            "entropy_loss": entropy_loss.item(),
+            "pg_loss": pg_loss.item()
+        }, {"actor_grad_norm": grad_norm.item()}
     
     @staticmethod
     def build(cfg, env, device):
@@ -443,21 +448,22 @@ class SHAC_Q:
         self.next_values.detach_().fill_(0.)
         self.entropy_loss.detach_().fill_(0.)
         
-    def update_actor(self) -> Dict[str, float]:
+    def update_actor(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         actor_loss = (self.one_step_loss + self.discount * self.next_values).sum() / (self.n_envs * self.l_rollout)
         entropy_loss = self.entropy_loss.sum() / (self.n_envs * self.l_rollout)
         total_loss = actor_loss + self.entropy_weight * entropy_loss
         self.actor_optim.zero_grad()
         total_loss.backward()
-        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.actor.parameters()]) ** 0.5
         if self.actor_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.actor.parameters(), max_norm=self.actor_grad_norm)
+        else:
+            grad_norm = torch.nn.utils.get_total_norm(self.agent.actor.parameters())
         self.actor_optim.step()
         for p, p_t in zip(self.agent.actor.parameters(), self.agent_target.actor.parameters()):
             p_t.data.lerp_(p.data, 5e-3)
-        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm}
+        return {"actor_loss": actor_loss.item(), "entropy_loss": entropy_loss.item()}, {"actor_grad_norm": grad_norm.item()}
     
-    def update_critic(self) -> Dict[str, float]:
+    def update_critic(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         T, N = self.l_rollout, self.n_envs
         batch_indices = torch.randperm(T*N, device=self.device)
         mb_size = T*N // self.n_minibatch
@@ -483,13 +489,14 @@ class SHAC_Q:
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()
-            grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
             if self.critic_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+            else:
+                grad_norm = torch.nn.utils.get_total_norm(self.agent.critic.parameters())
             self.critic_optim.step()
         for p, p_t in zip(self.agent.critic.parameters(), self.agent_target.critic.parameters()):
             p_t.data.lerp_(p.data, 5e-3)
-        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
+        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm.item()}
     
     @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
@@ -638,13 +645,14 @@ class SHA2C(SHAC):
             critic_loss = F.mse_loss(values, target_values[mb_indices])
             self.critic_optim.zero_grad()
             critic_loss.backward()
-            grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.agent.critic.parameters()]) ** 0.5
             if self.critic_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.critic.parameters(), max_norm=self.critic_grad_norm)
+            else:
+                grad_norm = torch.nn.utils.get_total_norm(self.agent.critic.parameters())
             self.critic_optim.step()
         for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
             p_t.data.lerp_(p.data, self.target_update_rate)
-        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
+        return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm.item()}
     
     @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
@@ -660,7 +668,6 @@ class SHA2C(SHAC):
             policy_info["value"] = value
             next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
-            # divide by 10 to avoid disstability
             self.buffer.add(
                 obs=state,
                 sample=policy_info["sample"],
@@ -737,7 +744,6 @@ class SHA2C_PPO(SHA2C):
                 value = self.agent.get_value(state)
             next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
-            # divide by 10 to avoid disstability
             self.buffer.add(
                 obs=obs,
                 sample=policy_info["sample"],

@@ -609,8 +609,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         cfg: DictConfig,
         device: torch.device,
         obstacle_manager: ObstacleManager,
-        z_ground_plane: float,
-        headless: bool
+        z_ground_plane: Optional[float] = None,
+        headless: bool = False
     ):
         super().__init__(cfg, device, z_ground_plane=z_ground_plane, headless=headless)
         self.obstacle_manager = obstacle_manager
