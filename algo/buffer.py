@@ -15,7 +15,7 @@ class RNNStateBuffer:
         self.step = 0
     
     @torch.no_grad()
-    def add(self, actor_hidden_state: Optional[Tensor], critic_hidden_state: Optional[Tensor]):
+    def add(self, actor_hidden_state: Optional[Tensor], critic_hidden_state: Optional[Tensor] = None):
         if actor_hidden_state is not None:
             self.actor_rnn_state[self.step]  = actor_hidden_state.permute(1, 0, 2)
         if critic_hidden_state is not None:

@@ -146,9 +146,30 @@ class CriticQ(AgentBase):
     
     def detach(self):
         self.critic.detach()
+
+
+class ActorCriticBase(AgentBase):
+    actor: Union[DeterministicActor, StochasticActor]
+    critic: Union[CriticV, CriticQ]
+    
+    def save(self, path: str):
+        self.actor.save(path)
+        self.critic.save(path)
+    
+    def load(self, path: str):
+        self.actor.load(path)
+        self.critic.load(path)
+
+    def reset(self, indices: Tensor):
+        self.actor.reset(indices)
+        self.critic.reset(indices)
+    
+    def detach(self):
+        self.actor.detach()
+        self.critic.detach()
         
 
-class StochasticActorCriticV(AgentBase):
+class StochasticActorCriticV(ActorCriticBase):
     def __init__(
         self,
         cfg: DictConfig,
@@ -169,22 +190,31 @@ class StochasticActorCriticV(AgentBase):
     def get_action_and_value(self, obs, sample=None, test=False):
         # type: (Union[Tensor, Tuple[Tensor, Tensor]], Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
         return *self.get_action(obs, sample=sample, test=test), self.get_value(obs)
-    
-    def save(self, path: str):
-        self.actor.save(path)
-        self.critic.save(path)
-    
-    def load(self, path: str):
-        self.actor.load(path)
-        self.critic.load(path)
 
-    def reset(self, indices: Tensor):
-        self.actor.reset(indices)
-        self.critic.reset(indices)
-    
-    def detach(self):
-        self.actor.detach()
-        self.critic.detach()
+
+class StochasticAsymmetricActorCriticV(ActorCriticBase):
+    def __init__(
+        self,
+        actor_cfg: DictConfig,
+        critic_cfg: DictConfig,
+        obs_dim: Union[int, Tuple[int, Tuple[int, int]]],
+        state_dim: int,
+        action_dim: int
+    ):
+        super().__init__(actor_cfg, obs_dim)
+        self.critic = CriticV(critic_cfg, state_dim)
+        self.actor = StochasticActor(actor_cfg, obs_dim, action_dim)
+
+    def get_value(self, state: Tensor, hidden: Optional[Tensor] = None) -> Tensor:
+        return self.critic(state, hidden=hidden)
+
+    def get_action(self, obs, sample=None, test=False, hidden=None):
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Optional[Tensor], bool, Optional[Tensor]) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        return self.actor(obs, sample=sample, test=test, hidden=hidden)
+
+    def get_action_and_value(self, obs, state, sample=None, test=False):
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Optional[Tensor], bool) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        return *self.get_action(obs, sample=sample, test=test), self.get_value(state)
 
 
 class StochasticActorCriticQ(AgentBase):
@@ -210,22 +240,6 @@ class StochasticActorCriticQ(AgentBase):
         action, sample, logprob, entropy = self.get_action(obs, sample=sample, test=test)
         value = self.get_value(obs, action)
         return action, sample, logprob, entropy, value
-    
-    def save(self, path: str):
-        self.actor.save(path)
-        self.critic.save(path)
-    
-    def load(self, path: str):
-        self.actor.load(path)
-        self.critic.load(path)
-
-    def reset(self, indices: Tensor):
-        self.actor.reset(indices)
-        self.critic.reset(indices)
-    
-    def detach(self):
-        self.actor.detach()
-        self.critic.detach()
 
 
 class RPLActorCritic(StochasticActorCriticV):
@@ -287,13 +301,11 @@ class RPLActorCritic(StochasticActorCriticV):
         self.anchor_agent.load(os.path.join(path, "anchor_agent"))
 
     def reset(self, indices: Tensor):
-        self.actor.reset(indices)
-        self.critic.reset(indices)
+        super().reset(indices)
         self.anchor_agent.reset(indices)
     
     def detach(self):
-        self.actor.detach()
-        self.critic.detach()
+        super().detach()
         self.anchor_agent.detach()
 
 def tensordict2tuple(state: Union[Tensor, TensorDict]) -> Union[Tuple[Tensor, Tensor], Tensor]:

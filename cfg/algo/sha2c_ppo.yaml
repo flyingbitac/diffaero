@@ -1,0 +1,21 @@
+name: sha2c_ppo
+network: ${network}
+
+l_rollout: 32
+
+actor_lr: 0.001
+critic_lr: 0.003
+gamma: 0.99
+lmbda: 0.95
+entropy_weight: 0.01
+actor_grad_norm: 1.
+critic_grad_norm: 
+n_minibatch: 8
+target_update_rate: 0.1
+
+norm_adv: True
+clip_coef: 0.2
+
+critic_network:
+  name: mlp
+  hidden_dim: [256, 128]
