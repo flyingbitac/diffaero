@@ -1,4 +1,4 @@
-from typing import Self, Tuple, Union, List, Optional
+from typing import Tuple, Union, List, Optional
 
 from omegaconf import DictConfig
 import torch
@@ -83,15 +83,19 @@ class NormalRandomizer(RandomizerBase):
         shape: Union[int, List[int], torch.Size],
         default_value: Union[float, bool],
         device: torch.device,
+        enabled: bool = True,
         mean: float = 0.0,
         std: float = 1.0,
         dtype: torch.dtype = torch.float,
     ):
         self.mean = mean
         self.std = std
+        self.enabled = enabled
         super().__init__(shape, default_value, device, dtype)
     
     def randomize(self, idx: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if not self.enabled:
+            return self.default()
         if idx is not None:
             mask = torch.zeros_like(self.value, dtype=torch.bool)
             mask[idx] = True
