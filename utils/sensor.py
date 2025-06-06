@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 import math
 
 import torch
@@ -8,6 +8,7 @@ from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
 from quaddif.utils.math import quaternion_apply, mat_vec_mul
+from quaddif.utils.assets import ObstacleManager
 
 @torch.jit.script
 def raydist3d_sphere(
@@ -66,48 +67,18 @@ def raydist3d_cube(
     Returns:
         torch.Tensor: The distance of the ray to the nearest obstacle's surface.
     """
-    rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2) # [n_envs, n_cubes, 3, 3]
-    start_rotated = mat_vec_mul(rotmat.unsqueeze(1), (start.unsqueeze(2)-p_cubes.unsqueeze(1))) # [n_envs, n_rays, n_cubes, 3]
-    direction_rotated = mat_vec_mul(rotmat.unsqueeze(1), direction.unsqueeze(2)) # [n_envs, n_rays, n_cubes, 3]
-    box_min = -lwh_cubes / 2. # [n_envs, n_cubes, 3]
-    box_max =  lwh_cubes / 2. # [n_envs, n_cubes, 3]
-    _tmin = (box_min.unsqueeze(1) - start_rotated) / direction_rotated # [n_envs, n_rays, n_cubes, 3]
-    _tmax = (box_max.unsqueeze(1) - start_rotated) / direction_rotated # [n_envs, n_rays, n_cubes, 3]
-    tmin = torch.where(direction_rotated < 0, _tmax, _tmin) # [n_envs, n_rays, n_cubes, 3]
-    tmax = torch.where(direction_rotated < 0, _tmin, _tmax) # [n_envs, n_rays, n_cubes, 3]
-    tentry = torch.max(tmin, dim=-1).values # [n_envs, n_rays, n_cubes]
-    texit = torch.min(tmax, dim=-1).values # [n_envs, n_rays, n_cubes]
-    valid = torch.logical_and(tentry <= texit, texit >= 0) # [n_envs, n_rays, n_cubes]
-    raydist = torch.where(valid, tentry, max_dist) # [n_envs, n_rays, n_cubes]
-    return raydist.min(dim=-1).values # [n_envs, n_rays]
-
-@torch.jit.script
-def raydist3d_cube_no_rotation(
-    p_cubes: Tensor, # [n_envs, n_cubes, 3]
-    lwh_cubes: Tensor, # [n_envs, n_cubes, 3]
-    start: Tensor, # [n_envs, n_rays, 3]
-    direction: Tensor, # [n_envs, n_rays, 3]
-    max_dist: float
-) -> Tensor:
-    """Compute the ray distance based on the start of the ray,
-    the direction of the ray, and the position and radius of 
-    the cubic obstacles.
-
-    Args:
-        p_cubes (torch.Tensor): The center position of the cube obstacles.
-        lwh_cubes (torch.Tensor): The length, width, and height of the cube obstacles.
-        start (torch.Tensor): The start point of the ray.
-        direction (torch.Tensor): The direction of the ray.
-        max_dist (float): The maximum traveling distance of the ray.
-
-    Returns:
-        torch.Tensor: The distance of the ray to the nearest obstacle's surface.
-    """
-    box_min = (p_cubes - lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
-    box_max = (p_cubes + lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
-    start, direction = start.unsqueeze(2), direction.unsqueeze(2) # [n_envs, n_rays, 3]
-    _tmin = (box_min - start) / direction # [n_envs, n_rays, n_cubes, 3]
-    _tmax = (box_max - start) / direction # [n_envs, n_rays, n_cubes, 3]
+    if not torch.all(rpy_cubes == 0):
+        rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2) # [n_envs, n_cubes, 3, 3]
+        start = mat_vec_mul(rotmat.unsqueeze(1), (start.unsqueeze(2)-p_cubes.unsqueeze(1))) # [n_envs, n_rays, n_cubes, 3]
+        direction = mat_vec_mul(rotmat.unsqueeze(1), direction.unsqueeze(2)) # [n_envs, n_rays, n_cubes, 3]
+        box_min = -lwh_cubes / 2. # [n_envs, n_cubes, 3]
+        box_max =  lwh_cubes / 2. # [n_envs, n_cubes, 3]
+    else:
+        box_min = (p_cubes - lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
+        box_max = (p_cubes + lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
+        start, direction = start.unsqueeze(2), direction.unsqueeze(2) # [n_envs, n_rays, 3]
+    _tmin = (box_min.unsqueeze(1) - start) / direction # [n_envs, n_rays, n_cubes, 3]
+    _tmax = (box_max.unsqueeze(1) - start) / direction # [n_envs, n_rays, n_cubes, 3]
     tmin = torch.where(direction < 0, _tmax, _tmin) # [n_envs, n_rays, n_cubes, 3]
     tmax = torch.where(direction < 0, _tmin, _tmax) # [n_envs, n_rays, n_cubes, 3]
     tentry = torch.max(tmin, dim=-1).values # [n_envs, n_rays, n_cubes]
@@ -166,10 +137,7 @@ def get_ray_dist(
     H, W = ray_directions_b.shape[:2]
     ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
     raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions_w, max_dist) # [n_envs, n_rays]
-    if torch.all(cube_rpy == 0.):
-        raydist_cube: Tensor = raydist3d_cube_no_rotation(cube_pos, cube_lwh, start, ray_directions_w, max_dist)
-    else:
-        raydist_cube: Tensor = raydist3d_cube(cube_pos, cube_lwh, cube_rpy, start, ray_directions_w, max_dist) # [n_envs, n_rays]
+    raydist_cube: Tensor = raydist3d_cube(cube_pos, cube_lwh, cube_rpy, start, ray_directions_w, max_dist) # [n_envs, n_rays]
     raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
     if z_ground_plane is not None:
         raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions_w, max_dist) # [n_envs, n_rays]
@@ -190,36 +158,30 @@ def get_contact_point(
     raydist = (1. - depth.reshape(-1, H*W, 1)) * max_dist
     return ray_directions_w * raydist + start # [n_envs, n_rays, 3]
 
-class Camera:
+
+class RayCastingSensorBase:
     def __init__(self, cfg: DictConfig, device: torch.device):
-        assert cfg.name == "camera"
-        self.H: int = cfg.height
-        self.W: int = cfg.width
-        self.hfov: float = cfg.horizontal_fov
-        self.vfov: float = self.hfov * self.H / self.W
+        self.H: int
+        self.W: int
         self.max_dist: float = cfg.max_dist
         self.device = device
-        self.ray_directions = F.normalize(self._get_ray_directions_plane(), dim=-1) # [H, W, 3]
-        # self.ray_directions = F.normalize(self._get_ray_directions_sphere(), dim=-1) # [H, W, 3]
+        self.ray_directions: Tensor
     
     def __call__(
         self,
-        sphere_pos: Tensor, # [n_envs, n_spheres, 3]
-        sphere_r: Tensor, # [n_envs, n_spheres]
-        cube_pos: Tensor, # [n_envs, n_cubes, 3]
-        cube_lwh: Tensor, # [n_envs, n_cubes, 3]
-        cube_rpy: Tensor, # [n_envs, n_cubes, 3]
-        start: Tensor, # [n_envs, n_rays, 3]
+        obstacle_manager: ObstacleManager,
+        pos: Tensor, # [n_envs, n_rays, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
         z_ground_plane: Optional[float] = None
     ) -> Tensor: # [n_envs, H, W]
+        ray_starts = pos.unsqueeze(1).expand(-1, self.H * self.W, -1) # [n_envs, n_rays, 3]
         return get_ray_dist(
-            sphere_pos=sphere_pos,
-            sphere_r=sphere_r,
-            cube_pos=cube_pos,
-            cube_lwh=cube_lwh,
-            cube_rpy=cube_rpy,
-            start=start,
+            sphere_pos=obstacle_manager.p_spheres,
+            sphere_r=obstacle_manager.r_spheres,
+            cube_pos=obstacle_manager.p_cubes,
+            cube_lwh=obstacle_manager.lwh_cubes,
+            cube_rpy=obstacle_manager.rpy_cubes,
+            start=ray_starts,
             ray_directions_b=self.ray_directions,
             quat_xyzw=quat_xyzw,
             max_dist=self.max_dist,
@@ -233,6 +195,20 @@ class Camera:
     ) -> Tensor: # [n_envs, n_rays, 3]
         ray_directions_w = ray_directions_world2body(self.ray_directions, quat_xyzw, self.H, self.W) # [n_envs, n_rays, 3]
         return get_contact_point(depth, ray_directions_w, start, self.max_dist, self.H, self.W)
+
+
+class Camera(RayCastingSensorBase):
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        assert cfg.name == "camera"
+        super().__init__(cfg, device)
+        self.H: int = cfg.height
+        self.W: int = cfg.width
+        self.hfov: float = cfg.horizontal_fov
+        self.vfov: float = self.hfov * self.H / self.W
+        self.max_dist: float = cfg.max_dist
+        self.device = device
+        self.ray_directions = F.normalize(self._get_ray_directions_plane(), dim=-1) # [H, W, 3]
+        # self.ray_directions = F.normalize(self._get_ray_directions_sphere(), dim=-1) # [H, W, 3]
         
     def _get_ray_directions_sphere(self):
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
@@ -262,38 +238,14 @@ class Camera:
         return forward + vertical_offset + horizontal_offset # [H, W, 3]
 
 
-class LiDAR:
+class LiDAR(RayCastingSensorBase):
     def __init__(self, cfg: DictConfig, device: torch.device):
+        super().__init__(cfg, device)
         self.H: int = cfg.n_rays_vertical
         self.W: int = cfg.n_rays_horizontal
         self.dep_angle_rad: float = cfg.depression_angle * torch.pi / 180
         self.ele_angle_rad: float = cfg.elevation_angle * torch.pi / 180
-        self.max_dist: float = cfg.max_dist
-        self.device = device
         self.ray_directions = F.normalize(self._get_ray_directions(), dim=-1) # [H, W, 3]
-    
-    def __call__(
-        self,
-        sphere_pos: Tensor, # [n_envs, n_spheres, 3]
-        sphere_r: Tensor, # [n_envs, n_spheres]
-        cube_pos: Tensor, # [n_envs, n_cubes, 3]
-        cube_lwh: Tensor, # [n_envs, n_cubes, 3]
-        cube_rpy: Tensor, # [n_envs, n_cubes, 3]
-        start: Tensor, # [n_envs, n_rays, 3]
-        quat_xyzw: Tensor, # [n_envs, 4]
-        z_ground_plane: Optional[float] = None
-    ) -> Tensor: # [n_envs, H, W]
-        return get_ray_dist(
-            sphere_pos=sphere_pos,
-            sphere_r=sphere_r,
-            cube_pos=cube_pos,
-            cube_lwh=cube_lwh,
-            cube_rpy=cube_rpy,
-            start=start,
-            ray_directions_b=self.ray_directions,
-            quat_xyzw=quat_xyzw,
-            max_dist=self.max_dist,
-            z_ground_plane=z_ground_plane)
     
     def _get_ray_directions(self):
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
@@ -306,3 +258,33 @@ class LiDAR:
         rotmat = T.euler_angles_to_matrix(rpy, convention='XYZ') # [H, W, 3, 3]
         directions = rotmat.transpose(-1, -2) @ forward.unsqueeze(-1) # [H, W, 3, 1]
         return directions.squeeze(-1) # [H, W, 3]
+
+
+class RelativePositionSensor:
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        self.H: int = cfg.n_obstacles + int(cfg.ceiling) + 4 * int(cfg.walls)
+        self.W: int = 3
+        self.device = device
+    
+    def __call__(
+        self,
+        obstacle_manager: ObstacleManager,
+        pos: Tensor, # [n_envs, n_rays, 3]
+        quat_xyzw: Tensor, # [n_envs, 4]
+        z_ground_plane: Optional[float] = None
+    ) -> Tensor: # [n_envs, H, W]
+        dist2obstacles, nearest_points2obstacles = obstacle_manager.nearest_distance_to_obstacles(pos.unsqueeze(1))
+        dist2obstacles, nearest_points2obstacles = dist2obstacles.squeeze(1), nearest_points2obstacles.squeeze(1)
+        obst_relpos = nearest_points2obstacles - pos.unsqueeze(1)
+        sorted_idx = dist2obstacles.argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
+        sorted_obst_relpos = obst_relpos.gather(dim=1, index=sorted_idx) # [n_envs, n_obstacles, 3]
+        return sorted_obst_relpos
+
+
+def build_sensor(cfg: DictConfig, device: torch.device) -> Union[Camera, LiDAR, RelativePositionSensor]:
+    sensor_alias = {
+        "camera": Camera,
+        "lidar": LiDAR,
+        "relpos": RelativePositionSensor,
+    }
+    return sensor_alias[cfg.name](cfg, device)

@@ -12,7 +12,7 @@ import numpy as np
 
 from quaddif.env.base_env import BaseEnv
 from quaddif.dynamics.pointmass import PointMassModelBase
-from quaddif.utils.sensor import Camera, LiDAR
+from quaddif.utils.sensor import build_sensor
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.assets import ObstacleManager
 from quaddif.utils.runner import timeit
@@ -28,17 +28,8 @@ class ObstacleAvoidance(BaseEnv):
         self.sensor_type = cfg.sensor.name
         assert self.sensor_type in ["camera", "lidar", "relpos"]
         
-        if self.sensor_type == "camera":
-            self.camera = Camera(cfg.sensor, device=device)
-            H, W = self.camera.H, self.camera.W
-        elif self.sensor_type == "lidar":
-            self.lidar = LiDAR(cfg.sensor, device=device)
-            H, W = self.lidar.H, self.lidar.W
-        elif self.sensor_type == "relpos":
-            # relative position of obstacles as additional observation
-            H, W = self.n_obstacles, 3
-        else:
-            raise ValueError(f"Unknown sensor type: {self.sensor_type}")
+        self.sensor = build_sensor(cfg.sensor, device=device)
+        H, W = self.sensor.H, self.sensor.W
         
         self.last_action_in_obs: bool = cfg.last_action_in_obs
         self.obs_dim = (10 + self.action_dim * int(self.last_action_in_obs), (H, W))
@@ -87,25 +78,12 @@ class ObstacleAvoidance(BaseEnv):
     
     @timeit
     def update_sensor_data(self):
-        if self.sensor_type == "camera" or self.sensor_type == "lidar":
-            H, W = self.sensor_tensor.shape[1:]
-            if self.sensor_type == "camera":
-                sensor = self.camera
-            else:
-                sensor = self.lidar
-            self.sensor_tensor.copy_(sensor(
-                sphere_pos=self.obstacle_manager.p_spheres,
-                sphere_r=self.obstacle_manager.r_spheres,
-                cube_pos=self.obstacle_manager.p_cubes,
-                cube_lwh=self.obstacle_manager.lwh_cubes,
-                cube_rpy=self.obstacle_manager.rpy_cubes,
-                start=self.p.unsqueeze(1).expand(-1, H*W, -1),
-                quat_xyzw=self.q,
-                z_ground_plane=self.z_ground_plane))
-        else: # self.sensor_type == "relpos"
-            obst_relpos = self.obstacle_manager.p_obstacles - self.p.unsqueeze(1)
-            sorted_idx = obst_relpos.norm(dim=-1).argsort(dim=-1).unsqueeze(-1).expand(-1, -1, 3)
-            self.sensor_tensor.copy_(obst_relpos.gather(dim=1, index=sorted_idx))
+        self.sensor_tensor.copy_(self.sensor(
+            obstacle_manager=self.obstacle_manager,
+            pos=self.p,
+            quat_xyzw=self.q,
+            z_ground_plane=self.z_ground_plane
+        ))
     
     @timeit
     def step(self, action, need_obs_before_reset=True):
