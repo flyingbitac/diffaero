@@ -2,9 +2,10 @@ import random
 from time import sleep
 import sys
 sys.path.append('..')
+from pathlib import Path
 
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 @hydra.main(config_path="../cfg", config_name="config_train", version_base="1.3")
 def main(cfg: DictConfig):
@@ -30,10 +31,20 @@ def main(cfg: DictConfig):
         np.random.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
+    
+    if cfg.checkpoint is not None and len(cfg.checkpoint) > 0:
+        train_from_checkpoint = True
+        cfg_path = Path(cfg.checkpoint).resolve().parent.joinpath(".hydra", "config.yaml")
+        ckpt_cfg = OmegaConf.load(cfg_path)
+        cfg.sensor = ckpt_cfg.sensor
+    else:
+        train_from_checkpoint = False
 
     env = build_env(cfg.env, device=device)
     
     agent = build_agent(cfg.algo, env, device)
+    if train_from_checkpoint:
+        agent.load(Path(cfg.checkpoint).resolve())
     
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
     logger = Logger(cfg, run_name=runname)

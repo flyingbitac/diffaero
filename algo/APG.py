@@ -136,9 +136,10 @@ class APG_stochastic(APG):
         total_loss = actor_loss + self.entropy_weight * entropy_loss
         self.optimizer.zero_grad()
         total_loss.backward()
-        grad_norm = sum([p.grad.data.norm().item() ** 2 for p in self.actor.parameters()]) ** 0.5
         if self.max_grad_norm is not None:
-            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=self.max_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=self.max_grad_norm)
+        else:
+            grad_norm = torch.nn.utils.get_total_norm(self.actor.parameters())
         self.optimizer.step()
         self.actor_loss = torch.zeros(1, device=self.device)
         self.entropy_loss = torch.zeros(1, device=self.device)

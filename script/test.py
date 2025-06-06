@@ -3,6 +3,7 @@ from time import sleep
 import random
 import sys
 sys.path.append('..')
+from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -32,7 +33,7 @@ def main(cfg: DictConfig):
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
-    cfg_path = os.path.join(os.path.dirname(os.path.abspath(cfg.checkpoint)), ".hydra", "config.yaml")
+    cfg_path = Path(cfg.checkpoint).resolve().parent.joinpath(".hydra", "config.yaml")
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo
     if cfg.algo.name != 'world':
