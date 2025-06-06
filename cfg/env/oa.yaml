@@ -16,30 +16,13 @@ r_drone: 0.2
 n_obstacles: 30
 ground_plane: True
 
-n_substeps: 1
-
-obstacles:
-  walls: False
-  ceiling: False
-  n_obstacles: ${env.n_obstacles}
-  height_scale: ${env.height_scale}
-  sphere_percentage: 0.33
-  sphere_radius_range: [0.6, 2.0, 0.4] # [min, max, step]
-  cube_lw_range: [0.6, 1.4, 0.2] # [min, max, step]
-  cube_h_range: [10.0, 15.0, 1.0] # [min, max, step]
-  randomize_cube_pose: True
-  cube_roll_pitch_range: 15. # degrees
-  randpos_std_min: 6
-  randpos_std_max: 7
-  safety_range: 1.7
-
 loss_weights:
   pointmass:
     vel: 0.5
     oa: 4.
     jerk: 0.005
     pos: 5.
-    collision: 10.
+    collision: 0.
   quadrotor:
     vel: 1.
     oa: 1.
@@ -63,4 +46,5 @@ reward_weights:
 defaults:
   - render: oa_render
   - randomizer: default_randomizer
+  - obstacles: outdoor
   - _self_

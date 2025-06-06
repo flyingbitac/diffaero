@@ -11,9 +11,6 @@ max_target_vel: 10.
 min_target_vel: 5.
 last_action_in_obs: False
 
-solver_type: 
-n_substeps: 1
-
 loss_weights:
   pointmass:
     vel: 1.
