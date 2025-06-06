@@ -25,7 +25,7 @@ display_image: False
 record_video: False
 
 runname: ""
-checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
+checkpoint:
 export:
   jit: True
   onnx: True

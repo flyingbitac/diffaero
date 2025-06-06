@@ -156,10 +156,7 @@ class PositionControl(BaseEnv):
         self.arrive_time[env_idx] = 0
         self.max_vel[env_idx] = torch.rand(
             n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
-    
-    def reset(self):
-        super().reset()
-        return self.get_observations()
+
     
     def terminated(self) -> Tensor:
         out_of_bound = torch.any(self.p < -self.L, dim=-1) | \

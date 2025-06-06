@@ -28,7 +28,7 @@ video_saveas: mp4 # [mp4, tensorboard]
 use_training_cfg: False
 
 runname: ""
-checkpoint: # must be an absolute path. example: "/home/username/workspace/quaddif/outputs/2024-12-12/09-00-00"
+checkpoint:
 export:
   jit: True
   onnx: True
@@ -41,7 +41,7 @@ env:
   min_target_vel: ${max_vel}
   max_target_vel: ${max_vel}
   randomizer:
-    enable: False
+    enabled: False
 
 hydra:
   run:
