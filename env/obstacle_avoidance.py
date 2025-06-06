@@ -199,7 +199,8 @@ class ObstacleAvoidance(BaseEnv):
                 "jerk_loss": jerk_loss.mean().item(),
                 "collision_loss": collision_loss.mean().item(),
                 "oa_loss": oa_loss.mean().item(),
-                "total_loss": total_loss.mean().item()
+                "total_loss": total_loss.mean().item(),
+                "total_reward": total_reward.mean().item()
             }
         else:
             pos_loss = -(-(self._p-self.target_pos).norm(dim=-1)).exp()
@@ -230,7 +231,8 @@ class ObstacleAvoidance(BaseEnv):
                 "jerk_loss": jerk_loss.mean().item(),
                 "collision_loss": collision_loss.mean().item(),
                 "oa_loss": oa_loss.mean().item(),
-                "total_loss": total_loss.mean().item()
+                "total_loss": total_loss.mean().item(),
+                "total_reward": total_reward.mean().item()
             }
         return total_loss, total_reward, loss_components
 

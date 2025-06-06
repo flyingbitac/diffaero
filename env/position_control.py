@@ -100,7 +100,8 @@ class PositionControl(BaseEnv):
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
-                "total_loss": total_loss.mean().item()
+                "total_loss": total_loss.mean().item(),
+                "total_reward": total_reward.mean().item()
             }
         else:
             rotation_matrix_b2i = T.quaternion_to_matrix(self._q.roll(1, dims=-1)).clamp_(min=-1.0+1e-6, max=1.0-1e-6)
@@ -130,7 +131,8 @@ class PositionControl(BaseEnv):
                 "jerk_loss": jerk_loss.mean().item(),
                 "attitute_loss": attitude_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
-                "total_loss": total_loss.mean().item()
+                "total_loss": total_loss.mean().item(),
+                "total_reward": total_reward.mean().item()
             }
         return total_loss, total_reward, loss_components
 
