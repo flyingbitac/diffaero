@@ -94,8 +94,7 @@ class BaseEnv:
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
         if self.renderer is not None:
-            self.renderer.step(**self.state_for_render())
-            self.renderer.render()
+            self.renderer.render(self.states_for_render())
             # truncate if `reset_all` is commanded by the user from GUI
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
         # arrival flag denoting if the agent has reached the target position
@@ -113,7 +112,7 @@ class BaseEnv:
         self.last_action.copy_(action.detach())
         return terminated, truncated, success, avg_vel
     
-    def state_for_render(self):
+    def states_for_render(self):
         # type: () -> Dict[str, Tensor]
         raise NotImplementedError
     

@@ -36,7 +36,8 @@ class ObstacleAvoidance(BaseEnv):
         self.state_dim = 13 + H * W + self.n_obstacles * 3
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
-        need_renderer = (not cfg.render.headless) or (hasattr(cfg.render, "record_video") and cfg.render.record_video)
+        record_video = hasattr(cfg.render, "record_video") and cfg.render.record_video
+        need_renderer = (not cfg.render.headless) or record_video
         if need_renderer:
             self.renderer = ObstacleAvoidanceRenderer(
                 cfg=cfg.render,
@@ -117,13 +118,19 @@ class ObstacleAvoidance(BaseEnv):
             self.reset_idx(reset_indices)
         return self.get_observations(), (loss, reward), terminated, extra
     
-    def state_for_render(self):
-        return {
-            "drone_pos": self.p.clone(),
-            "drone_quat_xyzw": self.q.clone(),
-            "target_pos": self.target_pos.clone(),
-            "nearest_points": self.obstacle_nearest_points.clone(),
+    def states_for_render(self):
+        pos = self.p.unsqueeze(1) if self.n_agents == 1 else self.p
+        vel = self.v.unsqueeze(1) if self.n_agents == 1 else self.v
+        quat_xyzw = self.q.unsqueeze(1) if self.n_agents == 1 else self.q
+        target_pos = self.target_pos.unsqueeze(1) if self.n_agents == 1 else self.target_pos
+        states_for_render = {
+            "pos": pos,
+            "vel": vel,
+            "quat_xyzw": quat_xyzw,
+            "target_pos": target_pos,
+            "nearest_points": self.obstacle_nearest_points,
         }
+        return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
     
     @timeit
     def loss_and_reward(self, action):
@@ -275,12 +282,6 @@ class ObstacleAvoidance(BaseEnv):
         self.max_vel[env_idx] = torch.rand(
             n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
     
-    def reset(self):
-        super().reset()
-        if self.renderer is not None:
-            self.renderer.step(**self.state_for_render())
-        return self.get_observations()
-    
     @timeit
     def collision(self) -> Tensor:
         dist2obstacles, nearest_points2obstacles = self.obstacle_manager.nearest_distance_to_obstacles(self.p.unsqueeze(1))
@@ -325,7 +326,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         z_range = torch.linspace(cfg.grid.z_min, cfg.grid.z_max - self.cube_size, cfg.grid.n_points[2], device=self.device) + self.cube_size / 2
         grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1) # [x_points, y_points, z_points, 3]
         self.local_grid_centers = grid_xyz_range.reshape(1, -1, 3) # [1, n_points, 3]
-        n_segments = math.ceil(self.camera.max_dist / self.cube_size)
+        n_segments = math.ceil(self.sensor.max_dist / self.cube_size)
         self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device)
         
         self.prev_visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
@@ -488,8 +489,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1
         if self.renderer is not None:
-            self.renderer.step(**self.state_for_render())
-            self.renderer.render()
+            self.renderer.render(self.states_for_render())
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
         arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))

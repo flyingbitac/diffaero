@@ -73,8 +73,18 @@ class PositionControl(BaseEnv):
             self.reset_idx(reset_indices)
         return self.get_observations(), (loss, reward), terminated, extra
     
-    def state_for_render(self) -> Dict[str, Tensor]:
-        return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
+    def states_for_render(self) -> Dict[str, Tensor]:
+        pos = self.p.unsqueeze(1) if self.n_agents == 1 else self.p
+        vel = self.v.unsqueeze(1) if self.n_agents == 1 else self.v
+        quat_xyzw = self.q.unsqueeze(1) if self.n_agents == 1 else self.q
+        target_pos = self.target_pos.unsqueeze(1) if self.n_agents == 1 else self.target_pos
+        states_for_render = {
+            "pos": pos,
+            "vel": vel,
+            "quat_xyzw": quat_xyzw,
+            "target_pos": target_pos,
+        }
+        return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
     
     @timeit
     def loss_and_reward(self, action):
@@ -241,8 +251,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         (terminated, collision, out_of_bound), truncated = self.terminated(), self.truncated()
         self.progress += 1
         if self.renderer is not None:
-            self.renderer.step(**self.state_for_render())
-            self.renderer.render()
+            self.renderer.render(self.states_for_render())
             truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
         arrived = torch.norm(self.p - self.target_pos, dim=-1).lt(0.5).all(dim=-1) # [n_envs, ]
         self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
@@ -320,8 +329,18 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         self.max_vel[env_idx] = torch.rand(
             n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
     
-    def state_for_render(self) -> Tensor:
-        return {"drone_pos": self.p.clone(), "drone_quat_xyzw": self.q.clone(), "target_pos": self.target_pos.clone()}
+    def states_for_render(self) -> Dict[str, Tensor]:
+        pos = self.p.unsqueeze(1) if self.n_agents == 1 else self.p
+        vel = self.v.unsqueeze(1) if self.n_agents == 1 else self.v
+        quat_xyzw = self.q.unsqueeze(1) if self.n_agents == 1 else self.q
+        target_pos = self.target_pos.unsqueeze(1) if self.n_agents == 1 else self.target_pos
+        states_for_render = {
+            "pos": pos,
+            "vel": vel,
+            "quat_xyzw": quat_xyzw,
+            "target_pos": target_pos,
+        }
+        return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
 
     @timeit
     def loss_and_reward(self, action):

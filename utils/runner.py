@@ -261,7 +261,7 @@ class TestRunner:
             
             if self.cfg.record_video:
                 n_envs = self.env.renderer.n_envs
-                rgb_image: np.ndarray = self.env.renderer.render_fpp()
+                rgb_image: np.ndarray = self.env.renderer.render_fpp(self.env.states_for_render())
                 index = (np.arange(n_envs), self.env.progress[:n_envs].cpu().numpy()-1)
                 depth_image = torchvision.transforms.Resize(
                     (H_depth, W_depth), interpolation=torchvision.transforms.InterpolationMode.NEAREST)(env_info["sensor"][:n_envs])

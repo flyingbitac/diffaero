@@ -149,11 +149,11 @@ def rand_range(
 
 @torch.jit.script
 def quaternion_to_euler(quat_xyzw: Tensor) -> Tensor:
-    # return T.matrix_to_euler_angles(T.quaternion_to_matrix(quat_wxyz), "XYZ")
+    # return T.matrix_to_euler_angles(T.quaternion_to_matrix(quat_wxyz), "ZYX")[..., [2, 1, 0]]
     x, y, z, w = quat_xyzw.unbind(dim=-1)
-    roll = torch.atan2(2.0 * (w * x - y * z), 1.0 - 2.0 * (x**2 + y**2))
-    pitch = torch.asin(2.0 * (w * y + x * z))
-    yaw = torch.atan2(2.0 * (w * z - x * y), 1.0 - 2.0 * (y**2 + z**2))
+    roll = torch.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x**2 + y**2))
+    pitch = torch.asin(2.0 * (w * y - x * z))
+    yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y**2 + z**2))
     return torch.stack([roll, pitch, yaw], dim=-1)
 
 @torch.jit.script
