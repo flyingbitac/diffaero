@@ -9,6 +9,17 @@ from omegaconf import DictConfig, OmegaConf
 
 @hydra.main(config_path="../cfg", config_name="config_train", version_base="1.3")
 def main(cfg: DictConfig):
+    hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
+    multirun = hydra_cfg.mode == hydra.types.RunMode.MULTIRUN
+    use_multiple_devices = isinstance(cfg.device, str) and len(cfg.device) > 0
+    if multirun and use_multiple_devices:
+        available_devices = list(map(int, list(cfg.device)))
+        n_devices = len(available_devices)
+        job_id = hydra_cfg.job.num
+        job_device = available_devices[job_id % n_devices]
+        cfg.device = 0
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(job_device)
     
     import torch
     import numpy as np
