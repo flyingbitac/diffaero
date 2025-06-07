@@ -47,11 +47,15 @@ class PointMassModelBase:
             self._G_vec.unsqueeze_(0)
     
         # self.vel_ema_factor: float = cfg.vel_ema_factor
-        self.vel_ema_factor = build_randomizer(cfg.vel_ema_factor, [self.n_envs, 1], device=device)
+        self.vel_ema_factor = build_randomizer(cfg.vel_ema_factor, [self.n_envs, self.n_agents, 1], device=device)
         # self._D = torch.tensor(cfg.D, device=device, dtype=torch.float32)
-        self._D = build_randomizer(cfg.D, [self.n_envs, 1], device=device)
+        self._D = build_randomizer(cfg.D, [self.n_envs, self.n_agents, 1], device=device)
         # self.lmbda: float = cfg.lmbda # soft control latency
-        self.lmbda = build_randomizer(cfg.lmbda, [self.n_envs, 1], device=device)
+        self.lmbda = build_randomizer(cfg.lmbda, [self.n_envs, self.n_agents, 1], device=device)
+        if self.n_agents == 1:
+            self.vel_ema_factor.value.squeeze_(1)
+            self._D.value.squeeze_(1)
+            self.lmbda.value.squeeze_(1)
         self.max_acc_xy = build_randomizer(cfg.max_acc.xy, [self.n_envs, self.n_agents], device=device)
         self.max_acc_z = build_randomizer(cfg.max_acc.z, [self.n_envs, self.n_agents], device=device)
         
