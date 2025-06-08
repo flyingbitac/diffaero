@@ -496,7 +496,7 @@ class BaseRenderer:
                 sub_window.text(f"rpy:   [" + ", ".join(tensor2list(euler_angles)) + "]°")
                 sub_window.text(f"vel_w: [" + ", ".join(tensor2list(vel)) + "]m/s")
                 sub_window.text(f"vel_b: [" + ", ".join(tensor2list(vel_b)) + "]m/s")
-        elif handle == self.video_gui:
+        elif hasattr(self, "video_gui") and handle == self.video_gui:
             pos_str = f"pos:   [" + ", ".join(tensor2list(pos)) + "]m   " + f"tgt_b: [" + ", ".join(tensor2list(tgt_pos_b)) + "]m"
             vel_str = f"vel_w: [" + ", ".join(tensor2list(vel)) + "]m/s " + f"vel_b: [" + ", ".join(tensor2list(vel_b)) + "]m/s"
             with handle.sub_window(pos_str, x=0.0, y=0.83, height=0.17, width=1.) as sub_window:
