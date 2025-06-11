@@ -12,7 +12,7 @@ import numpy as np
 
 from quaddif.env.base_env import BaseEnv
 from quaddif.dynamics.pointmass import PointMassModelBase
-from quaddif.utils.sensor import build_sensor
+from quaddif.utils.sensor import build_sensor, RayCastingSensorBase
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.assets import ObstacleManager
 from quaddif.utils.runner import timeit
@@ -306,6 +306,7 @@ class ObstacleAvoidance(BaseEnv):
 class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device:torch.device, test:bool=False):
         super().__init__(cfg, device)
+        assert isinstance(self.sensor, RayCastingSensorBase), "This environment only supports ray casting-based sensors."
         self.n_grid_points = math.prod(cfg.grid.n_points)
         
         self.x_min, self.x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
@@ -364,7 +365,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         # get visiability map
         N, H, W = self.sensor_tensor.shape
         start = self.p.unsqueeze(1).expand(-1, H*W, -1)
-        contact_point = self.camera.get_contact_point( # [n_envs, n_rays, 3]
+        contact_point = self.sensor.get_contact_point( # [n_envs, n_rays, 3]
             depth=self.sensor_tensor,
             start=start,
             quat_xyzw=quat_xyzw)
@@ -462,7 +463,8 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
             obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         grid, visible_map = self.get_occupancy_map(), self.get_visibility_map(quat_xyzw)
         if self.renderer is not None:
-            self.visualize_grid(visible_map[self.renderer.gui_states["tracking_env_idx"]])
+            grid_tobe_visualized = visible_map
+            self.visualize_grid(grid_tobe_visualized[self.renderer.gui_states["tracking_env_idx"]])
 
         obs = TensorDict({
             "state": obs, "perception": self.sensor_tensor.clone(), "grid": grid, "visible_map": visible_map}, batch_size=self.n_envs)
