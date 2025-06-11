@@ -12,10 +12,10 @@ from quaddif.utils.assets import ObstacleManager
 
 @torch.jit.script
 def raydist3d_sphere(
-    obst_pos: Tensor, # [n_envs, n_spheres, 3]
-    obst_r: Tensor, # [n_envs, n_spheres]
-    start: Tensor, # [n_envs, n_rays, 3]
-    direction: Tensor, # [n_envs, n_rays, 3]
+    obst_pos: Tensor, # [m_spheres, 3]
+    obst_r: Tensor, # [m_spheres]
+    start: Tensor, # [m_spheres, n_rays, 3]
+    direction: Tensor, # [m_spheres, n_rays, 3]
     max_dist: float
 ) -> Tensor:
     """Compute the ray distance based on the start of the ray,
@@ -32,24 +32,24 @@ def raydist3d_sphere(
     Returns:
         torch.Tensor: The distance of the ray to the nearest obstacle's surface.
     """
-    rel_pos = obst_pos.unsqueeze(1) - start.unsqueeze(2) # [n_envs, n_rays, n_spheres, 3]
-    rel_dist = torch.norm(rel_pos, dim=-1) # [n_envs, n_agents, n_spheres]
-    costheta = torch.cosine_similarity(rel_pos, direction.unsqueeze(2), dim=-1) # [n_envs, n_rays, n_spheres]
-    sintheta = torch.where(costheta>0, torch.sqrt(1 - costheta**2), 0.9) # [n_envs, n_rays, n_spheres]
-    dist_center2ray = rel_dist * sintheta # [n_envs, n_rays, n_spheres]
-    obst_r = obst_r.unsqueeze(1) # [n_envs, 1, n_spheres]
-    raydist = rel_dist * costheta - torch.sqrt(torch.pow(obst_r, 2) - torch.pow(dist_center2ray, 2)) # [n_envs, n_rays, n_spheres]
-    valid = torch.logical_and(dist_center2ray < obst_r, costheta > 0) # [n_envs, n_rays, n_spheres]
-    raydist_valid = torch.where(valid, raydist, max_dist) # [n_envs, n_rays, n_spheres]
-    return raydist_valid.min(dim=-1).values # [n_envs, n_rays]
+    rel_pos = obst_pos.unsqueeze(1) - start # [m_spheres, n_rays, 3]
+    rel_dist = torch.norm(rel_pos, dim=-1) # [m_spheres, n_rays]
+    costheta = torch.cosine_similarity(rel_pos, direction, dim=-1) # [m_spheres, n_rays]
+    sintheta = torch.where(costheta>0, torch.sqrt(1 - costheta**2), 0.9) # [m_spheres, n_rays]
+    dist_center2ray = rel_dist * sintheta # [m_spheres, n_rays]
+    obst_r = obst_r.unsqueeze(1) # [m_spheres, 1]
+    raydist = rel_dist * costheta - torch.sqrt(torch.pow(obst_r, 2) - torch.pow(dist_center2ray, 2)) # [m_spheres, n_rays]
+    valid = torch.logical_and(dist_center2ray < obst_r, costheta > 0) # [m_spheres, n_rays]
+    raydist_valid = torch.where(valid, raydist, max_dist) # [m_spheres, n_rays]
+    return raydist_valid
 
 @torch.jit.script
 def raydist3d_cube(
-    p_cubes: Tensor, # [n_envs, n_cubes, 3]
-    lwh_cubes: Tensor, # [n_envs, n_cubes, 3]
-    rpy_cubes: Tensor, # [n_envs, n_cubes, 3]
-    start: Tensor, # [n_envs, n_rays, 3]
-    direction: Tensor, # [n_envs, n_rays, 3]
+    p_cubes: Tensor, # [m_cubes, 3]
+    lwh_cubes: Tensor, # [m_cubes, 3]
+    rpy_cubes: Tensor, # [m_cubes, 3]
+    start: Tensor, # [m_cubes, n_rays, 3]
+    direction: Tensor, # [m_cubes, n_rays, 3]
     max_dist: float
 ) -> Tensor:
     """Compute the ray distance based on the start of the ray,
@@ -68,24 +68,23 @@ def raydist3d_cube(
         torch.Tensor: The distance of the ray to the nearest obstacle's surface.
     """
     if not torch.all(rpy_cubes == 0):
-        rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2) # [n_envs, n_cubes, 3, 3]
-        start = mat_vec_mul(rotmat.unsqueeze(1), (start.unsqueeze(2)-p_cubes.unsqueeze(1))) # [n_envs, n_rays, n_cubes, 3]
-        direction = mat_vec_mul(rotmat.unsqueeze(1), direction.unsqueeze(2)) # [n_envs, n_rays, n_cubes, 3]
-        box_min = -lwh_cubes / 2. # [n_envs, n_cubes, 3]
-        box_max =  lwh_cubes / 2. # [n_envs, n_cubes, 3]
-    else:
-        box_min = (p_cubes - lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
-        box_max = (p_cubes + lwh_cubes / 2.).unsqueeze(1) # [n_envs, n_cubes, 3]
-        start, direction = start.unsqueeze(2), direction.unsqueeze(2) # [n_envs, n_rays, 3]
-    _tmin = (box_min.unsqueeze(1) - start) / direction # [n_envs, n_rays, n_cubes, 3]
-    _tmax = (box_max.unsqueeze(1) - start) / direction # [n_envs, n_rays, n_cubes, 3]
-    tmin = torch.where(direction < 0, _tmax, _tmin) # [n_envs, n_rays, n_cubes, 3]
-    tmax = torch.where(direction < 0, _tmin, _tmax) # [n_envs, n_rays, n_cubes, 3]
-    tentry = torch.max(tmin, dim=-1).values # [n_envs, n_rays, n_cubes]
-    texit = torch.min(tmax, dim=-1).values # [n_envs, n_rays, n_cubes]
-    valid = torch.logical_and(tentry <= texit, texit >= 0) # [n_envs, n_rays, n_cubes]
-    raydist = torch.where(valid, tentry, max_dist) # [n_envs, n_rays, n_cubes]
-    return raydist.min(dim=-1).values # [n_envs, n_rays]
+        rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2) # [m_cubes, 3, 3]
+        start = mat_vec_mul(rotmat.unsqueeze(1), (start-p_cubes.unsqueeze(1))) # [m_cubes, n_rays, 3]
+        direction = mat_vec_mul(rotmat.unsqueeze(1), direction) # [m_cubes, n_rays, 3]
+        box_min = -lwh_cubes / 2. # [m_cubes, 3]
+        box_max =  lwh_cubes / 2. # [m_cubes, 3]
+    else: # yay, no rotation!
+        box_min = (p_cubes - lwh_cubes / 2.) # [m_cubes, 3]
+        box_max = (p_cubes + lwh_cubes / 2.) # [m_cubes, 3]
+    _tmin = (box_min.unsqueeze(1) - start) / direction # [m_cubes, n_rays, 3]
+    _tmax = (box_max.unsqueeze(1) - start) / direction # [m_cubes, n_rays, 3]
+    tmin = torch.where(direction < 0, _tmax, _tmin) # [m_cubes, n_rays, 3]
+    tmax = torch.where(direction < 0, _tmin, _tmax) # [m_cubes, n_rays, 3]
+    tentry = torch.max(tmin, dim=-1).values # [m_cubes, n_rays]
+    texit = torch.min(tmax, dim=-1).values # [m_cubes, n_rays]
+    valid = torch.logical_and(tentry <= texit, texit >= 0) # [m_cubes, n_rays]
+    raydist = torch.where(valid, tentry, max_dist) # [m_cubes, n_rays]
+    return raydist
 
 @torch.jit.script
 def raydist3d_ground_plane(
@@ -112,8 +111,8 @@ def raydist3d_ground_plane(
 
 @torch.jit.script
 def ray_directions_world2body(
-    ray_directions: torch.Tensor,
-    quat_xyzw: torch.Tensor,
+    ray_directions: Tensor,
+    quat_xyzw: Tensor,
     H: int,
     W: int
 ) -> Tensor: # [n_envs, n_rays, 3]
@@ -123,22 +122,45 @@ def ray_directions_world2body(
 
 @torch.jit.script
 def get_ray_dist(
-    sphere_pos: Tensor, # [n_envs, n_spheres, 3]
-    sphere_r: Tensor, # [n_envs, n_spheres]
-    cube_pos: Tensor, # [n_envs, n_cubes, 3]
-    cube_lwh: Tensor, # [n_envs, n_cubes, 3]
-    cube_rpy: Tensor, # [n_envs, n_cubes, 3]
-    start: Tensor, # [n_envs, n_rays, 3]
-    ray_directions_b: Tensor, # [n_envs, n_rays, 3]
-    quat_xyzw: Tensor, # [n_envs, 4]
+    sphere_ray_dists: Tensor, # [n_envs, n_spheres, n_rays]
+    sphere_env_ids: Tensor,   # [m_spheres]
+    sphere_ids: Tensor,       # [m_spheres]
+    p_spheres: Tensor,        # [n_envs, n_spheres, 3]
+    r_spheres: Tensor,        # [n_envs, n_spheres]
+    cube_ray_dists: Tensor,   # [n_envs, n_cubes, n_rays]
+    cube_env_ids: Tensor,     # [m_cubes]
+    cube_ids: Tensor,         # [m_cubes]
+    p_cubes: Tensor,          # [n_envs, n_cubes, 3]
+    lwh_cubes: Tensor,        # [n_envs, n_cubes, 3]
+    rpy_cubes: Tensor,        # [n_envs, n_cubes, 3]
+    start: Tensor,            # [n_envs, n_rays, 3]
+    ray_directions_b: Tensor, # [H, W, 3]
+    quat_xyzw: Tensor,        # [n_envs, 4]
     max_dist: float,
     z_ground_plane: Optional[float] = None,
 ) -> Tensor: # [n_envs, H, W]
     H, W = ray_directions_b.shape[:2]
     ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
-    raydist_sphere: Tensor = raydist3d_sphere(sphere_pos, sphere_r, start, ray_directions_w, max_dist) # [n_envs, n_rays]
-    raydist_cube: Tensor = raydist3d_cube(cube_pos, cube_lwh, cube_rpy, start, ray_directions_w, max_dist) # [n_envs, n_rays]
-    raydist = torch.minimum(raydist_sphere, raydist_cube) # [n_envs, n_rays]
+    
+    sphere_ray_starts = start[sphere_env_ids] # [m_spheres, n_rays, 3]
+    sphere_ray_directions_w = ray_directions_w[sphere_env_ids] # [m_spheres, n_rays, 3]
+    p_spheres = p_spheres[sphere_env_ids, sphere_ids] # [m_spheres, 3]
+    r_spheres = r_spheres[sphere_env_ids, sphere_ids] # [m_spheres]
+    raydist_sphere = raydist3d_sphere(p_spheres, r_spheres, sphere_ray_starts, sphere_ray_directions_w, max_dist)
+    sphere_ray_dists[sphere_env_ids, sphere_ids] = raydist_sphere
+    
+    cube_ray_starts = start[cube_env_ids] # [m_cubes, n_rays, 3]
+    cube_ray_directions_w = ray_directions_w[cube_env_ids] # [m_cubes, n_rays, 3]
+    p_cubes = p_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
+    lwh_cubes = lwh_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
+    rpy_cubes = rpy_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
+    raydist_cube = raydist3d_cube(p_cubes, lwh_cubes, rpy_cubes, cube_ray_starts, cube_ray_directions_w, max_dist)
+    cube_ray_dists[cube_env_ids, cube_ids] = raydist_cube
+    
+    raydist = torch.minimum( # [n_envs, n_rays]
+        torch.min(sphere_ray_dists, dim=1).values,
+        torch.min(cube_ray_dists, dim=1).values
+    )
     if z_ground_plane is not None:
         raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions_w, max_dist) # [n_envs, n_rays]
         raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
@@ -165,27 +187,47 @@ class RayCastingSensorBase:
         self.W: int
         self.max_dist: float = cfg.max_dist
         self.device = device
-        self.ray_directions: Tensor
+        self.ray_directions: Tensor # [H, W, 3]
     
     def __call__(
         self,
         obstacle_manager: ObstacleManager,
-        pos: Tensor, # [n_envs, n_rays, 3]
+        pos: Tensor, # [n_envs, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
         z_ground_plane: Optional[float] = None
     ) -> Tensor: # [n_envs, H, W]
         ray_starts = pos.unsqueeze(1).expand(-1, self.H * self.W, -1) # [n_envs, n_rays, 3]
+        sphere_ray_dists = torch.full( # [n_envs, n_obstacles, n_rays]
+            (pos.shape[0], obstacle_manager.n_spheres, self.H*self.W),
+            fill_value=self.max_dist, dtype=torch.float, device=self.device)
+        cube_ray_dists = torch.full( # [n_envs, n_obstacles, n_rays]
+            (pos.shape[0], obstacle_manager.n_cubes, self.H*self.W),
+            fill_value=self.max_dist, dtype=torch.float, device=self.device)
+        dist2obstacles, nearest_points2obstacles = obstacle_manager.nearest_distance_to_obstacles(pos.unsqueeze(1))
+        dist2obstacles = dist2obstacles.squeeze(1) # [n_envs, n_obstacles]
+        env_ids, obstacle_ids = torch.where(dist2obstacles.le(self.max_dist))
+        sphere_mask = obstacle_ids < obstacle_manager.n_spheres
+        sphere_env_ids, sphere_ids = env_ids[sphere_mask], obstacle_ids[sphere_mask]
+        cube_env_ids, cube_ids = env_ids[~sphere_mask], obstacle_ids[~sphere_mask] - obstacle_manager.n_spheres
+        
         return get_ray_dist(
-            sphere_pos=obstacle_manager.p_spheres,
-            sphere_r=obstacle_manager.r_spheres,
-            cube_pos=obstacle_manager.p_cubes,
-            cube_lwh=obstacle_manager.lwh_cubes,
-            cube_rpy=obstacle_manager.rpy_cubes,
-            start=ray_starts,
-            ray_directions_b=self.ray_directions,
-            quat_xyzw=quat_xyzw,
-            max_dist=self.max_dist,
-            z_ground_plane=z_ground_plane)
+            sphere_ray_dists,
+            sphere_env_ids, sphere_ids,
+            obstacle_manager.p_spheres, # [n_envs, n_spheres, 3]
+            obstacle_manager.r_spheres, # [n_envs, n_spheres]
+            
+            cube_ray_dists,
+            cube_env_ids, cube_ids,
+            obstacle_manager.p_cubes, # [n_envs, n_cubes, 3]
+            obstacle_manager.lwh_cubes, # [n_envs, n_cubes, 3]
+            obstacle_manager.rpy_cubes, # [n_envs, n_cubes, 3]
+            
+            ray_starts,
+            self.ray_directions, # [H, W, 3]
+            quat_xyzw,
+            self.max_dist,
+            z_ground_plane=z_ground_plane
+        )
     
     def get_contact_point(
         self,
