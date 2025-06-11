@@ -1,7 +1,6 @@
-from typing import *
-import os
 import sys
 sys.path.append('..')
+from pathlib import Path
 
 import torch
 import hydra
@@ -10,13 +9,14 @@ from omegaconf import DictConfig, OmegaConf
 from quaddif.env import build_env
 from quaddif.algo import build_agent
 
-@hydra.main(config_path="../cfg", config_name="config_test", version_base="1.3")
+@hydra.main(config_path=str(Path(__file__).parent.parent.joinpath("cfg")), config_name="config_test", version_base="1.3")
 def main(cfg: DictConfig):
     print(f"Using device cpu.")
     device = torch.device("cpu")
     
     assert cfg.checkpoint is not None
-    cfg_path = os.path.join(os.path.dirname(os.path.abspath(cfg.checkpoint)), ".hydra", "config.yaml")
+    ckpt_path = Path(cfg.checkpoint).resolve()
+    cfg_path = ckpt_path.parent.joinpath(".hydra", "config.yaml")
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo
     # cfg.dynamics = ckpt_cfg.dynamics
@@ -33,10 +33,10 @@ def main(cfg: DictConfig):
     
     env = build_env(cfg.env, device=device)
     agent = build_agent(cfg.algo, env, device)
-    agent.load(cfg.checkpoint)
+    agent.load(ckpt_path)
     assert any(dict(cfg.export).values())
     agent.export(
-        path=cfg.checkpoint,
+        path=ckpt_path,
         export_jit=cfg.export.jit,
         export_onnx=cfg.export.onnx,
         verbose=True
