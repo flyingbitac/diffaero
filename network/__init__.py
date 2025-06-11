@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from quaddif.network.networks import MLP, CNN, RNN, RCNN
 
-BACKBONE_ALIAS: Dict[str, Union[MLP, CNN, RNN]] = {
+BACKBONE_ALIAS: Dict[str, Union[type[MLP], type[CNN], type[RNN], type[RCNN]]] = {
     "mlp": MLP,
     "cnn": CNN,
     "rnn": RNN,
