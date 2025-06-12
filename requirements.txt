@@ -20,5 +20,5 @@ numpy
 moviepy
 imageio
 imageio-ffmpeg
+matplotlib
 onnx
-ncnn

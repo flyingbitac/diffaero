@@ -3,14 +3,14 @@ from typing import Union
 import torch
 from omegaconf import DictConfig
 
-from quaddif.algo.PPO import *
-from quaddif.algo.APG import *
-from quaddif.algo.SHAC import *
-from quaddif.algo.MASHAC import *
-from quaddif.algo.dreamerv3 import *
-from quaddif.algo.GRID import *
-from quaddif.algo.grid_wm import *
-from quaddif.algo.YOPO import *
+from quaddif.algo.PPO import PPO, PPO_RPL
+from quaddif.algo.APG import APG, APG_stochastic
+from quaddif.algo.SHAC import SHAC, SHAC_Q, SHAC_PPO, SHAC_RPL, SHA2C
+from quaddif.algo.MASHAC import MASHAC
+from quaddif.algo.dreamerv3 import World_Agent
+from quaddif.algo.GRID import GRID
+from quaddif.algo.grid_wm import GRIDWM
+from quaddif.algo.YOPO import YOPO
 
 AGENT_ALIAS = {
     "ppo": PPO,

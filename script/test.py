@@ -1,5 +1,3 @@
-import os
-from time import sleep
 import random
 import sys
 sys.path.append('..')
@@ -8,7 +6,7 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-@hydra.main(config_path="../cfg", config_name="config_test", version_base="1.3")
+@hydra.main(config_path=str(Path(__file__).parent.parent.joinpath("cfg")), config_name="config_test", version_base="1.3")
 def main(cfg: DictConfig):
     
     import torch
@@ -16,13 +14,10 @@ def main(cfg: DictConfig):
 
     from quaddif.env import build_env
     from quaddif.algo import build_agent
-    from quaddif.utils.device import get_idle_device
     from quaddif.utils.logger import Logger
     from quaddif.utils.runner import TestRunner
 
-    if cfg.device is None and cfg.n_jobs > 1:
-        sleep(random.random() * 3)
-    device_idx = get_idle_device() if cfg.device is None else cfg.device
+    device_idx = cfg.device
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != -1 else "cpu"
     print(f"Using device {device}.")
     device = torch.device(device)
@@ -33,7 +28,8 @@ def main(cfg: DictConfig):
         torch.manual_seed(cfg.seed)
         torch.backends.cudnn.deterministic = cfg.torch_deterministic
     
-    cfg_path = Path(cfg.checkpoint).resolve().parent.joinpath(".hydra", "config.yaml")
+    ckpt_path = Path(cfg.checkpoint).resolve()
+    cfg_path = ckpt_path.parent.joinpath(".hydra", "config.yaml")
     ckpt_cfg = OmegaConf.load(cfg_path)
     cfg.algo = ckpt_cfg.algo
     if cfg.algo.name != 'world':
@@ -54,7 +50,7 @@ def main(cfg: DictConfig):
     env = build_env(cfg.env, device=device)
     
     agent = build_agent(cfg.algo, env, device)
-    agent.load(cfg.checkpoint)
+    agent.load(ckpt_path)
     
     runner = TestRunner(cfg, logger, env, agent)
     

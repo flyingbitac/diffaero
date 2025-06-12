@@ -3,9 +3,8 @@ from typing import Union
 import torch
 from omegaconf import DictConfig
 
-from quaddif.env.position_control import *
-from quaddif.env.obstacle_avoidance import *
-from quaddif.env.racing import Racing
+from quaddif.env.position_control import PositionControl, MultiAgentPositionControl
+from quaddif.env.obstacle_avoidance import ObstacleAvoidance, ObstacleAvoidanceYOPO, ObstacleAvoidanceGrid
 
 ENV_ALIAS = {
     "position_control": PositionControl,
