@@ -279,6 +279,7 @@ class ObstacleAvoidance(BaseEnv):
             
         self.progress[env_idx] = 0
         self.arrive_time[env_idx] = 0
+        self.last_action[env_idx] = 0.
         self.max_vel[env_idx] = torch.rand(
             n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
     
