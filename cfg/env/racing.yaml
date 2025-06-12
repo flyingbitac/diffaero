@@ -1,0 +1,48 @@
+name: racing
+
+dynamics: ${dynamics}
+dt: 0.0333
+length: 10
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+max_time: 40
+wait_before_truncate: 40
+max_target_vel: 10.
+min_target_vel: 5.
+last_action_in_obs: False
+
+gates:
+  radius: 1.5
+  height: 1.5
+
+loss_weights:
+  pointmass:
+    vel: 1.
+    jerk: 0.005
+  quadrotor:
+    vel: 1.
+    jerk: 0.001
+    pos: 3.
+    attitude: 0.1
+
+reward_weights:
+  constant: 0.1
+  pointmass:
+    vel: 0.
+    jerk: 0.
+    passed: 10.
+    oob: 5
+    collision: 10
+  quadrotor:
+    vel: 1.
+    jerk: 0.001
+    pos: 3.
+    attitude: 0.1
+
+render:
+  env_spacing: 0.
+
+defaults:
+  - render: pc_render
+  - randomizer: default_randomizer
+  - _self_
