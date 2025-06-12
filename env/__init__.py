@@ -5,6 +5,7 @@ from omegaconf import DictConfig
 
 from quaddif.env.position_control import PositionControl, MultiAgentPositionControl
 from quaddif.env.obstacle_avoidance import ObstacleAvoidance, ObstacleAvoidanceYOPO, ObstacleAvoidanceGrid
+from quaddif.env.racing import Racing
 
 ENV_ALIAS = {
     "position_control": PositionControl,
