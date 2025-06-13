@@ -50,7 +50,7 @@ class PPO:
     
     def act(self, obs, test=False):
         # type: (Union[Tensor, TensorDict], bool) -> Tuple[Tensor, Dict[str, Tensor]]
-        if self.agent.is_rnn_based:
+        if self.agent.is_rnn_based and not test:
             self.rnn_state_buffer.add(self.agent.actor.actor_mean.hidden_state, self.agent.critic.critic.hidden_state)
         action, sample, logprob, entropy, value = self.agent.get_action_and_value(tensordict2tuple(obs), test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy, "value": value}
@@ -144,9 +144,6 @@ class PPO:
         grad_norms = {k: sum(v) / len(v) for k, v in grad_norms.items()}
         return losses, grad_norms
     
-    def add(self, obs, sample, logprob, reward, done, value, next_value):
-        self.buffer.add(obs, sample, logprob, reward, done, value, next_value)
-    
     @timeit
     def step(self, cfg, env, obs, on_step_cb=None):
         self.buffer.clear()
@@ -156,12 +153,12 @@ class PPO:
             for t in range(cfg.l_rollout):
                 action, policy_info = self.act(obs)
                 next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
-                self.add(
-                    obs=obs,
+                self.buffer.add(
+                    state=obs,
                     sample=policy_info["sample"],
                     logprob=policy_info["logprob"],
                     reward=reward,
-                    done=terminated,
+                    next_done=terminated,
                     value=policy_info["value"],
                     next_value=self.agent.get_value(tensordict2tuple(env_info["next_obs_before_reset"])))
                 obs = next_obs
