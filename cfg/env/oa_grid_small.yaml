@@ -28,6 +28,7 @@ loss_weights:
     oa: 1.
     jerk: 1.
     pos: 5.
+    collision: 10.
 
 reward_weights:
   constant: 4.
@@ -42,6 +43,7 @@ reward_weights:
     oa: 1.
     jerk: 1.
     pos: 5.
+    collision: 10.
 
 grid:
   x_min: -2.

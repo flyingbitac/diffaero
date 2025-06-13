@@ -28,6 +28,7 @@ loss_weights:
     oa: 1.
     jerk: 1.
     pos: 5.
+    collision: 0.
 
 reward_weights:
   constant: 1.
@@ -42,6 +43,7 @@ reward_weights:
     oa: 1.
     jerk: 1.
     pos: 5.
+    collision: 50.
 
 defaults:
   - render: oa_render
