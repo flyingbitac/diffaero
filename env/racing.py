@@ -19,6 +19,17 @@ from quaddif.utils.assets import ObstacleManager
 from quaddif.utils.runner import timeit
 from quaddif.utils.math import mat_vec_mul
 
+@torch.jit.script
+def get_gate_rotmat_w2g(gate_yaw: Tensor) -> Tensor:
+    zero, one = torch.zeros_like(gate_yaw), torch.ones_like(gate_yaw)
+    sin, cos = torch.sin(gate_yaw), torch.cos(gate_yaw)
+    rotmat_w2g = torch.stack([
+        torch.stack([ cos,  sin, zero], dim=-1),
+        torch.stack([-sin,  cos, zero], dim=-1),
+        torch.stack([zero, zero,  one], dim=-1)
+    ], dim=-2)
+    return rotmat_w2g
+
 class Racing(BaseEnv):
     def __init__(self, cfg, device):
         super().__init__(cfg, device)
@@ -41,7 +52,7 @@ class Racing(BaseEnv):
         self.n_gates = self.gate_pos.shape[0]
         
         self.obs_dim = 13
-        self.state_dim = 13
+        self.state_dim = 4 + 3 + 3 * (3 * 3)
         
         # Calculate relative gates
         self.gate_rel_pos = torch.zeros(self.n_gates, 3, device=device)
@@ -49,14 +60,7 @@ class Racing(BaseEnv):
         for i in range(0, self.n_gates):
             self.gate_rel_pos[i] = self.gate_pos[i] - self.gate_pos[i-1]
             # Rotation matrix
-            prev_gate_yaw = self.gate_yaw[i-1]
-            zero, one = torch.zeros_like(prev_gate_yaw), torch.ones_like(prev_gate_yaw)
-            sin, cos = torch.sin(prev_gate_yaw), torch.cos(prev_gate_yaw)
-            rotmat = torch.stack([
-                torch.stack([ cos,  sin, zero], dim=-1),
-                torch.stack([-sin,  cos, zero], dim=-1),
-                torch.stack([zero, zero,  one], dim=-1)
-            ], dim=-2)
+            rotmat = get_gate_rotmat_w2g(self.gate_yaw[i-1])
             self.gate_rel_pos[i] = rotmat @ self.gate_rel_pos[i]
             # wrap yaw
             yaw_diff = self.gate_yaw[i] - self.gate_yaw[i-1]
@@ -65,17 +69,12 @@ class Racing(BaseEnv):
         self.episode_length = torch.zeros((self.n_envs,), dtype=torch.int, device=device)
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
     
+    
     @timeit
     def get_observations(self, with_grad=False):
         gate_pos = self.gate_pos[self.target_gates]
         gate_yaw = self.gate_yaw[self.target_gates]
-        zero, one = torch.zeros_like(gate_yaw), torch.ones_like(gate_yaw)
-        sin, cos = torch.sin(gate_yaw), torch.cos(gate_yaw)
-        rotmat_w2g = torch.stack([
-            torch.stack([ cos,  sin, zero], dim=-1),
-            torch.stack([-sin,  cos, zero], dim=-1),
-            torch.stack([zero, zero,  one], dim=-1)
-        ], dim=-2)
+        rotmat_w2g = get_gate_rotmat_w2g(gate_yaw)
         
         pos_g = mat_vec_mul(rotmat_w2g, gate_pos - self._p) # 3
         vel_g = mat_vec_mul(rotmat_w2g, self._v) # 3
@@ -98,16 +97,36 @@ class Racing(BaseEnv):
     
     @timeit
     def get_state(self, with_grad=False):
-        return self.get_observations(with_grad=with_grad)
+        states = [
+            self._v,
+            self.q
+        ]
+        for i in range(3):
+            gate_pos = self.gate_pos[(self.target_gates + i) % self.n_gates]
+            gate_yaw = self.gate_yaw[(self.target_gates + i) % self.n_gates]
+            rotmat_w2g = get_gate_rotmat_w2g(gate_yaw)
+            
+            pos_g = mat_vec_mul(rotmat_w2g, gate_pos - self._p)
+            vel_g = mat_vec_mul(rotmat_w2g, self._v)
+            
+            rotmat_b2w = T.quaternion_to_matrix(self.q.roll(1, dims=-1))
+            rotmat_b2g = torch.matmul(rotmat_w2g, rotmat_b2w)
+            rpy_g = T.matrix_to_euler_angles(rotmat_b2g, "ZYX")[..., [2, 1, 0]]
+            
+            states.append(pos_g) # 3
+            states.append(vel_g) # 3
+            states.append(rpy_g) # 3
+        states = torch.cat(states, dim=-1)
+        return states if with_grad else states.detach()
     
     @timeit
     def step(self, action, need_obs_before_reset=True):
         # type: (Tensor, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-        prev_pos = self.p.clone()
+        prev_pos = self._p.clone()
         # simulation step
         self.dynamics.step(action)
         
-        gate_passed, gate_collision = self.get_passed(prev_pos)
+        gate_passed, gate_collision = self.is_passed(prev_pos)
         self.target_gates[gate_passed] = (self.target_gates[gate_passed] + 1) % self.n_gates
         self.target_pos.copy_(self.gate_pos[self.target_gates])
         
@@ -121,13 +140,13 @@ class Racing(BaseEnv):
         # average velocity of the agents
         avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
         # success flag denoting whether the agent has reached the target position at the end of the episode
-        success = truncated
+        success = truncated & (self.progress >= self.max_steps)
         # update last action
         self.last_action.copy_(action.detach())
         
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        loss, reward, loss_components = self.loss_and_reward(action, gate_passed, gate_collision)
+        loss, reward, loss_components = self.loss_and_reward(action, prev_pos, gate_passed, gate_collision)
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
@@ -178,64 +197,70 @@ class Racing(BaseEnv):
         self.max_vel[env_idx] = torch.rand(
             n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
     
-    def get_passed(self, prev_pos):
+    def is_passed(self, prev_pos):
         # gain previous and current position in world frame
-        cur_pos = self.p
-        pos_gate = self.gate_pos[self.target_gates]
-        yaw_gate = self.gate_yaw[self.target_gates]
+        curr_pos = self.p
+        gate_pos = self.gate_pos[self.target_gates]
+        gate_yaw = self.gate_yaw[self.target_gates]
 
         # Gate passing/collision
-        # normal = torch.tensor([torch.cos(yaw_gate), torch.sin(yaw_gate)], device=self.device).T
-        normal = torch.stack([torch.cos(yaw_gate), torch.sin(yaw_gate)], dim=1)
-        # dot product of normal and position vector over axis 1
-        pos_old_projected = (prev_pos[:, 0] - pos_gate[:, 0]) * normal[:, 0] + (prev_pos[:, 1] - pos_gate[:, 1]) * normal[:, 1]     
-        pos_new_projected = (cur_pos[:, 0] - pos_gate[:, 0]) * normal[:, 0] + (cur_pos[:, 1] - pos_gate[:, 1]) * normal[:, 1]
-        pass_through = (pos_old_projected < 0) & (pos_new_projected > 0)
-        gate_size = 10
-        inside_gate = torch.all(torch.abs(cur_pos - pos_gate) < gate_size/2, dim=-1)
+        rotmat = get_gate_rotmat_w2g(gate_yaw)
+        prev_rel_pos = mat_vec_mul(rotmat, prev_pos - gate_pos)
+        curr_rel_pos = mat_vec_mul(rotmat, curr_pos - gate_pos)
+        prev_behind = prev_rel_pos[:, 0] < 0
+        curr_infront = curr_rel_pos[:, 0] > 0
+        pass_through = prev_behind & curr_infront
+        gate_size = 3
+        inside_gate = torch.norm(curr_rel_pos[..., 1:], dim=-1, p=1) < gate_size/2
         gate_passed = pass_through & inside_gate
         gate_collision = pass_through & ~inside_gate
         
         return gate_passed, gate_collision
     
     @timeit
-    def loss_and_reward(self, action, gate_passed, gate_collision):
-        # type: (Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
+    def loss_and_reward(self, action, prev_pos, gate_passed, gate_collision):
+        # type: (Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
+        # gain previous and current position in world frame
+        curr_pos = self._p.clone()
+        gate_pos = self.gate_pos[self.target_gates]
+        gate_yaw = self.gate_yaw[self.target_gates]
+        
+        d2g_old = torch.norm(prev_pos - gate_pos, dim=1)
+        d2g_new = torch.norm(curr_pos - gate_pos, dim=1)
+        # rate_penalty = 0.005 * torch.norm(self._w, dim=1)
+        progress_loss = d2g_new - d2g_old.detach()
+        
+        out_of_bounds = torch.any(torch.abs(self.p[:, 0:2]) > 5, dim=1) # edges of the grid
+        out_of_bounds |= self.p[:, 2] > 7                               # height of the grid
+        oob_loss = out_of_bounds.float()
+        pass_loss = -gate_passed.float()
+        collision_loss = gate_collision.float()
+        
+        rotmat_w2g = get_gate_rotmat_w2g(gate_yaw)
+        pos_g = mat_vec_mul(rotmat_w2g, gate_pos - self._p) # 3
+        vel_g = mat_vec_mul(rotmat_w2g, self._v) # 3
+        
         if isinstance(self.dynamics, PointMassModelBase):
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
+            # print(vel_g.mean(dim=0))
             
-            gate_pos = self.gate_pos[self.target_gates]
-            gate_yaw = self.gate_yaw[self.target_gates]
-            zero, one = torch.zeros_like(gate_yaw), torch.ones_like(gate_yaw)
-            sin, cos = torch.sin(gate_yaw), torch.cos(gate_yaw)
-            rotmat_w2g = torch.stack([
-                torch.stack([ cos,  sin, zero], dim=-1),
-                torch.stack([-sin,  cos, zero], dim=-1),
-                torch.stack([zero, zero,  one], dim=-1)
-            ], dim=-2)
-            pos_g = mat_vec_mul(rotmat_w2g, gate_pos - self._p) # 3
-            vel_g = mat_vec_mul(rotmat_w2g, self._v) # 3
-            forward = torch.tensor([[1., 0., 0.]], device=self.device)
-            vel_loss += torch.norm(F.normalize(vel_g, dim=-1) - forward, dim=-1)
-            
-            out_of_bounds = torch.any(torch.abs(self.p[:, 0:2]) > 5, dim=1) # edges of the grid
-            out_of_bounds |= self.p[:, 2] > 7                               # height of the grid
-            oob_loss = out_of_bounds.float()
+            # forward = torch.tensor([[-1., 0., 0.]], device=self.device)
+            # vel_loss = torch.sum(F.normalize(vel_g, dim=-1) * forward, dim=-1)
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
-            pass_loss = -gate_passed.float()
-            collision_loss = gate_collision.float()
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
-                self.loss_weights.pointmass.jerk * jerk_loss
+                self.loss_weights.pointmass.jerk * jerk_loss +
+                self.loss_weights.pointmass.progress * progress_loss
             )
             total_reward = (
                 self.reward_weights.constant - 
                 self.reward_weights.pointmass.vel * vel_loss -
                 self.reward_weights.pointmass.jerk * jerk_loss -
                 self.reward_weights.pointmass.passed * pass_loss -
-                self.reward_weights.pointmass.oob * oob_loss - 
+                self.reward_weights.pointmass.oob * oob_loss -
+                self.reward_weights.pointmass.progress * progress_loss -
                 self.reward_weights.pointmass.collision * collision_loss
             ).detach()
 
