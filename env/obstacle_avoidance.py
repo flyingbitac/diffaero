@@ -135,13 +135,13 @@ class ObstacleAvoidance(BaseEnv):
     @timeit
     def loss_and_reward(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
-        virtual_radius = 0.2
+        inflation = 0.2
         # calculate the nearest points on the obstacles to the drone
         dist2obstacles, nearest_points2obstacles = self.obstacle_manager.nearest_distance_to_obstacles(self.p.unsqueeze(1))
         self.obstacle_nearest_points.copy_(nearest_points2obstacles.squeeze(1)) # [n_envs, n_obstacles, 3]
         obstacle_reldirection = F.normalize(nearest_points2obstacles.squeeze(1) - self.p.unsqueeze(1), dim=-1) # [n_envs, n_obstacles, 3]
         
-        dist2surface_inflated = (dist2obstacles.squeeze(1) - self.r_drone - virtual_radius).clamp(min=0)
+        dist2surface_inflated = (dist2obstacles.squeeze(1) - (self.r_drone + inflation)).clamp(min=0)
         dangerous_factor = dist2surface_inflated.neg().exp()
         # calculate the obstacle avoidance loss
         approaching_vel = torch.sum(obstacle_reldirection * self._v.unsqueeze(1), dim=-1) # [n_envs, n_obstacles]

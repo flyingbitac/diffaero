@@ -10,7 +10,8 @@ def allocate_device(cfg: DictConfig):
     hydra_cfg = hydra.core.hydra_config.HydraConfig.get()
     multirun = hydra_cfg.mode == hydra.types.RunMode.MULTIRUN
     use_multiple_devices = isinstance(cfg.device, str) and len(cfg.device) > 0
-    if multirun and use_multiple_devices:
+    multirun_across_devices = multirun and use_multiple_devices
+    if multirun_across_devices:
         available_devices = list(map(int, list(cfg.device)))
         n_devices = len(available_devices)
         job_id = hydra_cfg.job.num
@@ -18,14 +19,16 @@ def allocate_device(cfg: DictConfig):
         cfg.device = 0
     else:
         job_device = int(cfg.device) if isinstance(cfg.device, int) else 0
-    return job_device
+    return job_device, multirun_across_devices
 
 @hydra.main(config_path=str(Path(__file__).parent.parent.joinpath("cfg")), config_name="config_train", version_base="1.3")
 def main(cfg: DictConfig):
     
-    job_device = allocate_device(cfg)
-    import os
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(job_device)
+    job_device, multirun_across_devices = allocate_device(cfg)
+    if multirun_across_devices:
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(job_device)
+        cfg.device
     
     import torch
     import numpy as np
@@ -36,7 +39,8 @@ def main(cfg: DictConfig):
     from quaddif.utils.runner import TrainRunner
     
     device = f"cuda:{cfg.device}" if torch.cuda.is_available() and cfg.device != -1 else "cpu"
-    print(f"Using device {job_device}.")
+    device_repr = f"cuda:{job_device}" if multirun_across_devices and device != "cpu" else device
+    print(f"Using device {device_repr}.")
     device = torch.device(device)
     
     if cfg.seed != -1:
