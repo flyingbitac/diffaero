@@ -294,5 +294,5 @@ class ObstacleManager:
         target_pos = target_pos[env_idx]
         n_enabled_obstacles = n_enabled_obstacles[env_idx] if n_enabled_obstacles is not None else None
         self.randomize_obstacles_sizes(env_spacing, env_idx)
-        self.randomize_obstacles_poses(env_spacing, env_idx)
+        self.randomize_obstacles_poses(env_idx)
         self.randomize_obstacles_positions(env_spacing, env_idx, drone_init_pos, target_pos, n_enabled_obstacles)
