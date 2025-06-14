@@ -3,7 +3,11 @@ name: obstacle_avoidance_yopo
 sensor: ${sensor}
 dynamics: ${dynamics}
 dt: 0.0333
-length: 15
+length:
+  default: 25
+  enabled: False
+  min: 25
+  max: 25
 height_scale: 0.25
 n_envs: ${n_envs}
 n_agents: ${n_agents}

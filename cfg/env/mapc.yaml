@@ -2,7 +2,11 @@ name: multi_agent_position_control
 
 dynamics: ${dynamics}
 dt: 0.0333
-length: 10
+length:
+  default: 10
+  enabled: False
+  min: 10
+  max: 10
 n_envs: ${n_envs}
 n_agents: ${n_agents}
 max_time: 20

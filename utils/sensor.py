@@ -88,7 +88,7 @@ def raydist3d_cube(
 
 @torch.jit.script
 def raydist3d_ground_plane(
-    z_ground_plane: float,
+    z_ground_plane: Tensor, # [n_envs]
     start: Tensor, # [n_envs, n_rays, 3]
     direction: Tensor, # [n_envs, n_rays, 3]
     max_dist: float
@@ -105,6 +105,7 @@ def raydist3d_ground_plane(
     Returns:
         torch.Tensor: The distance of the ray to the ground plane.
     """
+    z_ground_plane = z_ground_plane.unsqueeze(-1) # [n_envs, 1]
     valid = (start[..., 2] - z_ground_plane) * direction[..., 2] < 0 # [n_envs, n_rays]
     raydist = torch.where(valid, (z_ground_plane - start[..., 2]) / direction[..., 2], max_dist) # [n_envs, n_rays]
     return raydist
@@ -137,7 +138,7 @@ def get_ray_dist(
     ray_directions_b: Tensor, # [H, W, 3]
     quat_xyzw: Tensor,        # [n_envs, 4]
     max_dist: float,
-    z_ground_plane: Optional[float] = None,
+    z_ground_plane: Optional[Tensor] = None, # [n_envs]
 ) -> Tensor: # [n_envs, H, W]
     H, W = ray_directions_b.shape[:2]
     ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
@@ -194,7 +195,7 @@ class RayCastingSensorBase:
         obstacle_manager: ObstacleManager,
         pos: Tensor, # [n_envs, 3]
         quat_xyzw: Tensor, # [n_envs, 4]
-        z_ground_plane: Optional[float] = None
+        z_ground_plane: Optional[Tensor] = None
     ) -> Tensor: # [n_envs, H, W]
         ray_starts = pos.unsqueeze(1).expand(-1, self.H * self.W, -1) # [n_envs, n_rays, 3]
         sphere_ray_dists = torch.full( # [n_envs, n_obstacles, n_rays]

@@ -3,7 +3,11 @@ name: obstacle_avoidance
 sensor: ${sensor}
 dynamics: ${dynamics}
 dt: 0.0333
-length: 5
+length:
+  default: 5
+  enabled: True
+  min: 3
+  max: 7
 height_scale: 0.25
 n_envs: ${n_envs}
 n_agents: ${n_agents}

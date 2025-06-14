@@ -20,9 +20,10 @@ from quaddif.utils.runner import timeit
 class ObstacleAvoidance(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super(ObstacleAvoidance, self).__init__(cfg, device)
-        self.obstacle_manager = ObstacleManager(cfg.obstacles, self.n_envs, self.L, device)
+        self.obstacle_manager = ObstacleManager(cfg.obstacles, self.n_envs, device)
         self.n_obstacles = self.obstacle_manager.n_obstacles
         self.height_scale: float = cfg.height_scale
+        self.ground_plane: bool = cfg.ground_plane
         self.z_ground_plane = -self.height_scale*self.L if cfg.ground_plane else None
         
         self.sensor_type = cfg.sensor.name
@@ -43,7 +44,7 @@ class ObstacleAvoidance(BaseEnv):
                 cfg=cfg.render,
                 device=device,
                 obstacle_manager=self.obstacle_manager,
-                z_ground_plane=self.z_ground_plane,
+                height_scale=self.height_scale,
                 headless=cfg.render.headless)
         else:
             self.renderer = None
@@ -79,11 +80,12 @@ class ObstacleAvoidance(BaseEnv):
     
     @timeit
     def update_sensor_data(self):
+        z_ground_plane = -self.height_scale*self.L if self.ground_plane else None
         self.sensor_tensor.copy_(self.sensor(
             obstacle_manager=self.obstacle_manager,
             pos=self.p,
             quat_xyzw=self.q,
-            z_ground_plane=self.z_ground_plane
+            z_ground_plane=z_ground_plane
         ))
     
     @timeit
@@ -128,6 +130,7 @@ class ObstacleAvoidance(BaseEnv):
             "vel": vel,
             "quat_xyzw": quat_xyzw,
             "target_pos": target_pos,
+            "env_spacing": self.L.value,
             "nearest_points": self.obstacle_nearest_points,
         }
         return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
@@ -228,8 +231,9 @@ class ObstacleAvoidance(BaseEnv):
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
         
-        xy_min, xy_max = -self.L+0.5, self.L-0.5
-        z_min, z_max = -self.height_scale*self.L+0.5, self.height_scale*self.L-0.5
+        L = self.L.unsqueeze(-1)
+        xy_min, xy_max = -L+0.5, L-0.5
+        z_min, z_max = -self.height_scale*L+0.5, self.height_scale*L-0.5
         p_new = torch.cat([
             torch.rand((self.n_envs, 2), device=self.device) * (xy_max - xy_min) + xy_min,
             torch.rand((self.n_envs, 1), device=self.device) * (z_max - z_min) + z_min
@@ -244,22 +248,26 @@ class ObstacleAvoidance(BaseEnv):
         self.dynamics.reset_idx(env_idx)
         
         # min_init_dist = 1.2 * self.L
-        min_init_dist = (
+        min_init_dist = ( # [n_envs, 1]
             ((xy_max - xy_min - 1) / 2) ** 2 + 
             ((xy_max - xy_min - 1) / 2) ** 2 + 
             ((z_max - z_min - 1) / 2) ** 2
         ) ** 0.5
         # randomly select a target position that meets the minimum distance constraint
         N = 10
-        x = y = torch.linspace(xy_min, xy_max, N, device=self.device)
-        z = torch.linspace(z_min, z_max, N, device=self.device)
+        linspace = torch.linspace(0, 1, N, device=self.device).unsqueeze(0)
+        x = y = (xy_max - xy_min) * linspace + xy_min
+        z = (z_max - z_min) * linspace + z_min
         
         random_idx = torch.stack([torch.randperm(N**3, device=self.device) for _ in range(n_resets)], dim=0) # [n_resets, N**3]
         random_idx = random_idx.unsqueeze(-1).expand(-1, -1, 3) # [n_resets, N**3, 3]
         # indexing of meshgrid dosen't really matter here, explicitly setting to avoid warning
-        xyz = torch.stack(torch.meshgrid(x, y, z, indexing="ij"), dim=-1)
-        xyz = xyz.reshape(1, N**3, 3).expand(n_resets, -1, -1).gather(dim=1, index=random_idx) # [n_resets, N**3, 3]
-        valid = torch.gt((xyz - self.p[env_idx, None, :]).norm(dim=-1), min_init_dist)
+        xyz = torch.stack([
+            x[env_idx].reshape(-1, N, 1, 1).expand(-1,-1, N, N),
+            y[env_idx].reshape(-1, 1, N, 1).expand(-1, N,-1, N),
+            z[env_idx].reshape(-1, 1, 1, N).expand(-1, N, N,-1)
+        ], dim=-1).reshape(-1, N**3, 3).gather(dim=1, index=random_idx)
+        valid = torch.gt((xyz - self.p[env_idx, None, :]).norm(dim=-1), min_init_dist[env_idx])
         
         valid_points = valid.nonzero()
         point_index = torch.tensor([(valid_points[:, 0] == i).sum() for i in range(n_resets)]).roll(1, dims=0)
@@ -268,13 +276,14 @@ class ObstacleAvoidance(BaseEnv):
         chosen_points = valid_points[point_index]
         self.target_pos[env_idx] = xyz[chosen_points[:, 0], chosen_points[:, 1]]
         # check that all regenerated initial and target positions meet the minimal distance contraint
-        assert torch.all((self.p[env_idx] - self.target_pos[env_idx]).norm(dim=-1) > min_init_dist).item()
+        assert torch.all(((self.p - self.target_pos).norm(dim=-1) > min_init_dist.squeeze(-1))[env_idx]).item()
         
-        # obstacle position
-        mask = self.obstacle_manager.randomize_asset_pose(
+        # randomize obstacles sizes, poses and positions
+        self.obstacle_manager.randomize_obstacles(
+            env_spacing=self.L.value,
             env_idx=env_idx,
-            drone_init_pos=self.p[env_idx],
-            target_pos=self.target_pos[env_idx]
+            drone_init_pos=self.p,
+            target_pos=self.target_pos
         )
             
         self.progress[env_idx] = 0
@@ -298,10 +307,11 @@ class ObstacleAvoidance(BaseEnv):
         return self.collision()
     
     def truncated(self) -> torch.Tensor:
-        out_of_bound = torch.any(self.p[..., :2] < -1.5*self.L, dim=-1) | \
-                       torch.any(self.p[..., :2] >  1.5*self.L, dim=-1) | \
-                       (self.p[..., -1] < -self.L * self.height_scale) | \
-                       (self.p[..., -1] >  self.L * self.height_scale)
+        x_range = 1.5 * self.L.value
+        y_range = 1.5 * self.L.value
+        z_range = self.L.value * self.height_scale
+        range = torch.stack([x_range, y_range, z_range], dim=-1)
+        out_of_bound = torch.any(self.p < -range, dim=-1) | torch.any(self.p > range, dim=-1)
         return (self.progress >= self.max_steps) | out_of_bound
 
 class ObstacleAvoidanceGrid(ObstacleAvoidance):

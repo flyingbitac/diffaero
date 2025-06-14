@@ -144,12 +144,13 @@ def add_sphere(xyz: Tensor, radius: Tensor, color: Tensor, lat_segments: int = 8
 
 @ti.data_oriented
 class BaseRenderer:
-    def __init__(self, cfg: DictConfig, device: torch.device, z_ground_plane: Optional[float] = None, headless: bool = False):
+    def __init__(self, cfg: DictConfig, device: torch.device, height_scale: Optional[float] = None, headless: bool = False):
         self.n_envs: int = min(cfg.n_envs, cfg.render_n_envs)
         self.n_agents: int = cfg.n_agents
         self.L: int = cfg.env_spacing
         self.dt: float = cfg.dt
         self.ground_plane: bool = cfg.ground_plane
+        self.height_scale = height_scale if height_scale is not None else 1.
         self.record_video: bool = cfg.record_video
         self.enable_rendering: bool = True
         self.headless = headless
@@ -199,7 +200,7 @@ class BaseRenderer:
                 "indices":                 ti.field(   ti.i32, shape=n_ground_indices),
                 "per_vertex_color": ti.Vector.field(3, ti.f32, shape=n_ground_vertices)
             }
-            z_ground_plane = -self.L - 0.1 if z_ground_plane is None else z_ground_plane
+            z_ground_plane = -self.L - 0.1 if height_scale is None else -self.L * height_scale - 0.1
             self._init_ground_plane(z_ground_plane=z_ground_plane, edge_length=edge_length)
         
         self.gui_states = {
@@ -573,6 +574,8 @@ class BaseRenderer:
         return self.video_frame
 
     def render(self, states_for_rendering: Dict[str, Tensor]):
+        env_spacing = states_for_rendering["env_spacing"]
+        self.env_origin[:, 2] = (env_spacing - self.L) * self.height_scale
         self._update_state(states_for_rendering)
         if self.headless:
             return
@@ -644,10 +647,10 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         cfg: DictConfig,
         device: torch.device,
         obstacle_manager: ObstacleManager,
-        z_ground_plane: Optional[float] = None,
+        height_scale: Optional[float] = None,
         headless: bool = False
     ):
-        super().__init__(cfg, device, z_ground_plane=z_ground_plane, headless=headless)
+        super().__init__(cfg, device, height_scale=height_scale, headless=headless)
         self.obstacle_manager = obstacle_manager
         self.cube_color = [0.8, 0.3, 0.1]
         self.sphere_color = [0.8, 0.1, 0.3]
@@ -811,3 +814,4 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             buffer: np.ndarray = (self.video_window.get_image_buffer_as_numpy() * 255).astype(np.uint8)
             self.video_frame[i] = np.flip(buffer[..., :3].transpose(1, 0, 2), axis=0)
         return self.video_frame
+    

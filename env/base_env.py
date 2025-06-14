@@ -7,7 +7,7 @@ from tensordict import TensorDict
 
 from quaddif.dynamics import build_dynamics
 from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
-from quaddif.utils.randomizer import RandomizerManager
+from quaddif.utils.randomizer import RandomizerManager, build_randomizer
 from quaddif.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
 
 class BaseEnv:
@@ -18,8 +18,8 @@ class BaseEnv:
         self.action_dim = self.dynamics.action_dim
         self.n_agents: int = cfg.n_agents
         self.dt: float = cfg.dt
-        self.L: float = cfg.length
         self.n_envs: int = cfg.n_envs
+        self.L = build_randomizer(cfg.length, [self.n_envs], device=device)
         if not isinstance(self, BaseEnvMultiAgent):
             assert self.n_agents == 1
             self.target_pos = torch.zeros(self.n_envs, 3, device=device)
