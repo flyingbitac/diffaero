@@ -1,4 +1,5 @@
 from typing import Tuple, Union, List, Optional
+from textwrap import dedent
 
 from omegaconf import DictConfig
 import torch
@@ -9,18 +10,30 @@ class RandomizerBase:
         shape: Union[int, List[int], torch.Size],
         default_value: Union[float, bool],
         device: torch.device,
+        enabled: bool = True,
         dtype: torch.dtype = torch.float,
     ):
         self.value = torch.zeros(shape, device=device, dtype=dtype)
         self.default_value = default_value
-        self.randomize()
+        self.enabled = enabled
+        self.excluded_attributes = [
+            "excluded_attributes",
+            "value",
+            "default_value",
+            "randomize",
+            "default",
+            "enabled",
+        ]
+        self.default()
+    
+    def __getattr__(self, name: str):
+        if name not in self.excluded_attributes and hasattr(self.value, name):
+            return getattr(self.value, name)
+        else:
+            return getattr(self, name)
 
     def __str__(self) -> str:
         return str(self.value)
-    
-    @property
-    def shape(self) -> Tuple[int, ...]:
-        return self.value.shape
     
     def randomize(self, idx: Optional[torch.Tensor] = None) -> torch.Tensor:
         raise NotImplementedError
@@ -31,8 +44,12 @@ class RandomizerBase:
     
     def __add__(self, other):
         return self.value + other
+    def __rsub__(self, other):
+        return other - self.value
     def __sub__(self, other):
         return self.value - other
+    def __rmul__(self, other):
+        return other * self.value
     def __mul__(self, other):
         return self.value * other
     def __div__(self, other):
@@ -59,12 +76,10 @@ class UniformRandomizer(RandomizerBase):
     ):
         self.low = low
         self.high = high
-        self.enabled = enabled
-        super().__init__(shape, default_value, device, dtype)
+        super().__init__(shape, default_value, device, enabled, dtype)
+        self.excluded_attributes.extend(["low", "high"])
     
     def randomize(self, idx: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if not self.enabled:
-            return self.default()
         if idx is not None:
             mask = torch.zeros_like(self.value, dtype=torch.bool)
             mask[idx] = True
@@ -75,7 +90,33 @@ class UniformRandomizer(RandomizerBase):
         return self.value
     
     def __repr__(self) -> str:
-        return f"UniformRandomizer(low={self.low}, high={self.high}, default={self.default_value}, shape={self.value.shape}, device={self.value.device}, dtype={self.value.dtype})"
+        return dedent(f"""
+            UniformRandomizer(
+                enabled={self.enabled},
+                low={self.low},
+                high={self.high},
+                default={self.default_value},
+                shape={self.value.shape},
+                device={self.value.device},
+                dtype={self.value.dtype}
+            )""")
+    
+    @staticmethod
+    def build(
+        cfg: DictConfig,
+        shape: Union[int, List[int], torch.Size],
+        device: torch.device,
+        dtype: torch.dtype = torch.float
+    ) -> 'UniformRandomizer':
+        return UniformRandomizer(
+            shape=shape,
+            default_value=cfg.default,
+            device=device,
+            enabled=cfg.enabled,
+            low=cfg.min,
+            high=cfg.max,
+            dtype=dtype,
+        )
 
 class NormalRandomizer(RandomizerBase):
     def __init__(
@@ -90,12 +131,10 @@ class NormalRandomizer(RandomizerBase):
     ):
         self.mean = mean
         self.std = std
-        self.enabled = enabled
-        super().__init__(shape, default_value, device, dtype)
+        super().__init__(shape, default_value, device, enabled, dtype)
+        self.excluded_attributes.extend(["mean", "std"])
     
     def randomize(self, idx: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if not self.enabled:
-            return self.default()
         if idx is not None:
             mask = torch.zeros_like(self.value, dtype=torch.bool)
             mask[idx] = True
@@ -106,7 +145,32 @@ class NormalRandomizer(RandomizerBase):
         return self.value
     
     def __repr__(self) -> str:
-        return f"NormalRandomizer(mean={self.mean}, std={self.std}, default={self.default_value}, shape={self.value.shape}, device={self.value.device}, dtype={self.value.dtype})"
+        return dedent(f"""
+            NormalRandomizer(enabled={self.enabled},
+                mean={self.mean},
+                std={self.std},
+                default={self.default_value},
+                shape={self.value.shape},
+                device={self.value.device},
+                dtype={self.value.dtype}
+            )""")
+    
+    @staticmethod
+    def build(
+        cfg: DictConfig,
+        shape: Union[int, List[int], torch.Size],
+        device: torch.device,
+        dtype: torch.dtype = torch.float
+    ) -> 'NormalRandomizer':
+        return NormalRandomizer(
+            shape=shape,
+            default_value=cfg.default,
+            device=device,
+            enabled=cfg.enabled,
+            mean=cfg.mean,
+            std=cfg.std,
+            dtype=dtype,
+        )
 
 class RandomizerManager:
     randomizers: List[Union[UniformRandomizer, NormalRandomizer]] = []
@@ -116,19 +180,18 @@ class RandomizerManager:
     ):
         self.enabled: bool = cfg.enabled
         
-    def randomize(self, idx: Optional[torch.Tensor] = None):
-        if self.enabled:
-            for randomizer in self.randomizers:
+    def refresh(self, idx: Optional[torch.Tensor] = None):
+        for randomizer in self.randomizers:
+            if self.enabled and randomizer.enabled:
                 randomizer.randomize(idx)
-        else:
-            for randomizer in self.randomizers:
+            else:
                 randomizer.default()
     
     def __str__(self) -> str:
         return (
             "RandomizeManager(\n\t" + 
             f"Enabled: {self.enabled},\n\t" +
-            ",\n\t".join([randomizer.__repr__() for randomizer in self.randomizers]) + 
+            ",\n        ".join([randomizer.__repr__() for randomizer in self.randomizers]) + 
             "\n)"
         )
 
@@ -139,25 +202,9 @@ def build_randomizer(
     dtype: torch.dtype = torch.float,
 ) -> Union[UniformRandomizer, NormalRandomizer]:
     if hasattr(cfg, "min") and hasattr(cfg, "max"):
-        randomizer = UniformRandomizer(
-            shape=shape,
-            default_value=cfg.default,
-            device=device,
-            enabled=cfg.enabled,
-            low=cfg.min,
-            high=cfg.max,
-            dtype=dtype,
-        )
+        randomizer = UniformRandomizer.build(cfg, shape, device, dtype)
     elif hasattr(cfg, "mean") and hasattr(cfg, "std"):
-        randomizer = NormalRandomizer(
-            shape=shape,
-            default_value=cfg.default,
-            device=device,
-            enabled=cfg.enabled,
-            mean=cfg.mean,
-            std=cfg.std,
-            dtype=dtype,
-        )
+        randomizer = NormalRandomizer.build(cfg, shape, device, dtype)
     else:
         raise ValueError("Invalid randomizer configuration. Must contain 'min' and 'max' for UniformRandomizer or 'mean' and 'std' for NormalRandomizer.")
     RandomizerManager.randomizers.append(randomizer)

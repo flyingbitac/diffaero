@@ -170,7 +170,7 @@ class Racing(BaseEnv):
     
     @timeit
     def reset_idx(self, env_idx: torch.Tensor):
-        self.randomizer.randomize(env_idx)
+        self.randomizer.refresh(env_idx)
         n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
