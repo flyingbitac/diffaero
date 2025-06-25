@@ -196,6 +196,8 @@ class TrainRunner:
         with open(os.path.join(self.logger.logdir, "runtime_profile.txt"), "w", encoding="utf-8") as f:
             self.profiler.print_stats(stream=f, output_unit=1e-3)
         
+        self.logger.close()
+        
         return self.max_success_rate
 
 
@@ -304,5 +306,7 @@ class TestRunner:
             )
         if self.env.renderer is not None:
             self.env.renderer.close()
+        
+        self.logger.close()
         
         return self.success_rate
