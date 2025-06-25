@@ -257,7 +257,7 @@ class World_Agent:
         WorldExporter(self).export(path, export_jit, export_onnx, verbose)
 
 class WorldExporter(nn.Module):
-    def __init__(self, agent: World_Agent):
+    def __init__(self, agent):
         super().__init__()
         self.use_symlog = agent.world_agent_cfg.common.use_symlog
         self.state_encoder = deepcopy(agent.state_model.state_encoder)
@@ -271,21 +271,45 @@ class WorldExporter(nn.Module):
         self.act_state_proj = deepcopy(agent.state_model.act_state_proj)
         self.actor = deepcopy(agent.agent.actor_mean_std)
         
-        self.register_buffer("hidden_state",torch.zeros(1,agent.state_model.cfg.hidden_dim))
-        self.hidden_state = self.get_buffer("hidden_state")
+        self.named_inputs = [
+            ("state", torch.rand(1, 10)),
+            ("orientation", torch.rand(1, 3)),
+            ("min_action", torch.rand(1, 3)),
+            ("max_action", torch.rand(1, 3))
+        ]
+        if hasattr(agent.state_model, 'image_encoder'):
+            self.named_inputs.insert(1, ("perception", torch.rand(1, 9, 16)))
+        self.output_names = [
+            "action",
+            "quat_xyzw_cmd",
+            "acc_norm"
+        ]
+        
+        # self.register_buffer("hidden_state",torch.zeros(1,agent.state_model.cfg.hidden_dim))
+        # self.hidden_state = self.get_buffer("hidden_state")
         self.is_recurrent = True
-        self.hidden_shape = agent.state_model.cfg.hidden_dim
+        self.hidden_shape = (1, agent.state_model.cfg.hidden_dim)
+        
+        if self.is_recurrent:
+            self.named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
+            self.output_names.append("hidden_out")
     
     def sample_for_deploy(self,logits):
         probs = F.softmax(logits,dim=-1)
         return onehotsample(probs)
     
-    def sample_with_post(self,feat):        
-        post_logits = self.inp_proj(torch.cat([feat,self.hidden_state],dim=-1))
+    def sample_with_post(self,feat,hidden):        
+        post_logits = self.inp_proj(torch.cat([feat,hidden],dim=-1))
         b,d = post_logits.shape
         post_logits = post_logits.reshape(b,int(math.sqrt(d)),-1) # b l d -> b l c k
         post_sample = self.sample_for_deploy(post_logits)
         return post_sample
+
+    def sample_with_prior(self, latent, act, hidden):
+        assert latent.ndim == act.ndim == 2
+        state_act = self.act_state_proj(torch.cat([latent, act], dim=-1))
+        hidden = self.seq_model(state_act, hidden)
+        return hidden
 
     def forward_perc_prop(self, state, perception, orientation, min_action, max_action, hidden):
         with torch.no_grad():
@@ -294,11 +318,11 @@ class WorldExporter(nn.Module):
             state_feat = self.state_encoder(state)
             image_feat = self.image_encoder(perception.unsqueeze(0))
             feat = torch.cat([state_feat, image_feat], dim=-1)
-            latent = self.sample_with_post(feat).flatten(1)
-            mean_std = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            latent = self.sample_with_post(feat,hidden).flatten(1)
+            mean_std = self.actor(torch.cat([latent,hidden],dim=-1))
             action, _ = torch.chunk(mean_std, 2, dim=-1)
             action = torch.tanh(action)
-            self.sample_with_prior(latent, action)
+            hidden = self.sample_with_prior(latent, action, hidden)
             action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
         return action, quat_xyzw, acc_norm, hidden
             
@@ -306,12 +330,12 @@ class WorldExporter(nn.Module):
         with torch.no_grad():
             if self.use_symlog:
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
-            state_feat = self.state_encoder(state.unsqueeze(0))
-            latent = self.sample_with_post(state_feat).flatten(1)
-            mean_std = self.actor(torch.cat([latent,self.hidden_state],dim=-1))
+            state_feat = self.state_encoder(state)
+            latent = self.sample_with_post(state_feat,hidden).flatten(1)
+            mean_std = self.actor(torch.cat([latent,hidden],dim=-1))
             action, _ = torch.chunk(mean_std, 2, dim=-1)
             action = torch.tanh(action)
-            self.sample_with_prior(latent,action)
+            hidden = self.sample_with_prior(latent,action,hidden)
             action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
         return action, quat_xyzw, acc_norm, hidden  
     
@@ -329,6 +353,22 @@ class WorldExporter(nn.Module):
         traced_script_module.save(export_path)
         print(f"The checkpoint is compiled and exported to {export_path}.")
     
-    def export(self, path: str, export_jit=False, export_onnx=False, verbose=False):
-        if export_jit:
+    def export_onnx(self, path:str):
+        export_path = os.path.join(path, "exported_actor.onnx")
+        names, inputs = zip(*self.named_inputs)
+        for inp in inputs:
+            print(inp.device)
+        torch.onnx.export(
+            model=self.to('cpu'),
+            args=inputs,
+            f=export_path,
+            input_names=names,
+            output_names=self.output_names
+        )
+        print(f"The checkpoint is compiled and exported to {export_path}.")
+    
+    def export(self, path: str, verbose=False, export_onnx=False, export_pnnx=False):
+        if export_onnx:
+            self.export_onnx(path)
+        else:
             self.export_jit(path, verbose)
