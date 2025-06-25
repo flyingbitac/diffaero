@@ -130,7 +130,7 @@ class RolloutBufferSHACQ:
 
 class RolloutBufferPPO:
     def __init__(self, l_rollout, n_envs, obs_dim, action_dim, device):
-        # type: (int, int, int, int, torch.device) -> None
+        # type: (int, int, Union[int, Tuple[int, Tuple[int, int]]], int, torch.device) -> None
         factory_kwargs = {"dtype": torch.float32, "device": device}
         
         assert isinstance(obs_dim, tuple) or isinstance(obs_dim, int)
@@ -152,9 +152,9 @@ class RolloutBufferPPO:
         self.step = 0
     
     @torch.no_grad()
-    def add(self, state, sample, logprob, reward, next_done, value, next_value):
+    def add(self, obs, sample, logprob, reward, next_done, value, next_value):
         # type: (Union[Tensor, TensorDict], Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
-        self.obs[self.step] = state
+        self.obs[self.step] = obs
         self.samples[self.step] = sample
         self.logprobs[self.step] = logprob
         self.rewards[self.step] = reward
@@ -163,6 +163,19 @@ class RolloutBufferPPO:
         self.next_values[self.step] = next_value
         self.step += 1
 
+
+class RolloutBufferAPPO(RolloutBufferPPO):
+    def __init__(self, l_rollout, n_envs, obs_dim, state_dim, action_dim, device):
+        # type: (int, int, Union[int, Tuple[int, Tuple[int, int]]], int, int, torch.device) -> None
+        super().__init__(l_rollout, n_envs, obs_dim, action_dim, device)
+        factory_kwargs = {"dtype": torch.float32, "device": device}
+        self.states = torch.zeros((l_rollout, n_envs, state_dim), **factory_kwargs)
+    
+    @torch.no_grad()
+    def add(self, obs, state, sample, logprob, reward, next_done, value, next_value):
+        # type: (Union[Tensor, TensorDict], Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
+        self.states[self.step] = state
+        super().add(obs, sample, logprob, reward, next_done, value, next_value)
 
 class RolloutBufferGRID:
     def __init__(
