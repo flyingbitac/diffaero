@@ -40,7 +40,8 @@ reward_weights:
     vel: 0.
     oa: 0.
     jerk: 0.
-    pos: 1.
+    pos: 0.
+    arrive: 1.
     collision: 50.
   quadrotor:
     vel: 1.

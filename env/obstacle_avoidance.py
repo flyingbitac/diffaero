@@ -156,6 +156,7 @@ class ObstacleAvoidance(BaseEnv):
         oa_loss = approaching_penalty - 0.5 * avoiding_reward
         
         collision_loss = self.collision().float()
+        arrive_loss = 1 - torch.norm(self.p - self.target_pos, dim=-1).lt(0.5).float()
         
         if isinstance(self.dynamics, PointMassModelBase):
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
@@ -179,11 +180,13 @@ class ObstacleAvoidance(BaseEnv):
                 self.reward_weights.pointmass.oa * oa_loss -
                 self.reward_weights.pointmass.jerk * jerk_loss -
                 self.reward_weights.pointmass.pos * pos_loss -
+                self.reward_weights.pointmass.arrive * arrive_loss -
                 self.reward_weights.pointmass.collision * collision_loss
             ).detach()
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
+                "arrive_loss": arrive_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
                 "collision_loss": collision_loss.mean().item(),
                 "oa_loss": oa_loss.mean().item(),
