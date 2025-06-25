@@ -28,8 +28,8 @@ class ReplayBuffer():
             self.action_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs,cfg.action_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
-            self.grid_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.bool, device=device, requires_grad=False)
-            self.visible_map_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.bool, device=device, requires_grad=False)
+            self.grid_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.bool, device=device, requires_grad=False) if cfg.use_grid else None
+            self.visible_map_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.bool, device=device, requires_grad=False) if cfg.use_grid else None
         else:
             raise ValueError("Only support gpu!!!")
 
