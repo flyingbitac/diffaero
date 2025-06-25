@@ -3,7 +3,7 @@ from typing import Union
 import torch
 from omegaconf import DictConfig
 
-from quaddif.algo.PPO import PPO, PPO_RPL
+from quaddif.algo.PPO import PPO, AsymmetricPPO, PPO_RPL
 from quaddif.algo.APG import APG, APG_stochastic
 from quaddif.algo.SHAC import SHAC, SHAC_Q, SHAC_PPO, SHAC_RPL, SHA2C
 from quaddif.algo.MASHAC import MASHAC
@@ -14,6 +14,7 @@ from quaddif.algo.YOPO import YOPO
 
 AGENT_ALIAS = {
     "ppo": PPO,
+    "appo": AsymmetricPPO,
     "ppo_rpl": PPO_RPL,
     "shac": SHAC,
     "sha2c": SHA2C,

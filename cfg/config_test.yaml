@@ -4,6 +4,7 @@ defaults:
   - dynamics: pointmass_c # [pointmass, quadrotor]
   - network: mlp # [mlp, cnn]
   - sensor: camera # [camera, lidar, relpos]
+  - logger: tensorboard # [tensorboard, wandb]
   - _self_
   - override hydra/help: test_help
   - override hydra/launcher: joblib

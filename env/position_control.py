@@ -153,7 +153,10 @@ class PositionControl(BaseEnv):
         n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
-        p_new = rand_range(-self.L+0.5, self.L-0.5, size=(self.n_envs, 3), device=self.device)
+        
+        L = self.L.unsqueeze(-1) # [n_envs, 1]
+        p_min, p_max = -L+0.5, L-0.5
+        p_new = torch.rand((self.n_envs, 3), device=self.device) * (p_max - p_min) + p_min
         self.init_pos[env_idx] = p_new[env_idx]
         new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.dynamics.state_dim-3, device=self.device)], dim=-1)
         if self.dynamic_type == "pointmass":
@@ -171,8 +174,8 @@ class PositionControl(BaseEnv):
 
     
     def terminated(self) -> Tensor:
-        out_of_bound = torch.any(self.p < -self.L, dim=-1) | \
-                       torch.any(self.p >  self.L, dim=-1)
+        p_range = self.L.value.unsqueeze(-1)
+        out_of_bound = torch.any(self.p < -p_range, dim=-1) | torch.any(self.p > p_range, dim=-1)
         return out_of_bound
 
 
