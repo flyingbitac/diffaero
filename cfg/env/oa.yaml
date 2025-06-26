@@ -48,12 +48,11 @@ reward_weights:
   # for SHA2C
   constant: 1.
   pointmass:
-    vel: 0.
-    oa: 0.
-    jerk: 0.
-    pos: 0.
-    arrive: 1.
-    collision: 50.
+    vel: 0.06
+    oa: 0.6
+    jerk: 0.0005
+    pos: 0.5
+    collision: 5.
   quadrotor:
     vel: 1.
     oa: 1.
