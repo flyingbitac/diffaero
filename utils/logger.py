@@ -124,7 +124,7 @@ class Logger:
         self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
         run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         type = cfg.logger.name.lower()
-        self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](cfg, self.logdir, run_name)
+        self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](self.cfg, self.logdir, run_name)
         print(f"Output directory  : {self.logdir}")
     
     def log_scalar(self, tag, value, step):
