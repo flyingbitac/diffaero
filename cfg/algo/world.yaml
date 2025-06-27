@@ -1,5 +1,6 @@
 name: world
 n_envs: ${n_envs}
+l_rollout: 1
 
 common:
   device: cuda:1
