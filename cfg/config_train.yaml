@@ -39,6 +39,8 @@ torch_deterministic: False
 env:
   dt: 0.0333
 
+ref_path:
+
 hydra:
   run:
     dir: ./outputs/train/${now:%Y-%m-%d}/${now:%H-%M-%S}

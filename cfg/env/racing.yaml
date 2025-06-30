@@ -14,6 +14,7 @@ wait_before_truncate: 40
 max_target_vel: 10.
 min_target_vel: 5.
 last_action_in_obs: False
+ref_path: ${ref_path}
 
 gates:
   radius: 1.5
@@ -33,7 +34,7 @@ loss_weights:
 reward_weights:
   constant: 0.
   pointmass:
-    vel: 0.
+    vel: 0.5
     jerk: 0.0
     passed: 0.
     oob: 0
@@ -44,6 +45,8 @@ reward_weights:
     jerk: 0.001
     pos: 3.
     attitude: 0.1
+    progress: 10.
+    collision: 10
 
 render:
   env_spacing: 0.

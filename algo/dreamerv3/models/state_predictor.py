@@ -204,7 +204,7 @@ class DepthStateModel(nn.Module):
             depth_flatten_dim = self.image_encoder.flatten_dim
         else:
             self.state_encoder = nn.Identity()
-            state_emb_dim = 10
+            state_emb_dim = self.cfg.state_dim
             depth_flatten_dim = 0
 
         self.inp_proj = nn.Sequential(MLP(state_emb_dim + depth_flatten_dim + cfg.hidden_dim, cfg.latent_dim, 

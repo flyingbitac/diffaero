@@ -47,7 +47,13 @@ class Racing(BaseEnv):
             [   0, -2*g_r, g_h],
         ], device=device)
         self.gate_yaw = torch.tensor([1, 2, 1, 0, -1, -2, -1, 0], device=device)*torch.pi/2
-        
+        if(cfg.ref_path is not None):
+            self.ref_pos = torch.from_numpy(np.load(cfg.ref_path + "/position_ned.npy")).float().to(device)
+            self.ref_vel = torch.from_numpy(np.load(cfg.ref_path + "/velocity_ned.npy")).float().to(device)
+            self.ref_pos = torch.roll(self.ref_pos, shifts=1, dims=0)
+            self.ref_vel = torch.roll(self.ref_vel, shifts=1, dims=0)
+            self.ref_pos = self.ref_pos.reshape(-1, 7, 3) # [8, 7, 3]
+            self.ref_vel = self.ref_vel.reshape(-1, 7, 3) # [8, 7, 3]
         self.target_gates = torch.zeros(self.n_envs, dtype=torch.int, device=device)
         self.n_gates = self.gate_pos.shape[0]
         
@@ -158,7 +164,8 @@ class Racing(BaseEnv):
                 "success_rate": success[reset],
                 "survive_rate": truncated[reset],
                 "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
-                "avg_vel": avg_vel[success],
+                # "avg_vel": avg_vel[success],
+                "avg_vel": self.v.norm(dim=-1)
             },
         }
         if need_obs_before_reset:
@@ -216,7 +223,34 @@ class Racing(BaseEnv):
         gate_collision = pass_through & ~inside_gate
         
         return gate_passed, gate_collision
-    
+
+    def cal_ref_vel(self,):
+        if hasattr(self, "ref_vel"):
+            ref_pos = self.ref_pos[self.target_gates] # [n_envs, 7, 3]
+            ref_vel = self.ref_vel[self.target_gates] # [n_envs, 7, 3]
+            ref_pos_next = self.ref_pos[(self.target_gates+1) % self.n_gates] # [n_envs, 7, 3]
+            start_pts = ref_pos         
+            end_pts = torch.cat([ref_pos[:, 1:], ref_pos_next[:, :1]], dim=1) # [n_envs, 7, 3]        
+            segment_vec = end_pts - start_pts                      
+            # (n_envs, 3)
+            agent_pos = self.p                                     
+            vec_agent_to_start = agent_pos.unsqueeze(1) - start_pts # (n_envs, 7, 3)
+            # (n_envs, 7)
+            t = torch.sum(vec_agent_to_start * segment_vec, dim=-1) / \
+                torch.sum(segment_vec * segment_vec, dim=-1)       
+            closest_pts = start_pts + t.unsqueeze(-1) * segment_vec  # (n_envs, 7, 3)
+            vec_agent_to_closest = closest_pts - agent_pos.unsqueeze(1)  # (n_envs, 7, 3)
+            min_dist, indices = torch.min(vec_agent_to_closest.norm(dim=-1), dim=-1)
+            
+            # vert_ref_vel = F.normalize(vec_agent_to_closest[torch.arange(self.n_envs), indices], dim=-1) * 1. * (1. - torch.exp(-min_dist.unsqueeze(-1)))
+            vert_ref_vel = torch.zeros_like(self.v)
+            vert_ref_vel[:, 2] = (1.57 - self.p[:, 2]).clamp(min=-1., max=1.) * 0.1
+            hori_ref_vel = ref_vel[torch.arange(self.n_envs), indices] 
+            target_vel = torch.cat([hori_ref_vel[..., :-1], vert_ref_vel[..., -1:]], dim=-1).detach()
+            return target_vel
+        else:
+            return self.target_vel
+            
     @timeit
     def loss_and_reward(self, action, prev_pos, gate_passed, gate_collision):
         # type: (Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
@@ -241,7 +275,8 @@ class Racing(BaseEnv):
         vel_g = mat_vec_mul(rotmat_w2g, self._v) # 3
         
         if isinstance(self.dynamics, PointMassModelBase):
-            vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
+            target_vel = self.cal_ref_vel()
+            vel_diff = (self.dynamics._vel_ema - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             # print(vel_g.mean(dim=0))
             
@@ -268,6 +303,7 @@ class Racing(BaseEnv):
                 "vel_loss": vel_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
                 "pass_loss": pass_loss.mean().item(),
+                "progress_loss": progress_loss.mean().item(),
                 "collision_loss": collision_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
                 "total_reward": total_reward.mean().item()
@@ -292,7 +328,9 @@ class Racing(BaseEnv):
                 self.reward_weights.quadrotor.vel * vel_loss -
                 self.reward_weights.quadrotor.jerk * jerk_loss -
                 self.reward_weights.quadrotor.pos * pos_loss -
-                self.reward_weights.quadrotor.attitude * attitude_loss
+                self.reward_weights.quadrotor.attitude * attitude_loss - 
+                self.reward_weights.quadrotor.progress * progress_loss - 
+                self.reward_weights.quadrotor.collision * collision_loss 
             ).detach()
             
             loss_components = {
@@ -300,6 +338,8 @@ class Racing(BaseEnv):
                 "jerk_loss": jerk_loss.mean().item(),
                 "attitute_loss": attitude_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
+                "progress_loss": progress_loss.mean().item(),
+                "collision_loss": collision_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
                 "total_reward": total_reward.mean().item()
             }

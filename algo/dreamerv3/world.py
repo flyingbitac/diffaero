@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 from omegaconf import DictConfig
 
-from quaddif.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid
+from quaddif.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid, Racing
 from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
 from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
 from quaddif.algo.dreamerv3.models.blocks import symlog
@@ -17,7 +17,7 @@ from quaddif.algo.dreamerv3.wmenv.world_state_env import DepthStateEnv
 from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
 from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
 from quaddif.utils.runner import timeit
-from quaddif.dynamics.pointmass import point_mass_quat
+from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
 
 @torch.no_grad()
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
@@ -110,16 +110,20 @@ class World_Agent:
         self.cfg = cfg
         self.n_envs = env.n_envs
         device_idx = device.index
+        if isinstance(env.dynamics, PointMassModelBase) and not isinstance(env, Racing):
+            state_dim = 10
+        else:
+            state_dim = 13
         world_agent_cfg = cfg
         world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
         world_agent_cfg.replaybuffer.num_envs = self.n_envs
-        world_agent_cfg.replaybuffer.state_dim = 10
+        world_agent_cfg.replaybuffer.state_dim = state_dim
         world_agent_cfg.actor_critic.model.device = f"cuda:{device_idx}"
         world_agent_cfg.common.device = f"cuda:{device_idx}"
         self.world_agent_cfg = world_agent_cfg
 
         statemodelcfg = getattr(world_agent_cfg, "state_predictor").state_model
-        statemodelcfg.state_dim = 10
+        statemodelcfg.state_dim = state_dim
         actorcriticcfg = getattr(world_agent_cfg, "actor_critic").model
         if world_agent_cfg.actor_critic.training.use_grid:
             actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + math.prod(cfg.env.grid.n_points)
@@ -129,16 +133,16 @@ class World_Agent:
             self.deploy_grid = False
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
         buffercfg = getattr(world_agent_cfg, "replaybuffer")
-        buffercfg.state_dim = 10
+        buffercfg.state_dim = state_dim
         worldcfg = getattr(world_agent_cfg, "world_state_env")
         training_hyper = getattr(world_agent_cfg, "state_predictor").training
         self.training_hyper = training_hyper
 
-        if isinstance(env, PositionControl):
+        if isinstance(env, PositionControl) or isinstance(env, Racing):
             statemodelcfg.only_state = True
             buffercfg.use_perception = False
-            statemodelcfg.state_dim = 10
-            world_agent_cfg.replaybuffer.state_dim = 10
+            statemodelcfg.state_dim = state_dim
+            world_agent_cfg.replaybuffer.state_dim = state_dim
         if isinstance(env, ObstacleAvoidanceGrid):
             statemodelcfg.grid_dim = env.n_grid_points
             buffercfg.grid_dim = env.n_grid_points
