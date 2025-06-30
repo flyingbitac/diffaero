@@ -22,8 +22,9 @@ gates:
 
 loss_weights:
   pointmass:
-    vel: 1
-    jerk: 0.001
+    vel: 0.5
+    jerk: 2e-6
+    pos: 3.
     progress: 0.
   quadrotor:
     vel: 1.
@@ -32,14 +33,15 @@ loss_weights:
     attitude: 0.1
 
 reward_weights:
-  constant: 0.
+  constant: 0.5
   pointmass:
-    vel: 0.5
-    jerk: 0.0
+    vel: 0.
+    jerk: 0.
     passed: 0.
-    oob: 0
+    oob: 0.
+    pos: 0.
     collision: 10
-    progress: 1.
+    progress: 5.
   quadrotor:
     vel: 1.
     jerk: 0.001
