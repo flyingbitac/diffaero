@@ -20,6 +20,7 @@ from quaddif.utils.runner import timeit
 from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
 
 @torch.no_grad()
+@timeit
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
     feats, rewards, ends, actions, org_samples = [], [], [], [], []
     imagine_length = cfg.imagine_length
@@ -149,8 +150,8 @@ class World_Agent:
             statemodelcfg.use_grid = True
             buffercfg.use_grid = True
         
-        self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
-        self.state_model = DepthStateModel(statemodelcfg).to(device)
+        self.agent = torch.compile(ActorCriticAgent(actorcriticcfg,env).to(device), mode="reduce-overhead")
+        self.state_model = torch.compile(DepthStateModel(statemodelcfg).to(device), mode="reduce-overhead")
         if not world_agent_cfg.common.is_test:
             self.replaybuffer = ReplayBuffer(buffercfg)
             self.world_model_env = DepthStateEnv(self.state_model, self.replaybuffer, worldcfg)
