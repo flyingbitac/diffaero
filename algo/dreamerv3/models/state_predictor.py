@@ -236,9 +236,9 @@ class DepthStateModel(nn.Module):
     
     def straight_with_gradient(self,logits:Tensor):
         probs = F.softmax(logits,dim=-1)
-        # dist = OneHotCategorical(probs=probs)
-        # sample = dist.sample()
-        sample = onehotsample(probs=probs)
+        dist = OneHotCategorical(probs=probs)
+        sample = dist.sample()
+        # sample = onehotsample(probs=probs)
         sample_with_gradient = sample + probs - probs.detach()
         return sample_with_gradient
     

@@ -52,14 +52,14 @@ class ReplayBuffer():
         if batch_size < self.num_envs:
             batch_size = self.num_envs
         if self.store_on_gpu:
-            indexes = torch.randint(0, self.length - batch_length, (self.num_envs,), device=self.state_buffer.device)
-            arange = torch.arange(batch_length, device=self.state_buffer.device).unsqueeze(1)
-            idxs = indexes.unsqueeze(0) + arange  # shape: (batch_length, num_envs)
-            env_idx = torch.arange(self.num_envs)
-            state = self.state_buffer[idxs, env_idx].transpose(0, 1)
-            action = self.action_buffer[idxs, env_idx].transpose(0, 1)
-            reward = self.reward_buffer[idxs, env_idx].transpose(0, 1)
-            termination = self.termination_buffer[idxs, env_idx].transpose(0, 1)
+            indexes = torch.randint(0, self.length - batch_length, (batch_size,), device=self.state_buffer.device)
+            arange = torch.arange(batch_length, device=self.state_buffer.device)
+            idxs = torch.flatten(indexes.unsqueeze(1) + arange.unsqueeze(0)) # shape: (batch_size * batch_length)
+            env_idx = torch.randint(0, self.num_envs, (batch_size, 1), device=self.state_buffer.device).expand(-1, batch_length).reshape(-1)
+            state = self.state_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+            action = self.action_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+            reward = self.reward_buffer[idxs, env_idx].reshape(batch_size, batch_length)
+            termination = self.termination_buffer[idxs, env_idx].reshape(batch_size, batch_length)
             # state, action, reward, termination, perception, grid, visible_map = [], [], [], [], [], [], []
             # for i in range(self.num_envs):
             #     indexes = np.random.randint(0, self.length+1-batch_length, size=batch_size//self.num_envs)
@@ -79,12 +79,15 @@ class ReplayBuffer():
             # termination = torch.cat(termination, dim=0)
             # print("state shape:", state.shape, "action shape:", action.shape, "reward shape:", reward.shape, "termination shape:", termination.shape)
             if self.use_perception:
-                perception = self.perception_buffer[idxs, env_idx].transpose(0, 1)
+                perception = self.perception_buffer[idxs, env_idx].reshape(batch_size, batch_length, *self.perception_buffer.shape[2:])
+                # perception = torch.cat(perception, dim=0)
             else:
                 perception = None
             if self.use_grid:
-                grid = self.grid_buffer[idxs, env_idx].transpose(0, 1)
-                visible_map = self.visible_map_buffer[idxs, env_idx].transpose(0, 1)
+                grid = self.grid_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+                visible_map = self.visible_map_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+                # grid = torch.cat(grid, dim=0)
+                # visible_map = torch.cat(visible_map, dim=0)
             else:
                 grid = None
                 visible_map = None
