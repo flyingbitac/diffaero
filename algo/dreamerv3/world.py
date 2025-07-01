@@ -150,8 +150,8 @@ class World_Agent:
             statemodelcfg.use_grid = True
             buffercfg.use_grid = True
         
-        self.agent = torch.compile(ActorCriticAgent(actorcriticcfg,env).to(device), mode="reduce-overhead")
-        self.state_model = torch.compile(DepthStateModel(statemodelcfg).to(device), mode="reduce-overhead")
+        self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
+        self.state_model = DepthStateModel(statemodelcfg).to(device)
         if not world_agent_cfg.common.is_test:
             self.replaybuffer = ReplayBuffer(buffercfg)
             self.world_model_env = DepthStateEnv(self.state_model, self.replaybuffer, worldcfg)
@@ -223,9 +223,11 @@ class World_Agent:
             self.replaybuffer.append(state, action, rewards, terminated, perception, grid, visible_map)
             
             if terminated.any():
-                for i in range(self.n_envs):
-                    if terminated[i]:
-                        self.hidden[i] = 0
+                zeros = torch.zeros_like(self.hidden)
+                self.hidden = torch.where(terminated.unsqueeze(-1), zeros, self.hidden)
+                # for i in range(self.n_envs):
+                #     if terminated[i]:
+                #         self.hidden[i] = 0
         
         if self.replaybuffer.ready():
             world_info = train_worldmodel(self.state_model, self.replaybuffer, self.opt, self.training_hyper, self.scaler)
