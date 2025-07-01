@@ -137,28 +137,27 @@ class TrainRunner:
             l_episode = env_info["stats"].get("l_episode", 0.)
             success_rate = env_info["stats"].get("success_rate", 0.)
             survive_rate = env_info["stats"].get("survive_rate", 0.)
-            if self.cfg.algo.name != 'world':
-                pbar.set_postfix({
-                    # "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-                    "loss": f"{env_info['loss_components']['total_loss']:.3f}",
-                    "l_episode": f"{l_episode:.1f}",
-                    "success_rate": f"{success_rate:.2f}",
-                    "survive_rate": f"{survive_rate:.2f}",
-                    "fps": f"{int(self.cfg.l_rollout*self.cfg.n_envs/(pbar._time()-t1)):,d}"})
-            log_info = {
-                "env_loss": env_info["loss_components"],
-                "agent_loss": losses,
-                "agent_grad_norm": grad_norms,
-                "metrics": env_info["stats"]
-            }
-            if "value" in policy_info.keys():
-                log_info["value"] = policy_info["value"].mean().item()
-            if "grid" in policy_info.keys():
-                self.logger.log_images("grid", deepcopy(policy_info["grid"]), i+1)
-                del(policy_info["grid"])
-            if "WorldModel/state_total_loss" in policy_info.keys():
-                log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
-            if (i+1) % 10 == 0:
+            pbar.set_postfix({
+                # "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
+                "loss": f"{env_info['loss_components']['total_loss']:.3f}",
+                "l_episode": f"{l_episode:.1f}",
+                "success_rate": f"{success_rate:.2f}",
+                "survive_rate": f"{survive_rate:.2f}",
+                "fps": f"{int(self.cfg.l_rollout*self.cfg.n_envs/(pbar._time()-t1)):,d}"})
+            if i % self.cfg.log_freq == 0:
+                log_info = {
+                    "env_loss": env_info["loss_components"],
+                    "agent_loss": losses,
+                    "agent_grad_norm": grad_norms,
+                    "metrics": env_info["stats"]
+                }
+                if "value" in policy_info.keys():
+                    log_info["value"] = policy_info["value"].mean().item()
+                if "grid" in policy_info.keys():
+                    self.logger.log_images("grid", deepcopy(policy_info["grid"]), i+1)
+                    del(policy_info["grid"])
+                if "WorldModel/state_total_loss" in policy_info.keys():
+                    log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
                 self.logger.log_scalars(log_info, i+1)
             
             if i % 100 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
@@ -167,7 +166,7 @@ class TrainRunner:
                 grid = np.concatenate([grid_gt, grid_pred], axis=1).transpose(2, 0, 1)
                 self.logger.log_image("grid", grid, i+1)
             
-            if success_rate >= self.max_success_rate:
+            if i % self.cfg.save_freq == 0 and success_rate >= self.max_success_rate:
                 self.max_success_rate = success_rate
                 self.agent.save(os.path.join(self.logger.logdir, "best"))
     
