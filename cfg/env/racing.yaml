@@ -14,6 +14,7 @@ wait_before_truncate: 40
 max_target_vel: 10.
 min_target_vel: 5.
 last_action_in_obs: False
+use_vel_track: False
 ref_path: ${ref_path}
 
 gates:
@@ -25,6 +26,7 @@ loss_weights:
     vel: 1
     jerk: 0.001
     progress: 0.
+    track: 1.
   quadrotor:
     vel: 1.
     jerk: 0.001
@@ -34,12 +36,13 @@ loss_weights:
 reward_weights:
   constant: 0.
   pointmass:
-    vel: 0.5
+    vel: 0.
     jerk: 0.0
     passed: 0.
     oob: 0
     collision: 10
     progress: 1.
+    track: 0.
   quadrotor:
     vel: 1.
     jerk: 0.001

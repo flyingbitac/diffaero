@@ -47,6 +47,8 @@ class Racing(BaseEnv):
             [   0, -2*g_r, g_h],
         ], device=device)
         self.gate_yaw = torch.tensor([1, 2, 1, 0, -1, -2, -1, 0], device=device)*torch.pi/2
+        
+        self.use_vel_track = cfg.use_vel_track
         if(cfg.ref_path is not None):
             self.ref_pos = torch.from_numpy(np.load(cfg.ref_path + "/position_ned.npy")).float().to(device)
             self.ref_vel = torch.from_numpy(np.load(cfg.ref_path + "/velocity_ned.npy")).float().to(device)
@@ -57,7 +59,7 @@ class Racing(BaseEnv):
         self.target_gates = torch.zeros(self.n_envs, dtype=torch.int, device=device)
         self.n_gates = self.gate_pos.shape[0]
         
-        self.obs_dim = 13
+        self.obs_dim = 13 if not cfg.use_vel_track else 10
         self.state_dim = 4 + 3 + 3 * (3 * 3)
         
         # Calculate relative gates
@@ -74,8 +76,8 @@ class Racing(BaseEnv):
         
         self.episode_length = torch.zeros((self.n_envs,), dtype=torch.int, device=device)
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
-    
-    
+
+
     @timeit
     def get_observations(self, with_grad=False):
         gate_pos = self.gate_pos[self.target_gates]
@@ -91,14 +93,21 @@ class Racing(BaseEnv):
         
         next_gate_idx = (self.target_gates + 1) % self.n_gates
         
-        obs = torch.cat([
-            pos_g,
-            vel_g,
-            rpy_g,
-            self.gate_rel_pos[next_gate_idx],
-            self.gate_yaw_rel[next_gate_idx].unsqueeze(-1)
-        ], dim=-1)
-
+        if not self.use_vel_track:
+            obs = torch.cat([
+                pos_g,
+                vel_g,
+                rpy_g,
+                self.gate_rel_pos[next_gate_idx],
+                self.gate_yaw_rel[next_gate_idx].unsqueeze(-1)
+            ], dim=-1)
+        else:
+            target_vel = self.cal_ref_vel()
+            obs = torch.cat([
+                target_vel,
+                self._q,
+                self._v
+            ], dim=-1)
         return obs if with_grad else obs.detach()
     
     @timeit
@@ -242,12 +251,14 @@ class Racing(BaseEnv):
             vec_agent_to_closest = closest_pts - agent_pos.unsqueeze(1)  # (n_envs, 7, 3)
             min_dist, indices = torch.min(vec_agent_to_closest.norm(dim=-1), dim=-1)
             
-            # vert_ref_vel = F.normalize(vec_agent_to_closest[torch.arange(self.n_envs), indices], dim=-1) * 1. * (1. - torch.exp(-min_dist.unsqueeze(-1)))
-            vert_ref_vel = torch.zeros_like(self.v)
-            vert_ref_vel[:, 2] = (1.57 - self.p[:, 2]).clamp(min=-1., max=1.) * 0.1
+            vert_ref_vel = F.normalize(vec_agent_to_closest[torch.arange(self.n_envs), indices], dim=-1) * 1. * (1. - torch.exp(-min_dist.unsqueeze(-1)))
             hori_ref_vel = ref_vel[torch.arange(self.n_envs), indices] 
-            target_vel = torch.cat([hori_ref_vel[..., :-1], vert_ref_vel[..., -1:]], dim=-1).detach()
-            return target_vel
+            # target_vel = hori_ref_vel + vert_ref_vel
+            target_vel = hori_ref_vel
+            # vert_ref_vel = torch.zeros_like(self.v)
+            # vert_ref_vel[:, 2] = (1.57 - self.p[:, 2]).clamp(min=-1., max=1.) * 0.1
+            # target_vel = torch.cat([hori_ref_vel[..., :-1], vert_ref_vel[..., -1:]], dim=-1).detach()
+            return target_vel.detach(), min_dist
         else:
             return self.target_vel
             
@@ -276,6 +287,10 @@ class Racing(BaseEnv):
         
         if isinstance(self.dynamics, PointMassModelBase):
             target_vel = self.cal_ref_vel()
+            track_loss = torch.zeros_like(self.p[: , 0])
+            if isinstance(target_vel, tuple):
+                target_vel, min_dist = target_vel
+                track_loss = 1. - torch.exp(-min_dist)
             vel_diff = (self.dynamics._vel_ema - target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             # print(vel_g.mean(dim=0))
@@ -287,7 +302,8 @@ class Racing(BaseEnv):
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
                 self.loss_weights.pointmass.jerk * jerk_loss +
-                self.loss_weights.pointmass.progress * progress_loss
+                self.loss_weights.pointmass.progress * progress_loss + 
+                self.loss_weights.pointmass.track * track_loss 
             )
             total_reward = (
                 self.reward_weights.constant - 
@@ -296,7 +312,8 @@ class Racing(BaseEnv):
                 self.reward_weights.pointmass.passed * pass_loss -
                 self.reward_weights.pointmass.oob * oob_loss -
                 self.reward_weights.pointmass.progress * progress_loss -
-                self.reward_weights.pointmass.collision * collision_loss
+                self.reward_weights.pointmass.collision * collision_loss - 
+                self.reward_weights.pointmass.track * track_loss
             ).detach()
 
             loss_components = {
@@ -306,7 +323,8 @@ class Racing(BaseEnv):
                 "progress_loss": progress_loss.mean().item(),
                 "collision_loss": collision_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
-                "total_reward": total_reward.mean().item()
+                "total_reward": total_reward.mean().item(),
+                "track_loss": track_loss.mean().item(),
             }
         else:
             rotation_matrix_b2i = T.quaternion_to_matrix(self._q.roll(1, dims=-1)).clamp_(min=-1.0+1e-6, max=1.0-1e-6)
