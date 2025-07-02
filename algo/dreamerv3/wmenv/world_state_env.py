@@ -8,6 +8,7 @@ from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel
 from quaddif.algo.dreamerv3.models.blocks import symexp,symlog
 from .replaybuffer import ReplayBuffer
 from quaddif.utils.logger import Logger
+from quaddif.utils.runner import timeit
 # from models.rew_end_model import RewEndModel
 
 ResetOutput = Tuple[torch.FloatTensor, Dict[str, Any]]
@@ -35,6 +36,7 @@ class DepthStateEnv:
         self.hidden = None
 
     @torch.no_grad()
+    @timeit
     def make_generator_init(self, use_grid:bool=False):
         batch_size = self.cfg.batch_size
         batch_length = self.cfg.batch_length
@@ -60,6 +62,7 @@ class DepthStateEnv:
         return latent,hidden,grid
         
     @torch.no_grad()
+    @timeit
     def step(self,action:Tensor,use_grid:bool=False):
         assert action.ndim==2
         prior_sample,pred_reward,pred_end,hidden,grid=self.state_model.predict_next(latent=self.latent, act=action, hidden=self.hidden, use_grid=use_grid)

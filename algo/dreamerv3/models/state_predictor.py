@@ -1,14 +1,17 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
 from torch import Tensor
 from torch.distributions import OneHotCategorical
-from typing import Optional
 from einops import rearrange,reduce
 from einops.layers.torch import Rearrange
 
 from .blocks import SymLogTwoHotLoss, MLP
+
+from quaddif.utils.runner import timeit
 
 @dataclass
 class DepthStateModelCfg:
@@ -105,7 +108,7 @@ class ImageDecoderMLP(nn.Module):
         rec_image = rearrange(flatten_image,'B (H W) -> B H W',H=self.image_height)
         return rec_image
         
-
+@torch.jit.script
 def onehotsample(probs:torch.Tensor):
     B,K,C = probs.shape
     
@@ -235,15 +238,16 @@ class DepthStateModel(nn.Module):
         probs = F.softmax(logits,dim=-1)
         dist = OneHotCategorical(probs=probs)
         sample = dist.sample()
+        # sample = onehotsample(probs=probs)
         sample_with_gradient = sample + probs - probs.detach()
         return sample_with_gradient
     
     def sample_for_deploy(self,logits:Tensor):
         probs = F.softmax(logits,dim=-1)
         return onehotsample(probs)
-
+    
     def decode(self,latent:Tensor,hidden:Optional[Tensor]=None):
-        if hidden==None:
+        if hidden is None:
             hidden = torch.zeros(latent.shape[0],self.cfg.hidden_dim,device=latent.device)
         feat = torch.cat([latent,hidden],dim=-1)
         if self.cfg.only_state or not self.cfg.enable_rec:
@@ -254,7 +258,7 @@ class DepthStateModel(nn.Module):
     def sample_with_prior(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None,is_for_deploy:bool=False):
         assert latent.ndim==act.ndim==2
         state_act = self.act_state_proj(torch.cat([latent,act],dim=-1))
-        if hidden==None:
+        if hidden is None:
             hidden = torch.zeros(state_act.shape[0],self.cfg.hidden_dim).to(state_act.device)
         hidden = self.seq_model(state_act,hidden)
         prior_logits = self.prior_proj(hidden)
@@ -275,10 +279,10 @@ class DepthStateModel(nn.Module):
         return categorical_sample.view(*categorical_sample.shape[:-2],-1)
 
     def sample_with_post(self,state:Tensor,depth_image:Tensor=None,hidden:Optional[Tensor]=None,is_for_deploy:bool=False):
-        if hidden==None:
+        if hidden is None:
             hidden = torch.zeros(state.shape[0],self.cfg.hidden_dim,device=state.device)
         
-        if depth_image!=None:
+        if depth_image is not None:
             state_feat = self.state_encoder(state)
             depth_feat = self.image_encoder(depth_image)
             feat = torch.cat([state_feat,depth_feat],dim=-1)
@@ -316,6 +320,7 @@ class DepthStateModel(nn.Module):
             grid_logits = None
         return prior_sample,pred_reward,pred_end,hidden,grid_logits
 
+    @timeit
     def compute_loss(
         self,
         states: Tensor,
@@ -339,7 +344,7 @@ class DepthStateModel(nn.Module):
         rec_images = []
 
         for i in range(l):
-            if depth_images!=None:
+            if depth_images is not None:
                 post_sample,post_logit = self.sample_with_post(states[:, i], depth_images[:, i], hidden)
             else:
                 post_sample,post_logit = self.sample_with_post(states[:, i], None, hidden)
@@ -354,7 +359,7 @@ class DepthStateModel(nn.Module):
                 grid_logit = self.grid_predictor(flattened_prior_sample,hidden)
                 grid_logits.append(grid_logit)
 
-            rec_states.append(rec_state) 
+            rec_states.append(rec_state)
             rec_images.append(rec_image)
             post_logits.append(post_logit)
             prior_logits.append(prior_logit)
@@ -362,7 +367,7 @@ class DepthStateModel(nn.Module):
             end_logits.append(end_logit)
 
         rec_states = torch.stack(rec_states,dim=1)
-        if rec_image!=None:
+        if rec_image is not None:
             rec_images = torch.stack(rec_images,dim=1).unsqueeze(2)
         post_logits = torch.stack(post_logits,dim=1)
         prior_logits = torch.stack(prior_logits,dim=1)

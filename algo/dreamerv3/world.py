@@ -20,6 +20,7 @@ from quaddif.utils.runner import timeit
 from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
 
 @torch.no_grad()
+@timeit
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
     feats, rewards, ends, actions, org_samples = [], [], [], [], []
     imagine_length = cfg.imagine_length
@@ -222,9 +223,11 @@ class World_Agent:
             self.replaybuffer.append(state, action, rewards, terminated, perception, grid, visible_map)
             
             if terminated.any():
-                for i in range(self.n_envs):
-                    if terminated[i]:
-                        self.hidden[i] = 0
+                zeros = torch.zeros_like(self.hidden)
+                self.hidden = torch.where(terminated.unsqueeze(-1), zeros, self.hidden)
+                # for i in range(self.n_envs):
+                #     if terminated[i]:
+                #         self.hidden[i] = 0
         
         if self.replaybuffer.ready():
             world_info = train_worldmodel(self.state_model, self.replaybuffer, self.opt, self.training_hyper, self.scaler)

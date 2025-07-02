@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from quaddif.utils.runner import timeit
+
 @dataclass
 class buffercfg:
     perception_width: int
@@ -45,35 +47,47 @@ class ReplayBuffer():
         return self.length * self.num_envs > self.warmup_length and self.length > 64
 
     @torch.no_grad()
+    @timeit
     def sample(self, batch_size, batch_length):
         if batch_size < self.num_envs:
             batch_size = self.num_envs
         if self.store_on_gpu:
-            state, action, reward, termination, perception, grid, visible_map = [], [], [], [], [], [], []
-            if batch_size > 0:
-                for i in range(self.num_envs):
-                    indexes = np.random.randint(0, self.length+1-batch_length, size=batch_size//self.num_envs)
-                    state.append(torch.stack([self.state_buffer[idx:idx+batch_length, i] for idx in indexes]))
-                    action.append(torch.stack([self.action_buffer[idx:idx+batch_length, i] for idx in indexes]))
-                    reward.append(torch.stack([self.reward_buffer[idx:idx+batch_length, i] for idx in indexes]))
-                    termination.append(torch.stack([self.termination_buffer[idx:idx+batch_length, i] for idx in indexes]))
-                    if self.use_perception:
-                        perception.append(torch.stack([self.perception_buffer[idx:idx+batch_length, i] for idx in indexes]))
-                    if self.use_grid:
-                        grid.append(torch.stack([self.grid_buffer[idx:idx+batch_length, i] for idx in indexes]))
-                        visible_map.append(torch.stack([self.visible_map_buffer[idx:idx+batch_length, i] for idx in indexes]))
+            indexes = torch.randint(0, self.length - batch_length, (batch_size,), device=self.state_buffer.device)
+            arange = torch.arange(batch_length, device=self.state_buffer.device)
+            idxs = torch.flatten(indexes.unsqueeze(1) + arange.unsqueeze(0)) # shape: (batch_size * batch_length)
+            env_idx = torch.randint(0, self.num_envs, (batch_size, 1), device=self.state_buffer.device).expand(-1, batch_length).reshape(-1)
+            state = self.state_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+            action = self.action_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+            reward = self.reward_buffer[idxs, env_idx].reshape(batch_size, batch_length)
+            termination = self.termination_buffer[idxs, env_idx].reshape(batch_size, batch_length)
+            # state, action, reward, termination, perception, grid, visible_map = [], [], [], [], [], [], []
+            # for i in range(self.num_envs):
+            #     indexes = np.random.randint(0, self.length+1-batch_length, size=batch_size//self.num_envs)
+            #     state.append(torch.stack([self.state_buffer[idx:idx+batch_length, i] for idx in indexes]))
+            #     action.append(torch.stack([self.action_buffer[idx:idx+batch_length, i] for idx in indexes]))
+            #     reward.append(torch.stack([self.reward_buffer[idx:idx+batch_length, i] for idx in indexes]))
+            #     termination.append(torch.stack([self.termination_buffer[idx:idx+batch_length, i] for idx in indexes]))
+            #     if self.use_perception:
+            #         perception.append(torch.stack([self.perception_buffer[idx:idx+batch_length, i] for idx in indexes]))
+            #     if self.use_grid:
+            #         grid.append(torch.stack([self.grid_buffer[idx:idx+batch_length, i] for idx in indexes]))
+            #         visible_map.append(torch.stack([self.visible_map_buffer[idx:idx+batch_length, i] for idx in indexes]))
 
-            state = torch.cat(state, dim=0)
-            action = torch.cat(action, dim=0)
-            reward = torch.cat(reward, dim=0)
-            termination = torch.cat(termination, dim=0)
+            # state = torch.cat(state, dim=0)
+            # action = torch.cat(action, dim=0)
+            # reward = torch.cat(reward, dim=0)
+            # termination = torch.cat(termination, dim=0)
+            # print("state shape:", state.shape, "action shape:", action.shape, "reward shape:", reward.shape, "termination shape:", termination.shape)
             if self.use_perception:
-                perception = torch.cat(perception, dim=0)
+                perception = self.perception_buffer[idxs, env_idx].reshape(batch_size, batch_length, *self.perception_buffer.shape[2:])
+                # perception = torch.cat(perception, dim=0)
             else:
                 perception = None
             if self.use_grid:
-                grid = torch.cat(grid, dim=0)
-                visible_map = torch.cat(visible_map, dim=0)
+                grid = self.grid_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+                visible_map = self.visible_map_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+                # grid = torch.cat(grid, dim=0)
+                # visible_map = torch.cat(visible_map, dim=0)
             else:
                 grid = None
                 visible_map = None
