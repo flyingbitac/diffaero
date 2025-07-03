@@ -38,9 +38,12 @@ def main(cfg: DictConfig):
     from quaddif.utils.logger import Logger
     from quaddif.utils.runner import TrainRunner
     
+    runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
+    logger = Logger(cfg, run_name=runname)
+    
     device = f"cuda:{cfg.device}" if torch.cuda.is_available() and cfg.device != -1 else "cpu"
     device_repr = f"cuda:{job_device}" if multirun_across_devices and device != "cpu" else device
-    print(f"Using device {device_repr}.")
+    Logger.info(f"Using device {device_repr}.")
     device = torch.device(device)
     
     if cfg.seed != -1:
@@ -65,15 +68,12 @@ def main(cfg: DictConfig):
     if train_from_checkpoint:
         agent.load(ckpt_path)
     
-    runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
-    logger = Logger(cfg, run_name=runname)
-    
     runner = TrainRunner(cfg, logger, env, agent)
     
     try:
         runner.run()
     except KeyboardInterrupt:
-        print("Interrupted.")
+        Logger.warning("Interrupted.")
     
     max_success_rate = runner.close()
     

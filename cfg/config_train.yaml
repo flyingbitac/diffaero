@@ -19,6 +19,7 @@ n_agents: 1
 n_envs: 1024
 n_updates: 1000
 log_freq: 10
+log_level: info
 save_freq: 100
 device: 0
 n_jobs: 1

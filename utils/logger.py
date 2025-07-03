@@ -1,10 +1,17 @@
 from typing import Union
 import os
 import copy
+import inspect
+import logging
+from pathlib import Path
+from time import time
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+
+from quaddif import QUADDIF_ROOT_DIR
 
 class TensorBoardLogger:
     def __init__(
@@ -15,7 +22,7 @@ class TensorBoardLogger:
     ):
         self.cfg = cfg
         self.logdir = logdir
-        print("Using Tensorboard Logger.")
+        Logger.info("Using Tensorboard Logger.")
         self.writer = SummaryWriter(log_dir=os.path.join(self.logdir, run_name))
         self.log_hparams()
     
@@ -42,7 +49,6 @@ class TensorBoardLogger:
         self.writer.add_video(tag, video, step, fps=fps)
             
     def close(self):
-        self.writer.flush()
         self.writer.close()
 
     def log_hparams(self):
@@ -67,7 +73,7 @@ class WandBLogger:
     ):
         self.cfg = cfg
         self.logdir = logdir
-        print("Using WandB Logger.")
+        Logger.info("Using WandB Logger.")
         
         overrides_path = os.path.join(self.logdir, ".hydra", "overrides.yaml")
         if os.path.exists(overrides_path):
@@ -109,8 +115,8 @@ class WandBLogger:
     def close(self):
         self.writer.finish()
 
-
 class Logger:
+    logging = logging.getLogger()
     def __init__(
         self,
         cfg: DictConfig,
@@ -121,12 +127,45 @@ class Logger:
             "wandb": WandBLogger
         }
         self.cfg = copy.deepcopy(cfg)
+        assert str(cfg.log_level).upper() in logging._nameToLevel.keys()
+        Logger.logging.setLevel(logging._nameToLevel[str(cfg.log_level).upper()])
         self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
         run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         type = cfg.logger.name.lower()
         self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](self.cfg, self.logdir, run_name)
-        print(f"Output directory  : {self.logdir}")
+        Logger.info(f"Output directory  : {self.logdir}")
     
+    @staticmethod
+    def _get_logger(inspect_stack):
+        rel_path = Path(inspect_stack[1].filename).resolve().relative_to(QUADDIF_ROOT_DIR)
+        Logger.logging.name = str(rel_path)
+        return Logger.logging
+    
+    @staticmethod
+    def debug(msg):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).debug(str(msg))
+
+    @staticmethod
+    def info(msg):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).info(str(msg))
+
+    @staticmethod
+    def warning(msg):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).warning(str(msg))
+
+    @staticmethod
+    def error(msg):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).error(str(msg))
+
+    @staticmethod
+    def critical(msg):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).critical(str(msg))
+
     def log_scalar(self, tag, value, step):
         return self._logger.log_scalar(tag, value, step)
     
