@@ -35,7 +35,7 @@ loss_weights:
     attitude: 0.1
 
 reward_weights:
-  constant: 0.5
+  constant: 0.
   pointmass:
     vel: 0.
     jerk: 0.
@@ -46,10 +46,10 @@ reward_weights:
     progress: 1.
     track: 0.
   quadrotor:
-    vel: 1.
-    jerk: 0.001
-    pos: 3.
-    attitude: 0.1
+    vel: 0.
+    jerk: 0.1
+    pos: 0.
+    attitude: 0.
     progress: 10.
     collision: 10
 

@@ -1,0 +1,17 @@
+name: track
+
+dynamics: ${dynamics}
+
+trajectory:
+  n_envs: ${n_envs}
+  ref_path: ${ref_path}
+  _traj_N: 15
+
+tracker:
+  n_envs: ${n_envs}
+  optim_steps: 20
+  lr: 0.01
+  rollout_steps: 5
+  parallel_traj: 32
+  noise_scale: 0.15
+  
