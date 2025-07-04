@@ -6,10 +6,10 @@ from torch import Tensor
 from pytorch3d import transforms as T
 import taichi as ti
 from omegaconf import DictConfig
-from tqdm import tqdm
 
 from quaddif.utils.assets import ObstacleManager
 from quaddif.utils.math import quaternion_to_euler, axis_rotmat
+from quaddif.utils.logger import Logger
 
 @torch.jit.script
 def torch2ti(tensor_from_torch: Tensor):
@@ -160,10 +160,10 @@ class BaseRenderer:
             assert str(self.device) in ["cpu", "cuda:0"], "Video recording is only supported on cpu and cuda:0."
         
         if "cpu" in str(self.device):
-            print("Using CPU to render the GUI.")
+            Logger.info("Using CPU to render GUI.")
             ti.init(arch=ti.cpu)
         else:
-            print("Using GPU to render the GUI.")
+            Logger.info("Using GPU to render GUI.")
             ti.init(arch=ti.gpu)
         
         N = torch.ceil(torch.sqrt(torch.tensor(self.n_envs, device=self.device))).int()
@@ -446,7 +446,7 @@ class BaseRenderer:
             if sub_window.button("(V) Pause Rendering"):
                 self.enable_rendering = False
                 sub_window.text("Rendering paused. Press \"V\" to resume.")
-                tqdm.write("Rendering paused. Press \"V\" to resume.")
+                Logger.info("Rendering paused. Press \"V\" to resume.")
             self.gui_states["enable_lightsource"] = sub_window.checkbox("Enable Light Source", self.gui_states["enable_lightsource"])
             if self.gui_states["enable_lightsource"]:
                 self.gui_states["brightness"] = sub_window.slider_float("Brightness", self.gui_states["brightness"], minimum=0, maximum=1)
@@ -516,7 +516,7 @@ class BaseRenderer:
             if self.gui_window.event.key == 'v':
                 self.enable_rendering = not self.enable_rendering
                 if not self.enable_rendering:
-                    tqdm.write("Rendering paused. Press \"V\" to resume.")
+                    Logger.info("Rendering paused. Press \"V\" to resume.")
             if self.gui_window.event.key == 'r':
                 self.gui_states["reset_all"] = True
             if self.gui_window.event.key == 'l':

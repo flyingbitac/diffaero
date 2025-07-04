@@ -9,6 +9,7 @@ import torch.nn as nn
 from quaddif.network.agents import StochasticActor, DeterministicActor
 from quaddif.network.networks import MLP, CNN, RNN, RCNN
 from quaddif.dynamics.pointmass import point_mass_quat
+from quaddif.utils.logger import Logger
 
 class PolicyExporter(nn.Module):
     def __init__(self, actor: Union[StochasticActor, DeterministicActor]):
@@ -100,10 +101,10 @@ class PolicyExporter(nn.Module):
     def export_jit(self, path: str, verbose=False):
         traced_script_module = torch.jit.script(self)
         if verbose:
-            print(traced_script_module.code)
+            Logger.info("Code of scripted module: \n" + traced_script_module.code)
         export_path = os.path.join(path, "exported_actor.pt2")
         traced_script_module.save(export_path)
-        print(f"The checkpoint is compiled and exported to {export_path}.")
+        Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
     
     def export_onnx(self, path: str):
         export_path = os.path.join(path, "exported_actor.onnx")
@@ -115,4 +116,4 @@ class PolicyExporter(nn.Module):
             input_names=names,
             output_names=self.output_names
         )
-        print(f"The checkpoint is compiled and exported to {export_path}.")
+        Logger.info(f"The checkpoint is compiled and exported to {export_path}.")

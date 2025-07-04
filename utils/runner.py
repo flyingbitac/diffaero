@@ -138,9 +138,8 @@ class TrainRunner:
             success_rate = env_info["stats"].get("success_rate", 0.)
             survive_rate = env_info["stats"].get("survive_rate", 0.)
             pbar.set_postfix({
-                # "param_norm": f"{grad_norms['actor_grad_norm']:.3f}",
-                "loss": f"{env_info['loss_components']['total_loss']:.3f}",
-                "l_episode": f"{l_episode:.1f}",
+                "loss": f"{env_info['loss_components']['total_loss']:6.3f}",
+                "l_episode": f"{l_episode:4.1f}",
                 "success_rate": f"{success_rate:.2f}",
                 "survive_rate": f"{survive_rate:.2f}",
                 "fps": f"{int(self.cfg.l_rollout*self.cfg.n_envs/(pbar._time()-t1)):,d}"})
@@ -166,9 +165,10 @@ class TrainRunner:
                 grid = np.concatenate([grid_gt, grid_pred], axis=1).transpose(2, 0, 1)
                 self.logger.log_image("grid", grid, i+1)
             
-            if i % self.cfg.save_freq == 0 and success_rate >= self.max_success_rate:
+            if success_rate >= self.max_success_rate:
                 self.max_success_rate = success_rate
-                self.agent.save(os.path.join(self.logger.logdir, "best"))
+                if i % self.cfg.save_freq == 0:
+                    self.agent.save(os.path.join(self.logger.logdir, "best"))
     
     def close(self) -> float:
         """
@@ -178,10 +178,11 @@ class TrainRunner:
         """
         if self.torch_profiler is not None and self.torch_profiler.step_num == self.cfg.n_updates:
             self.torch_profiler.stop()
+            print(self.torch_profiler.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=20))
         ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
         self.agent.save(ckpt_path)
-        print(f"The checkpoint is saved to {ckpt_path}.")
-        print(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
+        Logger.info(f"The checkpoint is saved to {ckpt_path}.")
+        Logger.info(f"Run `python script/test.py checkpoint={ckpt_path} use_training_cfg=True` to evaluate.")
         if any(dict(self.cfg.export).values()):
             self.agent.export(
                 path=ckpt_path,
