@@ -1,5 +1,6 @@
 from typing import *
 from collections import defaultdict
+import sys
 import os
 from copy import deepcopy
 
@@ -103,19 +104,19 @@ class TrainRunner:
         self.max_success_rate = 0.
         
         if cfg.torch_profile:
+            activities = [torch.profiler.ProfilerActivity.CPU]
+            if env.device.type == "cuda":
+                activities.append(torch.profiler.ProfilerActivity.CUDA)
             self.torch_profiler = torch.profiler.profile(
-                activities=[
-                    torch.profiler.ProfilerActivity.CPU, 
-                    torch.profiler.ProfilerActivity.CUDA,
-                ],
-                record_shapes=False,
+                activities=activities,
+                schedule=torch.profiler.schedule(wait=0, warmup=10, active=10, repeat=1, skip_first=0),
+                record_shapes=True,
                 profile_memory=True,
-                with_stack=True,
+                # with_stack=True,
                 with_flops=True,
-                schedule=torch.profiler.schedule(wait=0, warmup=1, active=cfg.n_updates-1, repeat=1, skip_first=0),
                 on_trace_ready=torch.profiler.tensorboard_trace_handler(
                     dir_name=os.path.join(self.logger.logdir, "profiling_data"),
-                    use_gzip=True
+                    # use_gzip=True
                 ),
             )
         else: 

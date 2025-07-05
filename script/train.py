@@ -16,7 +16,6 @@ def allocate_device(cfg: DictConfig):
         n_devices = len(available_devices)
         job_id = hydra_cfg.job.num
         job_device = available_devices[job_id % n_devices]
-        cfg.device = 0
     else:
         job_device = int(cfg.device) if isinstance(cfg.device, int) else 0
     return job_device, multirun_across_devices
@@ -28,9 +27,10 @@ def main(cfg: DictConfig):
     if multirun_across_devices:
         import os
         os.environ["CUDA_VISIBLE_DEVICES"] = str(job_device)
-        cfg.device
+        cfg.device = 0
     
     import torch
+    torch.set_float32_matmul_precision('high') # for better performance
     import numpy as np
     
     from quaddif.env import build_env
