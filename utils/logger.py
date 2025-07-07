@@ -1,10 +1,9 @@
-from typing import Union
+from typing import Union, List
 import os
 import copy
 import inspect
 import logging
 from pathlib import Path
-from time import time
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
@@ -85,8 +84,11 @@ class WandBLogger:
             entity=cfg.logger.entity,
             dir=self.logdir,
             sync_tensorboard=False,
-            config={**dict(cfg), "overrides": overrides},
-            name=run_name
+            config={**dict(cfg), "overrides": overrides}, # type: ignore
+            name=run_name,
+            settings=wandb.Settings(
+                quiet=cfg.logger.quiet
+            )
         )
         self.writer = wandb
     
@@ -115,6 +117,16 @@ class WandBLogger:
     def close(self):
         self.writer.finish()
 
+
+def supress_tqdm_update(fn):
+    def wrapper(*args, **kwargs):
+        with tqdm.external_write_mode():
+            return fn(*args, **kwargs)
+    return wrapper
+
+def msg2str(*msgs):
+    return " ".join([str(msg) for msg in msgs])
+
 class Logger:
     logging = logging.getLogger()
     def __init__(
@@ -133,38 +145,38 @@ class Logger:
         run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         type = cfg.logger.name.lower()
         self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](self.cfg, self.logdir, run_name)
-        Logger.info(f"Output directory  : {self.logdir}")
+        Logger.info("Output directory:", self.logdir)
     
     @staticmethod
-    def _get_logger(inspect_stack):
+    def _get_logger(inspect_stack: List[inspect.FrameInfo]):
         rel_path = Path(inspect_stack[1].filename).resolve().relative_to(QUADDIF_ROOT_DIR)
-        Logger.logging.name = str(rel_path)
+        Logger.logging.name = f"{str(rel_path)}:{inspect_stack[1].lineno}"
         return Logger.logging
     
     @staticmethod
-    def debug(msg):
-        with tqdm.external_write_mode():
-            Logger._get_logger(inspect.stack()).debug(str(msg))
+    @supress_tqdm_update
+    def debug(*msgs):
+        Logger._get_logger(inspect.stack()).debug(msg2str(*msgs))
 
     @staticmethod
-    def info(msg):
-        with tqdm.external_write_mode():
-            Logger._get_logger(inspect.stack()).info(str(msg))
+    @supress_tqdm_update
+    def info(*msgs):
+        Logger._get_logger(inspect.stack()).info(msg2str(*msgs))
 
     @staticmethod
-    def warning(msg):
-        with tqdm.external_write_mode():
-            Logger._get_logger(inspect.stack()).warning(str(msg))
+    @supress_tqdm_update
+    def warning(*msgs):
+        Logger._get_logger(inspect.stack()).warning(msg2str(*msgs))
 
     @staticmethod
-    def error(msg):
-        with tqdm.external_write_mode():
-            Logger._get_logger(inspect.stack()).error(str(msg))
+    @supress_tqdm_update
+    def error(*msgs):
+        Logger._get_logger(inspect.stack()).error(msg2str(*msgs))
 
     @staticmethod
-    def critical(msg):
-        with tqdm.external_write_mode():
-            Logger._get_logger(inspect.stack()).critical(str(msg))
+    @supress_tqdm_update
+    def critical(*msgs):
+        Logger._get_logger(inspect.stack()).critical(msg2str(*msgs))
 
     def log_scalar(self, tag, value, step):
         return self._logger.log_scalar(tag, value, step)

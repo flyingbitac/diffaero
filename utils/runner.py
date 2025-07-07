@@ -1,6 +1,5 @@
-from typing import *
+from typing import Union, Optional
 from collections import defaultdict
-import sys
 import os
 from copy import deepcopy
 
@@ -8,6 +7,7 @@ import torch
 import torchvision
 import numpy as np
 from line_profiler import LineProfiler
+import hydra
 from tqdm import tqdm
 import cv2
 import imageio
@@ -124,8 +124,14 @@ class TrainRunner:
     
     def run(self):
         """Start training."""
+        # make progress bars to display on different rows in multirun mode
+        hydra_cfg = hydra.core.hydra_config.HydraConfig.get() # type: ignore
+        is_multirun = hydra_cfg.mode == hydra.types.RunMode.MULTIRUN # type: ignore
+        job_id = hydra_cfg.job.num if is_multirun else 0
+        desc = f"Job {job_id:2d}" if is_multirun else ""
+        pbar = tqdm(range(self.cfg.n_updates), position=job_id%self.cfg.n_jobs, desc=desc)
+        
         obs = self.env.reset()
-        pbar = tqdm(range(self.cfg.n_updates))
         on_step_cb = display_image if self.cfg.display_image else None
         if self.torch_profiler is not None:
             self.torch_profiler.start()
@@ -257,7 +263,7 @@ class TestRunner:
                 "survive_rate": f"{survive_rate:.2f}",
                 "fps": f"{int(self.cfg.env.n_envs/(pbar._time()-t1)):,d}"})
             log_info = {
-                "env_loss": env_info["loss_components"], 
+                "env_loss": env_info.get("loss_components", {}), 
                 "metrics": env_info["stats"]}
             self.logger.log_scalars(log_info, i+1)
             self.success_rate = n_success / n_resets
@@ -271,16 +277,17 @@ class TestRunner:
                 depth_image = (depth_image * 255).to(torch.uint8).unsqueeze(-1).expand(-1, -1, -1, 3).cpu().numpy()
                 image = np.concatenate([rgb_image, depth_image], axis=-2)
                 video_array[index] = image
-                if env_info["reset"][:n_envs].sum().item() > env_info["success"][:n_envs].sum().item(): # some episodes failed
-                    failed = torch.logical_and(env_info["reset"], ~env_info["success"])[:n_envs]
+                reset, success = env_info["reset"][:n_envs], env_info["success"][:n_envs]
+                if reset.sum().item() > success.sum().item(): # some episodes failed
+                    failed = torch.logical_and(reset, ~success)[:n_envs]
                     idx = failed.nonzero().flatten()[0]
                     video_length = env_info["l"][idx].item() - 1
                     if self.cfg.video_saveas == "mp4":
                         self.save_video_mp4(video_array[idx, :video_length], f"failed_{i+1}.mp4")
                     elif self.cfg.video_saveas == "tensorboard":
                         self.save_video_tensorboard(video_array[idx.unsqueeze(0), :video_length], "video/fail", i+1)
-                if env_info["success"][:n_envs].sum().item() > 0: # some episodes succeeded
-                    idx = env_info["success"][:n_envs].nonzero().flatten()[0]
+                if success.sum().item() > 0: # some episodes succeeded
+                    idx = success.nonzero().flatten()[0]
                     video_length = min(env_info["l"][idx].item(), int(env_info["arrive_time"][idx].item()/self.env.dt) + 100) - 1
                     if self.cfg.video_saveas == "mp4":
                         self.save_video_mp4(video_array[idx, :video_length], f"success_{i+1}.mp4")
@@ -289,7 +296,7 @@ class TestRunner:
             
             if self.cfg.display_image:
                 display_image(
-                    state=obs,
+                    obs=obs,
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
