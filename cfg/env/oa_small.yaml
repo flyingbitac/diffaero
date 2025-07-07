@@ -23,7 +23,7 @@ ground_plane: True
 loss_weights:
   pointmass:
     vel: 1.
-    oa: 3.
+    oa: 4.
     jerk: 0.005
     pos: 5.
     collision: 0.
