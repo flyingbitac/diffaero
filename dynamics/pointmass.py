@@ -143,7 +143,8 @@ class ContinuousPointMassModel(PointMassModelBase):
         fdrag = -self._D.value * v
         v_dot = a + self._G_vec + fdrag
         
-        a_dot = self.lmbda.value * (U - a)
+        control_delay_factor = (1 - torch.exp(-self.lmbda.value*self.dt)) / self.dt
+        a_dot = control_delay_factor * (U - a)
         
         # State derivatives
         X_dot = torch.concat([v, v_dot, a_dot], dim=-1)
@@ -165,7 +166,8 @@ class DiscretePointMassModel(PointMassModelBase):
         p, v, a = self._state.chunk(3, dim=-1)
         
         next_p = p + self.dt * (v + 0.5 * (a + self._G_vec) * self.dt)
-        next_a = torch.lerp(a, U, self.lmbda.value)
+        control_delay_factor = 1 - torch.exp(-self.lmbda.value*self.dt)
+        next_a = torch.lerp(a, U, control_delay_factor) - self._D.value * v
         next_v = v + self.dt * (0.5 * (a + next_a) + self._G_vec)
         next_state = torch.cat([next_p, next_v, next_a], dim=-1)
         next_state = self.grad_decay(next_state)
