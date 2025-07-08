@@ -738,13 +738,22 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
 
     def _update_obstacles(self):
         # update the pose of the cubes
-        vertices_tensor, indices_tensor, color_tensor = add_box(
+        cube_vertices_tensor, cube_indices_tensor, cube_color_tensor = add_box(
             xyz=torch.zeros(self.n_envs, self.obstacle_manager.n_cubes, 3, device=self.device),
             lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
             rpy=self.obstacle_manager.rpy_cubes[:self.n_envs],
             color=torch.tensor([[self.cube_color]], device=self.device).expand(self.n_envs, self.obstacle_manager.n_cubes, -1)
         )
-        self.cube_vertices_tensor.copy_(vertices_tensor)
+        self.cube_vertices_tensor.copy_(cube_vertices_tensor)
+        
+        sphere_vertices_tensor, sphere_indices_tensor, sphere_color_tensor = add_sphere(
+            xyz=torch.zeros_like(self.obstacle_manager.p_spheres[:self.n_envs]),
+            radius=self.obstacle_manager.r_spheres[:self.n_envs],
+            lat_segments=self.sphere_n_segments,
+            lon_segments=self.sphere_n_segments * 2,
+            color=torch.tensor([[self.sphere_color]], device=self.device).expand(self.n_envs, self.obstacle_manager.n_spheres, -1)
+        )
+        self.sphere_vertices_tensor.copy_(sphere_vertices_tensor)
         
         idx = self.gui_states["tracking_env_idx"]
         cube_vertices_tensor = (
@@ -752,9 +761,10 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
             self.env_origin.unsqueeze(-2).unsqueeze(-2))
         sphere_vertices_tensor = (
-            self.sphere_vertices_tensor + 
+            self.sphere_vertices_tensor +
             self.obstacle_manager.p_spheres[:self.n_envs].unsqueeze(-2) + 
-            self.env_origin.unsqueeze(-2).unsqueeze(-2))
+            self.env_origin.unsqueeze(-2).unsqueeze(-2)
+        )
         
         if self.enable_rendering:
             self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
