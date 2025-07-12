@@ -118,12 +118,6 @@ class WandBLogger:
         self.writer.finish()
 
 
-def supress_tqdm_update(fn):
-    def wrapper(*args, **kwargs):
-        with tqdm.external_write_mode():
-            return fn(*args, **kwargs)
-    return wrapper
-
 def msg2str(*msgs):
     return " ".join([str(msg) for msg in msgs])
 
@@ -154,29 +148,29 @@ class Logger:
         return Logger.logging
     
     @staticmethod
-    @supress_tqdm_update
     def debug(*msgs):
-        Logger._get_logger(inspect.stack()).debug(msg2str(*msgs))
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).debug(msg2str(*msgs))
 
     @staticmethod
-    @supress_tqdm_update
     def info(*msgs):
-        Logger._get_logger(inspect.stack()).info(msg2str(*msgs))
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).info(msg2str(*msgs))
 
     @staticmethod
-    @supress_tqdm_update
     def warning(*msgs):
-        Logger._get_logger(inspect.stack()).warning(msg2str(*msgs))
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).warning(msg2str(*msgs))
 
     @staticmethod
-    @supress_tqdm_update
     def error(*msgs):
-        Logger._get_logger(inspect.stack()).error(msg2str(*msgs))
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).error(msg2str(*msgs))
 
     @staticmethod
-    @supress_tqdm_update
     def critical(*msgs):
-        Logger._get_logger(inspect.stack()).critical(msg2str(*msgs))
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).critical(msg2str(*msgs))
 
     def log_scalar(self, tag, value, step):
         return self._logger.log_scalar(tag, value, step)
