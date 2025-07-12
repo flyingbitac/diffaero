@@ -7,50 +7,26 @@ from torch.nn import functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
-from quaddif.utils.math import *
+from quaddif.dynamics.base_dynamics import BaseDynamics
+from quaddif.utils.math import EulerIntegral, rk4, axis_rotmat
 from quaddif.utils.randomizer import build_randomizer
 
-class GradientDecay(autograd.Function):
-    @staticmethod
-    def forward(ctx, state: Tensor, alpha: float, dt: float):
-        ctx.save_for_backward(torch.tensor(-alpha * dt, device=state.device).exp())
-        return state
-    
-    @staticmethod
-    def backward(ctx, grad_state: Tensor):
-        decay_factor = ctx.saved_tensors[0]
-        if ctx.needs_input_grad[0]:
-            grad_state = grad_state * decay_factor
-        return grad_state, None, None
-
-
-class PointMassModelBase:
+class PointMassModelBase(BaseDynamics):
     def __init__(self, cfg: DictConfig, device: torch.device):
+        super().__init__(cfg, device)
         self.type = "pointmass"
-        self.device = device
         self.state_dim = 9
         self.action_dim = 3
-        self.n_agents: int = cfg.n_agents
-        self.n_envs: int = cfg.n_envs
         self._state = torch.zeros(self.n_envs, self.n_agents, self.state_dim, device=device)
         self._vel_ema = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
         if self.n_agents == 1:
             self._state.squeeze_(1)
             self._vel_ema.squeeze_(1)
-        self.dt: float = cfg.dt
-        self.alpha: float = cfg.alpha
         self.align_yaw_with_target_direction: bool = cfg.align_yaw_with_target_direction
         self.align_yaw_with_vel_ema: bool = cfg.align_yaw_with_vel_ema
-        self._G = torch.tensor(cfg.g, device=device, dtype=torch.float32)
-        self._G_vec = torch.tensor([0.0, 0.0, -self._G], device=device, dtype=torch.float32)
-        if self.n_agents > 1:
-            self._G_vec.unsqueeze_(0)
     
-        # self.vel_ema_factor: float = cfg.vel_ema_factor
         self.vel_ema_factor = build_randomizer(cfg.vel_ema_factor, [self.n_envs, self.n_agents, 1], device=device)
-        # self._D = torch.tensor(cfg.D, device=device, dtype=torch.float32)
         self._D = build_randomizer(cfg.D, [self.n_envs, self.n_agents, 1], device=device)
-        # self.lmbda: float = cfg.lmbda # soft control latency
         self.lmbda = build_randomizer(cfg.lmbda, [self.n_envs, self.n_agents, 1], device=device)
         if self.n_agents == 1:
             self.vel_ema_factor.value.squeeze_(1)
@@ -75,7 +51,7 @@ class PointMassModelBase:
         return max_action
     
     def detach(self):
-        self._state = self._state.detach()
+        super().detach()
         self._vel_ema.detach_()
     
     def reset_idx(self, env_idx: Tensor) -> None:
@@ -83,20 +59,10 @@ class PointMassModelBase:
         mask[env_idx] = True
         self._vel_ema = torch.where(mask, 0., self._vel_ema)
     
-    def grad_decay(self, state: Tensor) -> Tensor:
-        if self.alpha > 0:
-            state = GradientDecay.apply(state, self.alpha, self.dt)
-        return state
-    
     @property
-    def p(self) -> Tensor: return self._state[..., 0:3].detach()
-    @property
-    def v(self) -> Tensor: return self._state[..., 3:6].detach()
-    @property
-    def a(self) -> Tensor: return self._state[..., 6:9].detach()
-    @property
+    @torch.no_grad()
     def q(self) -> Tensor:
-        orientation = self._vel_ema.detach() if self.align_yaw_with_vel_ema else self.v
+        orientation = self._vel_ema if self.align_yaw_with_vel_ema else self.v
         return point_mass_quat(self.a, orientation=orientation)
     @property
     def w(self) -> Tensor:
@@ -116,14 +82,6 @@ class PointMassModelBase:
     def _w(self) -> Tensor:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")
         return torch.zeros_like(self.p)
-    
-    def step(self, U: Tensor) -> None:
-        """Step the model with the given action U.
-
-        Args:
-            U (Tensor): The action tensor of shape (n_envs, n_agents, 3).
-        """
-        raise NotImplementedError("This method should be implemented in subclasses.")
 
 
 class ContinuousPointMassModel(PointMassModelBase):
@@ -153,15 +111,12 @@ class ContinuousPointMassModel(PointMassModelBase):
 
     def step(self, U: Tensor) -> None:
         next_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
-        next_state = self.grad_decay(next_state)
-        self._state = next_state
+        self._state = self.grad_decay(next_state)
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor.value)
 
 
 class DiscretePointMassModel(PointMassModelBase):
-    def __init__(self, cfg: DictConfig, device: torch.device):
-        super().__init__(cfg, device)
-
+    
     def step(self, U: Tensor) -> None:
         p, v, a = self._state.chunk(3, dim=-1)
         
@@ -170,8 +125,7 @@ class DiscretePointMassModel(PointMassModelBase):
         next_a = torch.lerp(a, U, control_delay_factor) - self._D.value * v
         next_v = v + self.dt * (0.5 * (a + next_a) + self._G_vec)
         next_state = torch.cat([next_p, next_v, next_a], dim=-1)
-        next_state = self.grad_decay(next_state)
-        self._state = next_state
+        self._state = self.grad_decay(next_state)
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor.value)
 
 

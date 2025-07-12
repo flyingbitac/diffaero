@@ -136,6 +136,12 @@ class BaseEnv:
     def rescale_action(self, action: Tensor) -> Tensor:
         return self.dynamics.min_action + (self.dynamics.max_action - self.dynamics.min_action) * (action + 1) / 2
 
+    def world2body(self, vec_w: Tensor) -> Tensor:
+        return self.dynamics.world2body(vec_w)
+    
+    def body2world(self, vec_b: Tensor) -> Tensor:
+        return self.dynamics.body2world(vec_b)
+
 class BaseEnvMultiAgent(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)

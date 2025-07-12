@@ -2,26 +2,25 @@ import torch
 from torch import Tensor
 from omegaconf import DictConfig
 
+from quaddif.dynamics.base_dynamics import BaseDynamics
 from quaddif.dynamics.controller import RateController
 from quaddif.utils.math import *
 from quaddif.utils.randomizer import build_randomizer
 
-class QuadrotorModel:
-    def __init__(
-        self,
-        cfg: DictConfig,
-        device: torch.device
-    ):
+class QuadrotorModel(BaseDynamics):
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        super().__init__(cfg, device)
         self.type = "quadrotor"
-        self.device = device
         self.state_dim = 13
         self.action_dim = 4
-        self.n_envs: int = cfg.n_envs
-        self.dt: float = cfg.dt
-        self.n_substeps: int = cfg.n_substeps
-        self._state = torch.zeros(self.n_envs, self.state_dim, device=device)
-        self._acc = torch.zeros(self.n_envs, 3, device=device)
+        self._state = torch.zeros(self.n_envs, self.n_agents, self.state_dim, device=device)
+        self._acc = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
+        if self.n_agents == 1:
+            self._state.squeeze_(1)
+            self._acc.squeeze_(1)
         
+        self.n_substeps: int = cfg.n_substeps
+        assert cfg.solver_type in ["euler", "rk4"]
         if cfg.solver_type == "euler":
             self.solver = EulerIntegral
         elif cfg.solver_type == "rk4":
@@ -32,9 +31,6 @@ class QuadrotorModel:
         self._m = build_randomizer(cfg.m, self.n_envs, device) # total mass
         self._arm_l = build_randomizer(cfg.arm_l, self.n_envs, device) # arm length
         self._c_tau = build_randomizer(cfg.c_tau, self.n_envs, device) # torque constant
-        
-        self._G = wrap(cfg.g)
-        self._G_vec = wrap([0.0, 0.0, self._G])
         
         # inertia
         self.J_xy = build_randomizer(cfg.J.xy, self.n_envs, device)
@@ -64,8 +60,13 @@ class QuadrotorModel:
         self._U_ub = wrap([self._T_max, self._T_max, self._T_max, self._T_max])
         
         self.controller = RateController(self._m.value, self._J, self._G, cfg.controller, self.device)
-        self.min_action = self.controller.min_action
-        self.max_action = self.controller.max_action
+    
+    @property
+    def min_action(self) -> Tensor:
+        return self.controller.min_action
+    @property
+    def max_action(self) -> Tensor:
+        return self.controller.max_action
     
     @property
     def _tau_thrust_matrix(self) -> Tensor:
@@ -104,12 +105,12 @@ class QuadrotorModel:
         return D
     
     def detach(self):
-        self._state.detach_()
+        super().detach()
         self._acc.detach_()
 
     def dynamics(self, X: torch.Tensor, U: torch.Tensor) -> torch.Tensor:
         # Unpacking state and input variables
-        p, q, v, w = X[:, :3], X[:, 3:7], X[:, 7:10], X[:, 10:13]
+        p, q, v, w = X[..., :3], X[..., 3:7], X[..., 7:10], X[..., 10:13]
         # Calculate torques and thrust
         # T1, T2, T3, T4 = U[:, 0], U[:, 1], U[:, 2], U[:, 3]
         # taux   = (T1 + T4 - T2 - T3) * self._arm_l / torch.sqrt(torch.tensor(2.0))
@@ -129,7 +130,7 @@ class QuadrotorModel:
         thrust_acc = quat_axis(q, 2) * (thrust / self._m.value).unsqueeze(-1)
         
         # overall acceleration
-        acc = thrust_acc - self._G_vec - fdrag / self._m.value.unsqueeze(-1)
+        acc = thrust_acc + self._G_vec - fdrag / self._m.value.unsqueeze(-1)
         self._acc = acc
         
         # quaternion derivative
@@ -142,25 +143,15 @@ class QuadrotorModel:
 
     def step(self, U: Tensor) -> None:
         new_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
-        q_l = torch.norm(new_state[:, 3:7], dim=1, keepdim=True).detach()
-        new_state[:, 3:7] = new_state[:, 3:7] / q_l
-        self._state = new_state
+        q_l = torch.norm(new_state[..., 3:7], dim=1, keepdim=True).detach()
+        new_state[..., 3:7] = new_state[..., 3:7] / q_l
+        self._state = self.grad_decay(new_state)
     
     def reset_idx(self, env_idx: Tensor) -> None:
         mask = torch.zeros_like(self._acc, dtype=torch.bool)
         mask[env_idx] = True
         self._acc = torch.where(mask, 0., self._acc)
     
-    @property
-    def p(self) -> Tensor: return self._state[:, 0:3].detach()
-    @property
-    def q(self) -> Tensor: return self._state[:, 3:7].detach()
-    @property
-    def v(self) -> Tensor: return self._state[:, 7:10].detach()
-    @property
-    def w(self) -> Tensor: return self._state[:, 10:13].detach()
-    @property
-    def a(self) -> Tensor: return self._acc.detach()
     @property
     def _p(self) -> Tensor: return self._state[:, 0:3]
     @property
