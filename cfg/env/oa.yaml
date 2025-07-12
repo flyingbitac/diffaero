@@ -64,5 +64,6 @@ reward_weights:
 defaults:
   - render: oa_render
   - randomizer: default_randomizer
+  - imu: default_imu
   - obstacles: outdoor
   - _self_

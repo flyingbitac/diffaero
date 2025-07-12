@@ -7,6 +7,7 @@ from tensordict import TensorDict
 
 from quaddif.dynamics import build_dynamics
 from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
+from quaddif.utils.sensor import IMU
 from quaddif.utils.randomizer import RandomizerManager, build_randomizer
 from quaddif.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
 
@@ -15,6 +16,7 @@ class BaseEnv:
         self.randomizer = RandomizerManager(cfg.randomizer)
         self.dynamics = build_dynamics(cfg.dynamics, device)
         self.dynamic_type: str = self.dynamics.type
+        self.imu = IMU(cfg.imu, dynamics=self.dynamics)
         self.action_dim = self.dynamics.action_dim
         self.n_agents: int = cfg.n_agents
         self.dt: float = cfg.dt
@@ -90,6 +92,7 @@ class BaseEnv:
         """Common step logic for single agent environments."""
         # simulation step
         self.dynamics.step(action)
+        self.imu.step()
         # termination and truncation logic
         terminated, truncated = self.terminated(), self.truncated()
         self.progress += 1

@@ -1,0 +1,18 @@
+name: default_imu
+
+enable_drift: True
+enable_noise: True
+
+imu_mounting_error_range_deg: 2.
+
+# acc_drift_std: 0.0013564659966250536
+# acc_noise_std: 0.0015690639999999998
+
+acc_drift_std: 0.13564659966250536
+acc_noise_std: 0.15690639999999998
+
+# gyro_drift_std: 1.4352700094407325e-05
+# gyro_noise_std: 0.0002443460952792061
+
+gyro_drift_std: 1.4352700094407325e-03
+gyro_noise_std: 0.02443460952792061

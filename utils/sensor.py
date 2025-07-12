@@ -7,8 +7,17 @@ import torch.nn.functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
-from quaddif.utils.math import quaternion_apply, mat_vec_mul
+from quaddif.dynamics.base_dynamics import BaseDynamics
+from quaddif.utils.math import (
+    quaternion_apply,
+    mat_vec_mul,
+    quat_rotate,
+    quat_rotate_inverse,
+    quat_mul,
+    euler_to_quaternion
+)
 from quaddif.utils.assets import ObstacleManager
+from quaddif.utils.logger import Logger
 
 @torch.jit.script
 def raydist3d_sphere(
@@ -331,3 +340,132 @@ def build_sensor(cfg: DictConfig, device: torch.device) -> Union[Camera, LiDAR, 
         "relpos": RelativePositionSensor,
     }
     return sensor_alias[cfg.name](cfg, device)
+
+
+class IMU:
+    def __init__(self, cfg: DictConfig, dynamics: BaseDynamics):
+        self.dynamics = dynamics
+        self.n_envs = dynamics.n_envs
+        self.n_agents = dynamics.n_agents
+        self.device = dynamics.device
+        factory_kwargs = {
+            "device": self.device,
+            "dtype": torch.float32,
+        }
+        self.dt = torch.tensor(dynamics.dt, **factory_kwargs)
+        self.sqrt_dt = torch.sqrt(self.dt)
+        self.mounting_range_rad = cfg.imu_mounting_error_range_deg * torch.pi / 180.
+        self.mounting_quat_xyzw = torch.zeros((self.n_envs, self.n_agents, 4), **factory_kwargs)
+        
+        self.acc_drift_std: Tensor = cfg.acc_drift_std * self.sqrt_dt
+        self.acc_noise_std: Tensor = cfg.acc_noise_std / self.sqrt_dt
+        self.acc_drift_b = torch.zeros((self.n_envs, self.n_agents, 3), **factory_kwargs)
+        self.acc_noise_b = torch.zeros((self.n_envs, self.n_agents, 3), **factory_kwargs)
+        self.vel_drift_w = torch.zeros((self.n_envs, self.n_agents, 3), **factory_kwargs)
+        self.pos_drift_w = torch.zeros((self.n_envs, self.n_agents, 3), **factory_kwargs)        
+        
+        self.gyro_drift_std: Tensor = cfg.gyro_drift_std * self.sqrt_dt
+        self.gyro_noise_std: Tensor = cfg.gyro_noise_std / self.sqrt_dt
+        self.gyro_drift_b = torch.zeros((self.n_envs, self.n_agents, 3), **factory_kwargs)
+        self.gyro_noise_b = torch.zeros((self.n_envs, self.n_agents, 3), **factory_kwargs)
+        self.pose_drift_b = torch.zeros((self.n_envs, self.n_agents, 3), **factory_kwargs)
+        
+        if self.n_agents == 1:
+            self.mounting_quat_xyzw.squeeze_(1)
+            self.acc_drift_b.squeeze_(1)
+            self.acc_noise_b.squeeze_(1)
+            self.vel_drift_w.squeeze_(1)
+            self.pos_drift_w.squeeze_(1)
+            self.gyro_drift_b.squeeze_(1)
+            self.gyro_noise_b.squeeze_(1)
+            self.pose_drift_b.squeeze_(1)
+        self.enable_drift = int(cfg.enable_drift)
+        self.enable_noise = int(cfg.enable_noise)
+    
+    def sensor2body(self, vec_s: Tensor) -> Tensor:
+        return quat_rotate(self.mounting_quat_xyzw, vec_s)
+    
+    def body2sensor(self, vec_b: Tensor) -> Tensor:
+        return quat_rotate_inverse(self.mounting_quat_xyzw, vec_b)
+    
+    def sensor2world(self, vec_s: Tensor) -> Tensor:
+        return self.dynamics.body2world(self.sensor2body(vec_s))
+
+    def world2sensor(self, vec_w: Tensor) -> Tensor:
+        return self.body2sensor(self.dynamics.world2body(vec_w))
+    
+    def step(self):
+        # Drift and noise are generated in sensor frame
+        self.gyro_drift_b += self.sensor2body(torch.randn_like(self.gyro_drift_b) * self.gyro_drift_std)
+        self.gyro_noise_b  = self.sensor2body(torch.randn_like(self.gyro_noise_b) * self.gyro_noise_std)
+        self.pose_drift_b += (
+            self.enable_drift * self.gyro_drift_b + 
+            self.enable_noise * self.gyro_noise_b
+        ) * self.dt
+
+        self.acc_drift_b += self.sensor2body(torch.randn_like( self.acc_drift_b) * self.acc_drift_std)
+        self.acc_noise_b  = self.sensor2body(torch.randn_like( self.acc_noise_b) * self.acc_noise_std)
+        self.vel_drift_w += self.dt * self.dynamics.body2world(
+            self.enable_drift * self.acc_drift_b + 
+            self.enable_noise * self.acc_noise_b
+        )
+        self.pos_drift_w += self.vel_drift_w * self.dt
+        # Logger.debug(self.pos_drift_w[0].norm(dim=0))
+    
+    def reset_idx(self, env_idx: Tensor):
+        self.mounting_quat_xyzw[env_idx] = \
+            torch.rand_like(self.mounting_quat_xyzw[env_idx]) * 2 * self.mounting_range_rad - self.mounting_range_rad
+        self.acc_drift_b[env_idx] = torch.zeros_like(self.acc_drift_b[env_idx])
+        self.acc_noise_b[env_idx] = torch.zeros_like(self.acc_noise_b[env_idx])
+        self.gyro_drift_b[env_idx] = torch.zeros_like(self.gyro_drift_b[env_idx])
+        self.gyro_noise_b[env_idx] = torch.zeros_like(self.gyro_noise_b[env_idx])
+        self.pose_drift_b[env_idx] = torch.zeros_like(self.pose_drift_b[env_idx])
+        self.vel_drift_w[env_idx] = torch.zeros_like(self.vel_drift_w[env_idx])
+        self.pos_drift_w[env_idx] = torch.zeros_like(self.pos_drift_w[env_idx])
+    
+    @property
+    def a_w(self):
+        """Acceleration measurement in world frame"""
+        return self.dynamics.body2world(self.a_b)
+    
+    @property
+    def a_b(self):
+        """Acceleration measurement in body frame"""
+        a_b_true = self.dynamics.world2body(self.dynamics.a)
+        a_b_measured = (
+            a_b_true +
+            self.enable_drift * self.acc_drift_b +
+            self.enable_noise * self.acc_noise_b
+        )
+        return a_b_measured
+
+    @property
+    def v_w(self):
+        """Velocity measurement in world frame"""
+        v_w_true = self.dynamics.v
+        v_w_measured = v_w_true + self.vel_drift_w
+        return v_w_measured
+    
+    @property
+    def v_b(self):
+        """Velocity measurement in body frame"""
+        return self.dynamics.world2body(self.v_w)
+    
+    @property
+    def p_w(self):
+        """Position measurement in world frame"""
+        p_w_true = self.dynamics.p
+        p_w_measured = p_w_true + self.pos_drift_w
+        return p_w_measured
+    
+    @property
+    def p_b(self):
+        """Position measurement in body frame"""
+        return self.dynamics.world2body(self.p_w)
+    
+    @property
+    def q(self):
+        """Quaternion measurement in world frame"""
+        q_true = self.dynamics.q
+        q_measured = quat_mul(q_true, euler_to_quaternion(*self.pose_drift_b.unbind(dim=-1)))
+        return q_measured

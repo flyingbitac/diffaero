@@ -27,7 +27,7 @@ loss_weights:
     attitude: 0.1
 
 reward_weights:
-  constant: 4.
+  constant: 1.
   pointmass:
     vel: 0.5
     jerk: 0.005
@@ -44,4 +44,5 @@ render:
 defaults:
   - render: pc_render
   - randomizer: default_randomizer
+  - imu: default_imu
   - _self_

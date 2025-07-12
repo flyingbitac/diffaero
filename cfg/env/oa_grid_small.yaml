@@ -62,5 +62,6 @@ grid:
 defaults:
   - render: oa_render
   - randomizer: default_randomizer
+  - imu: default_imu
   - obstacles: small_room
   - _self_

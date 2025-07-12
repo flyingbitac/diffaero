@@ -10,6 +10,7 @@ from omegaconf import DictConfig
 from quaddif.dynamics.base_dynamics import BaseDynamics
 from quaddif.utils.math import EulerIntegral, rk4, axis_rotmat
 from quaddif.utils.randomizer import build_randomizer
+from quaddif.utils.logger import Logger
 
 class PointMassModelBase(BaseDynamics):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -19,9 +20,11 @@ class PointMassModelBase(BaseDynamics):
         self.action_dim = 3
         self._state = torch.zeros(self.n_envs, self.n_agents, self.state_dim, device=device)
         self._vel_ema = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
+        self._acc = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
         if self.n_agents == 1:
             self._state.squeeze_(1)
             self._vel_ema.squeeze_(1)
+            self._acc.squeeze_(1)
         self.align_yaw_with_target_direction: bool = cfg.align_yaw_with_target_direction
         self.align_yaw_with_vel_ema: bool = cfg.align_yaw_with_vel_ema
     
@@ -53,17 +56,19 @@ class PointMassModelBase(BaseDynamics):
     def detach(self):
         super().detach()
         self._vel_ema.detach_()
+        self._acc.detach_()
     
     def reset_idx(self, env_idx: Tensor) -> None:
         mask = torch.zeros_like(self._vel_ema, dtype=torch.bool)
         mask[env_idx] = True
         self._vel_ema = torch.where(mask, 0., self._vel_ema)
+        self._acc = torch.where(mask, 0., self._acc)
     
     @property
     @torch.no_grad()
     def q(self) -> Tensor:
         orientation = self._vel_ema if self.align_yaw_with_vel_ema else self.v
-        return point_mass_quat(self.a, orientation=orientation)
+        return point_mass_quat(self.a_thrust, orientation=orientation)
     @property
     def w(self) -> Tensor:
         warnings.warn("Access of angular velocity in point mass model is not supported. Returning zero tensor instead.")
@@ -73,7 +78,11 @@ class PointMassModelBase(BaseDynamics):
     @property
     def _v(self) -> Tensor: return self._state[..., 3:6]
     @property
-    def _a(self) -> Tensor: return self._state[..., 6:9]
+    def _a(self) -> Tensor: return self._acc
+    @property
+    def _a_thrust(self) -> Tensor: return self._state[..., 6:9]
+    @property
+    def a_thrust(self) -> Tensor: return self._a_thrust.detach()
     @property
     def _q(self) -> Tensor:
         warnings.warn("Direct access of quaternion with gradient in point mass model is not supported. Returning detached version instead.")
@@ -82,6 +91,11 @@ class PointMassModelBase(BaseDynamics):
     def _w(self) -> Tensor:
         warnings.warn("Access of angular velocity with gradient in point mass model is not supported. Returning zero tensor instead.")
         return torch.zeros_like(self.p)
+    
+    def update_state(self, next_state: Tensor) -> None:
+        self._state = self.grad_decay(next_state)
+        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor.value)
+        self._acc = self._a_thrust + self._G_vec - self._D.value * self._v
 
 
 class ContinuousPointMassModel(PointMassModelBase):
@@ -96,13 +110,13 @@ class ContinuousPointMassModel(PointMassModelBase):
     
     def dynamics(self, X: Tensor, U: Tensor) -> Tensor:
         # Unpacking state and input variables
-        p, v, a = X[..., :3], X[..., 3:6], X[..., 6:9]
+        p, v, a_thrust = X[..., :3], X[..., 3:6], X[..., 6:9]
         
         fdrag = -self._D.value * v
-        v_dot = a + self._G_vec + fdrag
+        v_dot = a_thrust + self._G_vec + fdrag
         
         control_delay_factor = (1 - torch.exp(-self.lmbda.value*self.dt)) / self.dt
-        a_dot = control_delay_factor * (U - a)
+        a_dot = control_delay_factor * (U - a_thrust)
         
         # State derivatives
         X_dot = torch.concat([v, v_dot, a_dot], dim=-1)
@@ -111,22 +125,19 @@ class ContinuousPointMassModel(PointMassModelBase):
 
     def step(self, U: Tensor) -> None:
         next_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
-        self._state = self.grad_decay(next_state)
-        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor.value)
-
+        self.update_state(next_state)
 
 class DiscretePointMassModel(PointMassModelBase):
     
     def step(self, U: Tensor) -> None:
-        p, v, a = self._state.chunk(3, dim=-1)
+        p, v, a_thrust = self._state.chunk(3, dim=-1)
         
-        next_p = p + self.dt * (v + 0.5 * (a + self._G_vec) * self.dt)
+        next_p = p + self.dt * (v + 0.5 * (a_thrust + self._G_vec) * self.dt)
         control_delay_factor = 1 - torch.exp(-self.lmbda.value*self.dt)
-        next_a = torch.lerp(a, U, control_delay_factor) - self._D.value * v
-        next_v = v + self.dt * (0.5 * (a + next_a) + self._G_vec)
+        next_a = torch.lerp(a_thrust, U, control_delay_factor) - self._D.value * v
+        next_v = v + self.dt * (0.5 * (a_thrust + next_a) + self._G_vec)
         next_state = torch.cat([next_p, next_v, next_a], dim=-1)
-        self._state = self.grad_decay(next_state)
-        self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor.value)
+        self.update_state(next_state)
 
 
 @torch.jit.script
