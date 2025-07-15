@@ -37,8 +37,9 @@ class PolicyExporter(nn.Module):
         self.named_inputs = [
             ("state", torch.rand(1, state_dim)),
             ("orientation", torch.rand(1, 3)),
+            ("Rz", torch.rand(1, 3, 3)),
             ("min_action", torch.rand(1, 3)),
-            ("max_action", torch.rand(1, 3))
+            ("max_action", torch.rand(1, 3)),
         ]
         if perception_dim is not None:
             if isinstance(self.actor, (MLP, RNN)):
@@ -54,42 +55,37 @@ class PolicyExporter(nn.Module):
             self.named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
             self.output_names.append("hidden_out")
     
-    def post_process(self, raw_action, min_action, max_action, orientation):
-        # type: (Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
+    def post_process(self, raw_action, min_action, max_action, orientation, Rz):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
         raw_action = raw_action.tanh() if self.is_stochastic else raw_action
         action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
-        x, y, _ = orientation.unbind(dim=-1)
-        cos, sin = x / (x**2 + y**2).sqrt(), y / (x**2 + y**2).sqrt()
-        zero, one = torch.zeros_like(cos), torch.ones_like(cos)
-        Rz = torch.stack((cos, -sin, zero, sin, cos, zero, zero, zero, one), dim=-1).reshape(orientation.shape[:-1] + (3, 3))
-        # Rz = axis_rotmat("Z", torch.atan2(orientation[:, 1], orientation[:, 0]))
         acc_cmd = torch.matmul(Rz, action.unsqueeze(-1)).squeeze(-1)
         quat_xyzw = point_mass_quat(acc_cmd, orientation)
         acc_norm = acc_cmd.norm(p=2, dim=-1)
         return acc_cmd, quat_xyzw, acc_norm
     
-    def forward_MLP(self, state, orientation, min_action, max_action):
-        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
+    def forward_MLP(self, state, orientation, Rz, min_action, max_action):
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
         raw_action = self.actor.forward_export(state)
-        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
+        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
         return action, quat_xyzw, acc_norm
     
-    def forward_CNN(self, state, perception, orientation, min_action, max_action):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
+    def forward_CNN(self, state, perception, orientation, Rz, min_action, max_action):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
         raw_action = self.actor.forward_export(state=state, perception=perception)
-        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
+        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
         return action, quat_xyzw, acc_norm
     
-    def forward_RNN(self, state, orientation, min_action, max_action, hidden):
-        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+    def forward_RNN(self, state, orientation, Rz, min_action, max_action, hidden):
+        # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
         raw_action, hidden = self.actor.forward_export(state, hidden=hidden)
-        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
+        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
         return action, quat_xyzw, acc_norm, hidden
     
-    def forward_RCNN(self, state, perception, orientation, min_action, max_action, hidden):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+    def forward_RCNN(self, state, perception, orientation, Rz, min_action, max_action, hidden):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
         raw_action, hidden = self.actor.forward_export(state=state, perception=perception, hidden=hidden)
-        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation=orientation)
+        action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
         return action, quat_xyzw, acc_norm, hidden
     
     def export(
