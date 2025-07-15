@@ -1,0 +1,29 @@
+name: sim2real_position_control
+
+dynamics: ${dynamics}
+dt: 0.0333
+square_size: 1.5
+switch_time: 5.
+length:
+  default: 10
+  enabled: False
+  min: 10
+  max: 10
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+max_time: 200000
+wait_before_truncate: 500.
+max_target_vel: 10.
+min_target_vel: 5.
+last_action_in_obs: False
+
+loss_weights:
+reward_weights:
+
+render:
+  env_spacing: 0.5
+
+defaults:
+  - render: pc_render
+  - randomizer: default_randomizer
+  - _self_

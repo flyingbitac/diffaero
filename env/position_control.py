@@ -184,6 +184,57 @@ class PositionControl(BaseEnv):
         return out_of_bound
 
 
+class Sim2RealPositionControl(PositionControl):
+    def __init__(self, cfg: DictConfig, device: torch.device):
+        super(Sim2RealPositionControl, self).__init__(cfg, device)
+        self.square_size: float = cfg.square_size
+        self.square_positions = torch.tensor([
+            [ self.square_size, -self.square_size, 0],
+            [-self.square_size, -self.square_size, 0],
+            [-self.square_size,  self.square_size, 0],
+            [ self.square_size,  self.square_size, 0]
+        ], device=self.device, dtype=torch.float32)
+        self.switch_time: float = cfg.switch_time
+    
+    def update_target(self):
+        t = self.progress.float() * self.dt
+        target_index = torch.floor(t / self.switch_time).long() % self.square_positions.shape[0]
+        self.target_pos = self.square_positions[target_index]
+    
+    @timeit
+    def step(self, action, need_obs_before_reset=True):
+        # type: (Tensor, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
+        self.update_target()
+        terminated, truncated, success, avg_vel = super()._step(action)
+        reset = terminated | truncated
+        reset_indices = reset.nonzero().view(-1)
+        extra = {
+            "truncated": truncated,
+            "l": self.progress.clone(),
+            "reset": reset,
+            "reset_indices": reset_indices,
+            "success": success,
+            "arrive_time": self.arrive_time.clone(),
+            "stats_raw": {
+                "success_rate": success[reset],
+                "survive_rate": truncated[reset],
+                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "avg_vel": avg_vel[success],
+                "arrive_time": self.arrive_time.clone()[success]
+            },
+        }
+        if need_obs_before_reset:
+            extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+            extra["next_state_before_reset"] = self.get_state(with_grad=True)
+        if reset_indices.numel() > 0:
+            self.reset_idx(reset_indices)
+        return self.get_observations(), (None, None), terminated, extra
+
+    def terminated(self) -> Tensor:
+        p_range = torch.full_like(self.L.value.unsqueeze(-1), fill_value=self.square_size*2)
+        out_of_bound = torch.any(self.p < -p_range, dim=-1) | torch.any(self.p > p_range, dim=-1)
+        return out_of_bound
+
 class MultiAgentPositionControl(BaseEnvMultiAgent):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super(MultiAgentPositionControl, self).__init__(cfg, device)
