@@ -17,7 +17,7 @@ from quaddif.utils.sensor import build_sensor
 from quaddif.utils.render import PositionControlRenderer
 from quaddif.utils.assets import ObstacleManager
 from quaddif.utils.runner import timeit
-from quaddif.utils.math import mat_vec_mul
+from quaddif.utils.math import mvp
 
 @torch.jit.script
 def get_gate_rotmat_w2g(gate_yaw: Tensor) -> Tensor:
@@ -85,8 +85,8 @@ class Racing(BaseEnv):
         gate_yaw = self.gate_yaw[self.target_gates]
         rotmat_w2g = get_gate_rotmat_w2g(gate_yaw)
         
-        pos_g = mat_vec_mul(rotmat_w2g, gate_pos - self._p) # 3
-        vel_g = mat_vec_mul(rotmat_w2g, self._v) # 3
+        pos_g = mvp(rotmat_w2g, gate_pos - self._p) # 3
+        vel_g = mvp(rotmat_w2g, self._v) # 3
         
         rotmat_b2w = T.quaternion_to_matrix(self.q.roll(1, dims=-1))
         rotmat_b2g = torch.matmul(rotmat_w2g, rotmat_b2w)
@@ -122,8 +122,8 @@ class Racing(BaseEnv):
             gate_yaw = self.gate_yaw[(self.target_gates + i) % self.n_gates]
             rotmat_w2g = get_gate_rotmat_w2g(gate_yaw)
             
-            pos_g = mat_vec_mul(rotmat_w2g, gate_pos - self._p)
-            vel_g = mat_vec_mul(rotmat_w2g, self._v)
+            pos_g = mvp(rotmat_w2g, gate_pos - self._p)
+            vel_g = mvp(rotmat_w2g, self._v)
             
             rotmat_b2w = T.quaternion_to_matrix(self.q.roll(1, dims=-1))
             rotmat_b2g = torch.matmul(rotmat_w2g, rotmat_b2w)
@@ -221,8 +221,8 @@ class Racing(BaseEnv):
 
         # Gate passing/collision
         rotmat = get_gate_rotmat_w2g(gate_yaw)
-        prev_rel_pos = mat_vec_mul(rotmat, prev_pos - gate_pos)
-        curr_rel_pos = mat_vec_mul(rotmat, curr_pos - gate_pos)
+        prev_rel_pos = mvp(rotmat, prev_pos - gate_pos)
+        curr_rel_pos = mvp(rotmat, curr_pos - gate_pos)
         prev_behind = prev_rel_pos[:, 0] < 0
         curr_infront = curr_rel_pos[:, 0] > 0
         pass_through = prev_behind & curr_infront

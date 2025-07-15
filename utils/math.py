@@ -212,9 +212,9 @@ def quaternion_apply(quat_wxyz: Tensor, point: Tensor) -> Tensor:
     return out[..., 1:]
 
 @torch.jit.script
-def mat_vec_mul(mat: Tensor, vec: Tensor) -> Tensor:
+def mvp(mat: Tensor, vec: Tensor) -> Tensor:
     """
-    Multiply a matrix with a vector.
+    Matrix-vector product.
     
     Args:
         mat: A tensor of shape (..., n, m).

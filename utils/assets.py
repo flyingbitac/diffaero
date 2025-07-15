@@ -7,7 +7,7 @@ from torch import Tensor
 from torch.nn import functional as F
 from pytorch3d import transforms as T
 
-from quaddif.utils.math import mat_vec_mul, rand_range
+from quaddif.utils.math import mvp, rand_range
 
 @torch.jit.script
 def are_points_inside_spheres(
@@ -29,7 +29,7 @@ def are_points_inside_cubes(
 ) -> Tensor:
     if rpy_cubes is not None:
         rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2)  # [n_envs, n_cubes, 3, 3]
-        points_cube_frame = mat_vec_mul(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
+        points_cube_frame = mvp(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
         box_min, box_max = -lwh_cubes / 2, lwh_cubes / 2  # [n_envs, n_cubes, 3]
     else:
         box_min, box_max = p_cubes - lwh_cubes / 2, p_cubes + lwh_cubes / 2  # [n_envs, n_cubes, 3]]
@@ -62,10 +62,10 @@ def nearest_distance_to_cubes(
 ) -> Tuple[Tensor, Tensor]:
     if rpy_cubes is not None:
         rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2)  # [n_envs, n_cubes, 3, 3]
-        points_cube_frame = mat_vec_mul(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
+        points_cube_frame = mvp(rotmat.unsqueeze(1), (points.unsqueeze(2) - p_cubes.unsqueeze(1)))  # [n_envs, n_points, n_cubes, 3]
         box_min, box_max = -lwh_cubes / 2, lwh_cubes / 2  # [n_envs, n_cubes, 3]
         nearest_points_cube_frame = torch.clamp(points_cube_frame, box_min.unsqueeze(1), box_max.unsqueeze(1))  # [n_envs, n_points, n_cubes, 3]
-        nearest_points = mat_vec_mul(rotmat.unsqueeze(1).transpose(-1, -2), nearest_points_cube_frame) + p_cubes.unsqueeze(1)  # [n_envs, n_points, n_cubes, 3]
+        nearest_points = mvp(rotmat.unsqueeze(1).transpose(-1, -2), nearest_points_cube_frame) + p_cubes.unsqueeze(1)  # [n_envs, n_points, n_cubes, 3]
     else:
         box_min, box_max = p_cubes - lwh_cubes / 2, p_cubes + lwh_cubes / 2  # [n_envs, n_cubes, 3]
         nearest_points = torch.clamp(points.unsqueeze(2), box_min.unsqueeze(1), box_max.unsqueeze(1)) # [n_envs, n_points, n_cubes, 3]

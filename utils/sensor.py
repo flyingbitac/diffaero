@@ -10,7 +10,7 @@ from omegaconf import DictConfig
 from quaddif.dynamics.base_dynamics import BaseDynamics
 from quaddif.utils.math import (
     quaternion_apply,
-    mat_vec_mul,
+    mvp,
     quat_rotate,
     quat_rotate_inverse,
     quat_mul,
@@ -78,8 +78,8 @@ def raydist3d_cube(
     """
     if not torch.all(rpy_cubes == 0):
         rotmat = T.euler_angles_to_matrix(rpy_cubes, convention='XYZ').transpose(-1, -2) # [m_cubes, 3, 3]
-        start = mat_vec_mul(rotmat.unsqueeze(1), (start-p_cubes.unsqueeze(1))) # [m_cubes, n_rays, 3]
-        direction = mat_vec_mul(rotmat.unsqueeze(1), direction) # [m_cubes, n_rays, 3]
+        start = mvp(rotmat.unsqueeze(1), (start-p_cubes.unsqueeze(1))) # [m_cubes, n_rays, 3]
+        direction = mvp(rotmat.unsqueeze(1), direction) # [m_cubes, n_rays, 3]
         box_min = -lwh_cubes / 2. # [m_cubes, 3]
         box_max =  lwh_cubes / 2. # [m_cubes, 3]
     else: # yay, no rotation!
