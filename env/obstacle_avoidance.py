@@ -11,7 +11,7 @@ import open3d as o3d
 import numpy as np
 
 from quaddif.env.base_env import BaseEnv
-from quaddif.dynamics.pointmass import PointMassModelBase
+from quaddif.dynamics import PointMassModelBase, QuadrotorModel
 from quaddif.utils.sensor import build_sensor, RayCastingSensorBase
 from quaddif.utils.render import ObstacleAvoidanceRenderer
 from quaddif.utils.assets import ObstacleManager
@@ -33,7 +33,13 @@ class ObstacleAvoidance(BaseEnv):
         H, W = self.sensor.H, self.sensor.W
         
         self.last_action_in_obs: bool = cfg.last_action_in_obs
-        self.obs_dim = (10 + self.action_dim * int(self.last_action_in_obs), (H, W))
+        if isinstance(self.dynamics, PointMassModelBase):
+            state_dim = 9
+        elif isinstance(self.dynamics, QuadrotorModel):
+            state_dim = 10
+        if self.last_action_in_obs:
+            state_dim += self.action_dim
+        self.obs_dim = (state_dim, (H, W))
         self.state_dim = 13 + H * W + self.n_obstacles * 3
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         
@@ -67,15 +73,14 @@ class ObstacleAvoidance(BaseEnv):
 
     @timeit
     def get_observations(self, with_grad=False):
-        target_relpos = self.target_pos - self.imu.p_w
-        target_dist = target_relpos.norm(dim=-1) # [n_envs]
-        target_vel = target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
-        
         if self.dynamic_type == "pointmass":
-            # obs = torch.cat([target_vel, self.q, self._v], dim=-1)
-            obs = torch.cat([target_vel, self.imu.q, self.imu.v_w], dim=-1)
+            obs = torch.cat([
+                self.dynamics.world2local(self.target_vel),  # target velocity in local frame
+                self.dynamics.uz,
+                self.dynamics.world2local(self._v),  # velocity in local frame
+            ], dim=-1)
         else:
-            obs = torch.cat([target_vel, self._q, self._v], dim=-1)
+            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         if self.last_action_in_obs:
             obs = torch.cat([obs, self.last_action], dim=-1)
         obs = TensorDict({
@@ -170,7 +175,7 @@ class ObstacleAvoidance(BaseEnv):
             vel_diff = torch.norm(vel_diff * torch.tensor([[1, 1, 3]], device=self.device), dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             
-            jerk_loss = F.mse_loss(self.dynamics.a_thrust, action, reduction="none").sum(dim=-1)
+            jerk_loss = F.mse_loss(self.dynamics.a_thrust, self.dynamics.local2world(action), reduction="none").sum(dim=-1)
             
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +

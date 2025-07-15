@@ -38,21 +38,14 @@ class PositionControl(BaseEnv):
     
     @timeit
     def get_observations(self, with_grad=False):
-        target_relpos = self.target_pos - self.imu.p_w
-        target_dist = target_relpos.norm(dim=-1) # [n_envs]
-        target_vel = target_relpos / torch.max(target_dist / self.max_vel, torch.ones_like(target_dist)).unsqueeze(-1)
-        
         if self.dynamic_type == "pointmass":
-            # obs = torch.cat([target_vel, self.q, self._v], dim=-1)
-            # obs = torch.cat([target_vel, self.imu.q, self.imu.v_w], dim=-1)
-            # Rz = self.dynamics.Rz
             obs = torch.cat([
                 self.dynamics.world2local(self.target_vel),  # target velocity in local frame
                 self.dynamics.uz,
                 self.dynamics.world2local(self._v),  # velocity in local frame
             ], dim=-1)
         else:
-            obs = torch.cat([target_vel, self._q, self._v], dim=-1)
+            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
         if self.last_action_in_obs:
             obs = torch.cat([obs, self.last_action], dim=-1)
         return obs if with_grad else obs.detach()
