@@ -137,7 +137,9 @@ class DiscretePointMassModel(PointMassModelBase):
         
         next_p = p + self.dt * (v + 0.5 * (a_thrust + self._G_vec) * self.dt)
         control_delay_factor = 1 - torch.exp(-self.lmbda.value*self.dt)
-        next_a = torch.lerp(a_thrust, U, control_delay_factor) - self._D.value * v
+        a_thrust_cmd_local = U
+        a_thrust_cmd = self.local2world(a_thrust_cmd_local)
+        next_a = torch.lerp(a_thrust, a_thrust_cmd, control_delay_factor) - self._D.value * v
         next_v = v + self.dt * (0.5 * (a_thrust + next_a) + self._G_vec)
         next_state = torch.cat([next_p, next_v, next_a], dim=-1)
         self.update_state(next_state)
