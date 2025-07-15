@@ -19,6 +19,8 @@ class BaseEnv(ABC):
         self.dynamic_type: str = self.dynamics.type
         self.imu = IMU(cfg.imu, dynamics=self.dynamics)
         self.action_dim = self.dynamics.action_dim
+        self.obs_dim: int
+        self.state_dim: int
         self.n_agents: int = cfg.n_agents
         self.dt: float = cfg.dt
         self.n_envs: int = cfg.n_envs
@@ -44,6 +46,10 @@ class BaseEnv(ABC):
         self.min_target_vel: float = cfg.min_target_vel
         self.max_target_vel: float = cfg.max_target_vel
         self.renderer: Optional[Union[PositionControlRenderer, ObstacleAvoidanceRenderer]]
+    
+    def check_dims(self):
+        assert self.get_observations().size(-1) == self.obs_dim, f"Observation dimension mismatch: {self.get_observations().size(-1)} != {self.obs_dim}"
+        assert self.get_state().size(-1) == self.state_dim, f"State dimension mismatch: {self.get_state().size(-1)} != {self.state_dim}"
     
     @abstractmethod
     def get_observations(self, with_grad=False):

@@ -2,15 +2,13 @@ import warnings
 
 import torch
 from torch import Tensor
-import torch.autograd as autograd
 from torch.nn import functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
 from quaddif.dynamics.base_dynamics import BaseDynamics
-from quaddif.utils.math import EulerIntegral, rk4, axis_rotmat
+from quaddif.utils.math import EulerIntegral, rk4, axis_rotmat, mvp
 from quaddif.utils.randomizer import build_randomizer
-from quaddif.utils.logger import Logger
 
 class PointMassModelBase(BaseDynamics):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -112,11 +110,15 @@ class ContinuousPointMassModel(PointMassModelBase):
         # Unpacking state and input variables
         p, v, a_thrust = X[..., :3], X[..., 3:6], X[..., 6:9]
         
+        a_thrust_cmd_local = U
+        # a_thrust_cmd = self.local2world(a_thrust_cmd_local)
+        a_thrust_cmd = mvp(self.Rz_temp, a_thrust_cmd_local)
+
         fdrag = -self._D.value * v
         v_dot = a_thrust + self._G_vec + fdrag
         
         control_delay_factor = (1 - torch.exp(-self.lmbda.value*self.dt)) / self.dt
-        a_dot = control_delay_factor * (U - a_thrust)
+        a_dot = control_delay_factor * (a_thrust_cmd - a_thrust)
         
         # State derivatives
         X_dot = torch.concat([v, v_dot, a_dot], dim=-1)
@@ -124,6 +126,7 @@ class ContinuousPointMassModel(PointMassModelBase):
         return X_dot
 
     def step(self, U: Tensor) -> None:
+        self.Rz_temp = self.Rz
         next_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
         self.update_state(next_state)
 

@@ -7,17 +7,24 @@ from torch import Tensor
 from pytorch3d import transforms as T
 
 from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
-from quaddif.dynamics.pointmass import PointMassModelBase
+from quaddif.dynamics import PointMassModelBase, QuadrotorModel
+from quaddif.utils.math import mvp
 from quaddif.utils.render import PositionControlRenderer
 from quaddif.utils.runner import timeit
 
 class PositionControl(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
-        super(PositionControl, self).__init__(cfg, device)
+        super().__init__(cfg, device)
         self.last_action_in_obs: bool = cfg.last_action_in_obs
-        self.obs_dim = 10 + self.action_dim * int(self.last_action_in_obs)
+        if isinstance(self.dynamics, PointMassModelBase):
+            self.obs_dim = 9
+        elif isinstance(self.dynamics, QuadrotorModel):
+            self.obs_dim = 10
+        if self.last_action_in_obs:
+            self.obs_dim += self.action_dim
         self.state_dim = 13
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
+        self.check_dims()
     
     @timeit
     def get_state(self, with_grad=False):
@@ -37,7 +44,13 @@ class PositionControl(BaseEnv):
         
         if self.dynamic_type == "pointmass":
             # obs = torch.cat([target_vel, self.q, self._v], dim=-1)
-            obs = torch.cat([target_vel, self.imu.q, self.imu.v_w], dim=-1)
+            # obs = torch.cat([target_vel, self.imu.q, self.imu.v_w], dim=-1)
+            # Rz = self.dynamics.Rz
+            obs = torch.cat([
+                self.dynamics.world2local(self.target_vel),  # target velocity in local frame
+                self.dynamics.uz,
+                self.dynamics.world2local(self._v),  # velocity in local frame
+            ], dim=-1)
         else:
             obs = torch.cat([target_vel, self._q, self._v], dim=-1)
         if self.last_action_in_obs:
@@ -98,7 +111,7 @@ class PositionControl(BaseEnv):
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
-            jerk_loss = F.mse_loss(self.dynamics.a_thrust, action, reduction="none").sum(dim=-1)
+            jerk_loss = F.mse_loss(self.dynamics.a_thrust, self.dynamics.local2world(action), reduction="none").sum(dim=-1)
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
                 self.loss_weights.pointmass.jerk * jerk_loss +
@@ -176,8 +189,6 @@ class PositionControl(BaseEnv):
         self.last_action[env_idx] = 0.
         self.max_vel[env_idx] = torch.rand(
             n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
-
-    
     def terminated(self) -> Tensor:
         p_range = self.L.value.unsqueeze(-1)
         out_of_bound = torch.any(self.p < -p_range, dim=-1) | torch.any(self.p > p_range, dim=-1)

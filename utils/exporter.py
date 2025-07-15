@@ -9,6 +9,7 @@ import torch.nn as nn
 from quaddif.network.agents import StochasticActor, DeterministicActor
 from quaddif.network.networks import MLP, CNN, RNN, RCNN
 from quaddif.dynamics.pointmass import point_mass_quat
+from quaddif.utils.math import axis_rotmat
 from quaddif.utils.logger import Logger
 
 class PolicyExporter(nn.Module):
@@ -57,9 +58,15 @@ class PolicyExporter(nn.Module):
         # type: (Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
         raw_action = raw_action.tanh() if self.is_stochastic else raw_action
         action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
-        quat_xyzw = point_mass_quat(action, orientation)
-        acc_norm = action.norm(p=2, dim=-1)
-        return action, quat_xyzw, acc_norm
+        x, y, _ = orientation.unbind(dim=-1)
+        cos, sin = x / (x**2 + y**2).sqrt(), y / (x**2 + y**2).sqrt()
+        zero, one = torch.zeros_like(cos), torch.ones_like(cos)
+        Rz = torch.stack((cos, -sin, zero, sin, cos, zero, zero, zero, one), dim=-1).reshape(orientation.shape[:-1] + (3, 3))
+        # Rz = axis_rotmat("Z", torch.atan2(orientation[:, 1], orientation[:, 0]))
+        acc_cmd = torch.matmul(Rz, action.unsqueeze(-1)).squeeze(-1)
+        quat_xyzw = point_mass_quat(acc_cmd, orientation)
+        acc_norm = acc_cmd.norm(p=2, dim=-1)
+        return acc_cmd, quat_xyzw, acc_norm
     
     def forward_MLP(self, state, orientation, min_action, max_action):
         # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
