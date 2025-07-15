@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from typing import Tuple, Dict, Union, Optional
 
 from omegaconf import DictConfig
@@ -11,7 +12,7 @@ from quaddif.utils.sensor import IMU
 from quaddif.utils.randomizer import RandomizerManager, build_randomizer
 from quaddif.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
 
-class BaseEnv:
+class BaseEnv(ABC):
     def __init__(self, cfg: DictConfig, device: torch.device):
         self.randomizer = RandomizerManager(cfg.randomizer)
         self.dynamics = build_dynamics(cfg.dynamics, device)
@@ -44,9 +45,11 @@ class BaseEnv:
         self.max_target_vel: float = cfg.max_target_vel
         self.renderer: Optional[Union[PositionControlRenderer, ObstacleAvoidanceRenderer]]
     
+    @abstractmethod
     def get_observations(self, with_grad=False):
         raise NotImplementedError
     
+    @abstractmethod
     def get_state(self, with_grad=False):
         raise NotImplementedError
     
@@ -115,14 +118,17 @@ class BaseEnv:
         self.last_action.copy_(action.detach())
         return terminated, truncated, success, avg_vel
     
+    @abstractmethod
     def states_for_render(self):
         # type: () -> Dict[str, Tensor]
         raise NotImplementedError
     
+    @abstractmethod
     def loss_and_reward(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
         raise NotImplementedError
 
+    @abstractmethod
     def reset_idx(self, env_idx: Tensor):
         raise NotImplementedError
     
@@ -130,6 +136,7 @@ class BaseEnv:
         self.reset_idx(torch.arange(self.n_envs, device=self.device))
         return self.get_observations()
     
+    @abstractmethod
     def terminated(self) -> Tensor:
         raise NotImplementedError
     
@@ -145,7 +152,7 @@ class BaseEnv:
     def body2world(self, vec_b: Tensor) -> Tensor:
         return self.dynamics.body2world(vec_b)
 
-class BaseEnvMultiAgent(BaseEnv):
+class BaseEnvMultiAgent(BaseEnv, ABC):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
         assert self.n_agents > 1
@@ -194,9 +201,11 @@ class BaseEnvMultiAgent(BaseEnv):
         min_distances = distances.min(dim=-1).values
         return min_distances
     
+    @abstractmethod
     def get_observations(self, with_grad=False):
         raise NotImplementedError
     
+    @abstractmethod
     def get_global_state(self, with_grad=False):
         raise NotImplementedError
     
