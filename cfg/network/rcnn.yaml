@@ -1,6 +1,6 @@
 name: rcnn
 
-hidden_dim: []
+hidden_dim: [256, 128]
 
-rnn_hidden_dim: 256
+rnn_hidden_dim: 512
 rnn_n_layers: 1
