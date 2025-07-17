@@ -18,7 +18,7 @@ last_action_in_obs: False
 loss_weights:
   pointmass:
     vel: 1.
-    jerk: 0.005
+    jerk: 0.01
     pos: 0.1
   quadrotor:
     vel: 1.
@@ -30,7 +30,7 @@ reward_weights:
   constant: 1.
   pointmass:
     vel: 0.5
-    jerk: 0.005
+    jerk: 0.01
     pos: 0.1
   quadrotor:
     vel: 1.
