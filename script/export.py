@@ -37,8 +37,7 @@ def main(cfg: DictConfig):
     assert any(dict(cfg.export).values())
     agent.export(
         path=ckpt_path,
-        export_jit=cfg.export.jit,
-        export_onnx=cfg.export.onnx,
+        export_cfg=cfg.export,
         verbose=True
     )
 

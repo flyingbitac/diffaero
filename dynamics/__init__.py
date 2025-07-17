@@ -7,8 +7,8 @@ from .pointmass import ContinuousPointMassModel, DiscretePointMassModel, PointMa
 from .quadrotor import QuadrotorModel
 
 DYNAMICS_ALIAS = {
-    "pointmass_c": ContinuousPointMassModel,
-    "pointmass_d": DiscretePointMassModel,
+    "countinuous_pointmass": ContinuousPointMassModel,
+    "discrete_pointmass": DiscretePointMassModel,
     "quadrotor": QuadrotorModel
 }
 

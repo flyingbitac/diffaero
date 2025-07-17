@@ -96,11 +96,10 @@ class APG:
     def export(
         self,
         path: str,
-        export_jit,
-        export_onnx,
-        verbose=False,
+        export_cfg: DictConfig,
+        verbose: bool = False,
     ):
-        PolicyExporter(self.actor).export(path, export_jit, export_onnx, verbose)
+        PolicyExporter(self.actor).export(path, export_cfg, verbose)
 
 
 class APG_stochastic(APG):

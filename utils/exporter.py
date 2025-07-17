@@ -5,6 +5,7 @@ import os
 import torch
 from torch import Tensor
 import torch.nn as nn
+from omegaconf import DictConfig
 
 from quaddif.network.agents import StochasticActor, DeterministicActor
 from quaddif.network.networks import MLP, CNN, RNN, RCNN
@@ -35,27 +36,30 @@ class PolicyExporter(nn.Module):
         state_dim = self.input_dim[0] if isinstance(self.input_dim, tuple) else self.input_dim
         perception_dim = self.input_dim[1] if isinstance(self.input_dim, tuple) else None
         self.named_inputs = [
-            ("state", torch.rand(1, state_dim)),
-            ("orientation", torch.rand(1, 3)),
-            ("Rz", torch.rand(1, 3, 3)),
-            ("min_action", torch.rand(1, 3)),
-            ("max_action", torch.rand(1, 3)),
+            ("state", torch.zeros(1, state_dim)),
+            ("orientation", torch.zeros(1, 3)),
+            ("Rz", torch.zeros(1, 3, 3)),
+            ("min_action", torch.zeros(1, 3)),
+            ("max_action", torch.zeros(1, 3)),
         ]
         if perception_dim is not None:
             if isinstance(self.actor, (MLP, RNN)):
-                self.named_inputs[0] = ("state", (torch.rand(1, state_dim), torch.rand(1, perception_dim[0], perception_dim[1])))
+                self.named_inputs[0] = ("state", (torch.zeros(1, state_dim), torch.zeros(1, perception_dim[0], perception_dim[1])))
             elif isinstance(self.actor, (CNN, RCNN)):
-                self.named_inputs.insert(1, ("perception", torch.rand(1, perception_dim[0], perception_dim[1])))
+                self.named_inputs.insert(1, ("perception", torch.zeros(1, perception_dim[0], perception_dim[1])))
         self.output_names = [
             "action",
             "quat_xyzw_cmd",
             "acc_norm"
         ]
         if self.is_recurrent:
-            self.named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
+            self.named_inputs.append(("hidden_in", torch.zeros(self.hidden_shape)))
             self.output_names.append("hidden_out")
+        
+        self.obs_frame: str
+        self.action_frame: str
     
-    def post_process(self, raw_action, min_action, max_action, orientation, Rz):
+    def post_process_local(self, raw_action, min_action, max_action, orientation, Rz):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
         raw_action = raw_action.tanh() if self.is_stochastic else raw_action
         action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
@@ -63,6 +67,23 @@ class PolicyExporter(nn.Module):
         quat_xyzw = point_mass_quat(acc_cmd, orientation)
         acc_norm = acc_cmd.norm(p=2, dim=-1)
         return acc_cmd, quat_xyzw, acc_norm
+    
+    def post_process_world(self, raw_action, min_action, max_action, orientation, Rz):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
+        raw_action = raw_action.tanh() if self.is_stochastic else raw_action
+        action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
+        quat_xyzw = point_mass_quat(action, orientation)
+        acc_norm = action.norm(p=2, dim=-1)
+        return action, quat_xyzw, acc_norm
+
+    def post_process(self, raw_action, min_action, max_action, orientation, Rz):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
+        if self.action_frame == "local":
+            return self.post_process_local(raw_action, min_action, max_action, orientation, Rz)
+        elif self.action_frame == "world":
+            return self.post_process_world(raw_action, min_action, max_action, orientation, Rz)
+        else:
+            raise ValueError(f"Unknown action frame: {self.action_frame}")
     
     def forward_MLP(self, state, orientation, Rz, min_action, max_action):
         # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
@@ -76,28 +97,29 @@ class PolicyExporter(nn.Module):
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
         return action, quat_xyzw, acc_norm
     
-    def forward_RNN(self, state, orientation, Rz, min_action, max_action, hidden):
+    def forward_RNN(self, state, orientation, Rz, min_action, max_action, hidden_in):
         # type: (Union[Tensor, Tuple[Tensor, Tensor]], Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
-        raw_action, hidden = self.actor.forward_export(state, hidden=hidden)
+        raw_action, hidden_out = self.actor.forward_export(state, hidden=hidden_in)
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
-        return action, quat_xyzw, acc_norm, hidden
+        return action, quat_xyzw, acc_norm, hidden_out
     
-    def forward_RCNN(self, state, perception, orientation, Rz, min_action, max_action, hidden):
+    def forward_RCNN(self, state, perception, orientation, Rz, min_action, max_action, hidden_in):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
-        raw_action, hidden = self.actor.forward_export(state=state, perception=perception, hidden=hidden)
+        raw_action, hidden_out = self.actor.forward_export(state=state, perception=perception, hidden=hidden_in)
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
-        return action, quat_xyzw, acc_norm, hidden
+        return action, quat_xyzw, acc_norm, hidden_out
     
     def export(
         self,
         path: str,
-        export_jit,
-        export_onnx,
+        export_cfg: DictConfig,
         verbose=False,
     ):
-        if export_jit:
+        self.obs_frame = export_cfg.obs_frame
+        self.action_frame = export_cfg.action_frame
+        if export_cfg.jit:
             self.export_jit(path, verbose)
-        if export_onnx:
+        if export_cfg.onnx:
             self.export_onnx(path)
     
     @torch.no_grad()

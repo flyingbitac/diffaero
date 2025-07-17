@@ -73,14 +73,21 @@ class ObstacleAvoidance(BaseEnv):
 
     @timeit
     def get_observations(self, with_grad=False):
+        if self.obs_frame == "local":
+            target_vel = self.dynamics.world2local(self.target_vel)
+            _v = self.dynamics.world2local(self._v)
+        elif self.obs_frame == "world":
+            target_vel = self.target_vel
+            _v = self._v
+        
         if self.dynamic_type == "pointmass":
             obs = torch.cat([
-                self.dynamics.world2local(self.target_vel),  # target velocity in local frame
-                self.dynamics.uz,
-                self.dynamics.world2local(self._v),  # velocity in local frame
+                target_vel,
+                self.dynamics.uz if self.obs_frame == "local" else self.q,
+                _v,
             ], dim=-1)
         else:
-            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+            obs = torch.cat([target_vel, self._q, _v], dim=-1)
         if self.last_action_in_obs:
             obs = torch.cat([obs, self.last_action], dim=-1)
         obs = TensorDict({
@@ -386,14 +393,14 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         return occupancy_map
     
     @timeit
-    def get_visibility_map(self, quat_xyzw):
+    def get_visibility_map(self):
         # get visiability map
         N, H, W = self.sensor_tensor.shape
         start = self.p.unsqueeze(1).expand(-1, H*W, -1)
         contact_point = self.sensor.get_contact_point( # [n_envs, n_rays, 3]
             depth=self.sensor_tensor,
             start=start,
-            quat_xyzw=quat_xyzw)
+            quat_xyzw=self.q)
         
         x_min, x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
         y_min, y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
@@ -481,12 +488,24 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     
     @timeit
     def get_observations(self, with_grad=False):
-        quat_xyzw = self.q
+        if self.obs_frame == "local":
+            target_vel = self.dynamics.world2local(self.target_vel)
+            _v = self.dynamics.world2local(self._v)
+        elif self.obs_frame == "world":
+            target_vel = self.target_vel
+            _v = self._v
+        
         if self.dynamic_type == "pointmass":
-            obs = torch.cat([self.target_vel, quat_xyzw, self._v], dim=-1)
+            obs = torch.cat([
+                target_vel,
+                self.dynamics.uz if self.obs_frame == "local" else self.q,
+                _v,
+            ], dim=-1)
         else:
-            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
-        grid, visible_map = self.get_occupancy_map(), self.get_visibility_map(quat_xyzw)
+            obs = torch.cat([target_vel, self._q, _v], dim=-1)
+        if self.last_action_in_obs:
+            obs = torch.cat([obs, self.last_action], dim=-1)
+        grid, visible_map = self.get_occupancy_map(), self.get_visibility_map()
         if self.renderer is not None:
             grid_tobe_visualized = visible_map
             self.visualize_grid(grid_tobe_visualized[self.renderer.gui_states["tracking_env_idx"]])

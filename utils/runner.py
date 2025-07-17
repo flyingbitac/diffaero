@@ -174,7 +174,7 @@ class TrainRunner:
             
             if success_rate >= self.max_success_rate:
                 self.max_success_rate = success_rate
-                if i % self.cfg.save_freq == 0:
+                if i > 0 and i % self.cfg.save_freq == 0:
                     self.agent.save(os.path.join(self.logger.logdir, "best"))
     
     def close(self) -> float:
@@ -193,8 +193,7 @@ class TrainRunner:
         if any(dict(self.cfg.export).values()):
             self.agent.export(
                 path=ckpt_path,
-                export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx,
+                export_cfg=self.cfg.export,
                 verbose=True
             )
         if self.env.renderer is not None:

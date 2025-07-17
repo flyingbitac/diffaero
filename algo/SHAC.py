@@ -235,11 +235,10 @@ class SHAC:
     def export(
         self,
         path: str,
-        export_jit,
-        export_onnx,
-        verbose=False,
+        export_cfg: DictConfig,
+        verbose: bool = False,
     ):
-        PolicyExporter(self.agent.actor).export(path, export_jit, export_onnx, verbose)
+        PolicyExporter(self.agent.actor).export(path, export_cfg, verbose)
 
 
 class SHAC_PPO(SHAC):
@@ -555,11 +554,10 @@ class SHAC_Q:
     def export(
         self,
         path: str,
-        export_jit,
-        export_onnx,
-        verbose=False,
+        export_cfg: DictConfig,
+        verbose: bool = False,
     ):
-        PolicyExporter(self.agent.actor).export(path, export_jit, export_onnx, verbose)
+        PolicyExporter(self.agent.actor).export(path, export_cfg, verbose)
 
 
 class SHA2C(SHAC):

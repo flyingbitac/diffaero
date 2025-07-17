@@ -3,6 +3,7 @@ name: quadrotor
 n_envs: ${n_envs}
 n_agents: ${n_agents}
 dt: ${env.dt}
+action_frame: "body"
 alpha: 1.0              # gradient decay factor
 m:                      # total mass
   default: 1.0

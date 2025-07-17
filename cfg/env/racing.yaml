@@ -9,6 +9,7 @@ length:
   max: 10
 n_envs: ${n_envs}
 n_agents: ${n_agents}
+obs_frame: "world" # "world" or "local"
 max_time: 40
 wait_before_truncate: 40
 max_target_vel: 10.

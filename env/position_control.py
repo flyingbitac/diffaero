@@ -16,9 +16,12 @@ class PositionControl(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
         self.last_action_in_obs: bool = cfg.last_action_in_obs
-        if isinstance(self.dynamics, PointMassModelBase):
-            self.obs_dim = 9
-        elif isinstance(self.dynamics, QuadrotorModel):
+        if self.dynamic_type == "pointmass":
+            if self.obs_frame == "local":
+                self.obs_dim = 9
+            elif self.obs_frame == "world":
+                self.obs_dim = 10
+        elif self.dynamic_type == "quadrotor":
             self.obs_dim = 10
         if self.last_action_in_obs:
             self.obs_dim += self.action_dim
@@ -38,14 +41,21 @@ class PositionControl(BaseEnv):
     
     @timeit
     def get_observations(self, with_grad=False):
+        if self.obs_frame == "local":
+            target_vel = self.dynamics.world2local(self.target_vel)
+            _v = self.dynamics.world2local(self._v)
+        elif self.obs_frame == "world":
+            target_vel = self.target_vel
+            _v = self._v
+        
         if self.dynamic_type == "pointmass":
             obs = torch.cat([
-                self.dynamics.world2local(self.target_vel),  # target velocity in local frame
-                self.dynamics.uz,
-                self.dynamics.world2local(self._v),  # velocity in local frame
+                target_vel,
+                self.dynamics.uz if self.obs_frame == "local" else self.q,
+                _v,
             ], dim=-1)
         else:
-            obs = torch.cat([self.target_vel, self._q, self._v], dim=-1)
+            obs = torch.cat([target_vel, self._q, _v], dim=-1)
         if self.last_action_in_obs:
             obs = torch.cat([obs, self.last_action], dim=-1)
         return obs if with_grad else obs.detach()

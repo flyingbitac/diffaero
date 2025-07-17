@@ -14,6 +14,8 @@ class PointMassModelBase(BaseDynamics):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
         self.type = "pointmass"
+        self.action_frame: str = cfg.action_frame
+        assert self.action_frame in ["world", "local"], f"Invalid action frame: {self.action_frame}. Must be 'world' or 'local'."
         self.state_dim = 9
         self.action_dim = 3
         self._state = torch.zeros(self.n_envs, self.n_agents, self.state_dim, device=device)
@@ -95,6 +97,49 @@ class PointMassModelBase(BaseDynamics):
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor.value)
         self._acc = self._a_thrust + self._G_vec - self._D.value * self._v
 
+@torch.jit.script
+def continuous_point_mass_dynamics_local(
+    X: Tensor,
+    U: Tensor,
+    dt: float,
+    Rz: Tensor,
+    G_vec: Tensor,
+    D: Tensor,
+    lmbda: Tensor,
+):
+    """Dynamics function for continuous point mass model in local frame."""
+    p, v, a_thrust = X[..., :3], X[..., 3:6], X[..., 6:9]
+    p_dot = v
+    fdrag = -D * v
+    v_dot = a_thrust + G_vec + fdrag
+    control_delay_factor = (1 - torch.exp(-lmbda * dt)) / dt
+    a_thrust_cmd_local = U
+    a_thrust_cmd = torch.matmul(Rz, a_thrust_cmd_local.unsqueeze(-1)).squeeze(-1)
+    a_dot = control_delay_factor * (a_thrust_cmd - a_thrust)
+    
+    X_dot = torch.concat([p_dot, v_dot, a_dot], dim=-1)
+    return X_dot
+
+@torch.jit.script
+def continuous_point_mass_dynamics_world(
+    X: Tensor,
+    U: Tensor,
+    dt: float,
+    G_vec: Tensor,
+    D: Tensor,
+    lmbda: Tensor,
+):
+    """Dynamics function for continuous point mass model in local frame."""
+    p, v, a_thrust = X[..., :3], X[..., 3:6], X[..., 6:9]
+    p_dot = v
+    fdrag = -D * v
+    v_dot = a_thrust + G_vec + fdrag
+    control_delay_factor = (1 - torch.exp(-lmbda * dt)) / dt
+    a_thrust_cmd = U
+    a_dot = control_delay_factor * (a_thrust_cmd - a_thrust)
+    
+    X_dot = torch.concat([p_dot, v_dot, a_dot], dim=-1)
+    return X_dot
 
 class ContinuousPointMassModel(PointMassModelBase):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -105,43 +150,79 @@ class ContinuousPointMassModel(PointMassModelBase):
             self.solver = EulerIntegral
         elif cfg.solver_type == "rk4":
             self.solver = rk4
+        self.Rz_temp: Tensor
     
     def dynamics(self, X: Tensor, U: Tensor) -> Tensor:
-        # Unpacking state and input variables
-        p, v, a_thrust = X[..., :3], X[..., 3:6], X[..., 6:9]
-        
-        a_thrust_cmd_local = U
-        # a_thrust_cmd = self.local2world(a_thrust_cmd_local)
-        a_thrust_cmd = mvp(self.Rz_temp, a_thrust_cmd_local)
-
-        fdrag = -self._D.value * v
-        v_dot = a_thrust + self._G_vec + fdrag
-        
-        control_delay_factor = (1 - torch.exp(-self.lmbda.value*self.dt)) / self.dt
-        a_dot = control_delay_factor * (a_thrust_cmd - a_thrust)
-        
-        # State derivatives
-        X_dot = torch.concat([v, v_dot, a_dot], dim=-1)
-        
+        if self.action_frame == "local":
+            X_dot = continuous_point_mass_dynamics_local(
+                X, U, self.dt, self.Rz_temp, self._G_vec, self._D.value, self.lmbda.value
+            )
+        elif self.action_frame == "world":
+            X_dot = continuous_point_mass_dynamics_world(
+                X, U, self.dt, self._G_vec, self._D.value, self.lmbda.value
+            )
         return X_dot
 
     def step(self, U: Tensor) -> None:
-        self.Rz_temp = self.Rz
+        if self.action_frame == "local":
+            self.Rz_temp = self.Rz.clone()
         next_state = self.solver(self.dynamics, self._state, U, dt=self.dt, M=self.n_substeps)
         self.update_state(next_state)
 
-class DiscretePointMassModel(PointMassModelBase):
+
+@torch.jit.script
+def discrete_point_mass_dynamics_local(
+    X: Tensor,
+    U: Tensor,
+    dt: float,
+    Rz: Tensor,
+    G_vec: Tensor,
+    D: Tensor,
+    lmbda: Tensor,
+):
+    """Dynamics function for discrete point mass model in local frame."""
+    p, v, a_thrust = X[..., :3], X[..., 3:6], X[..., 6:9]
+    next_p = p + dt * (v + 0.5 * (a_thrust + G_vec) * dt)
+    control_delay_factor = 1 - torch.exp(-lmbda*dt)
+    a_thrust_cmd_local = U
+    a_thrust_cmd = mvp(Rz, a_thrust_cmd_local)
+    next_a = torch.lerp(a_thrust, a_thrust_cmd, control_delay_factor) - D * v
+    next_v = v + dt * (0.5 * (a_thrust + next_a) + G_vec)
     
+    next_state = torch.cat([next_p, next_v, next_a], dim=-1)
+    return next_state
+
+@torch.jit.script
+def discrete_point_mass_dynamics_world(
+    X: Tensor,
+    U: Tensor,
+    dt: float,
+    G_vec: Tensor,
+    D: Tensor,
+    lmbda: Tensor,
+):
+    """Dynamics function for discrete point mass model in world frame."""
+    p, v, a_thrust = X[..., :3], X[..., 3:6], X[..., 6:9]
+    next_p = p + dt * (v + 0.5 * (a_thrust + G_vec) * dt)
+    control_delay_factor = 1 - torch.exp(-lmbda*dt)
+    a_thrust_cmd = U
+    next_a = torch.lerp(a_thrust, a_thrust_cmd, control_delay_factor) - D * v
+    next_v = v + dt * (0.5 * (a_thrust + next_a) + G_vec)
+    
+    next_state = torch.cat([next_p, next_v, next_a], dim=-1)
+    return next_state
+
+class DiscretePointMassModel(PointMassModelBase):
+
     def step(self, U: Tensor) -> None:
-        p, v, a_thrust = self._state.chunk(3, dim=-1)
-        
-        next_p = p + self.dt * (v + 0.5 * (a_thrust + self._G_vec) * self.dt)
-        control_delay_factor = 1 - torch.exp(-self.lmbda.value*self.dt)
-        a_thrust_cmd_local = U
-        a_thrust_cmd = self.local2world(a_thrust_cmd_local)
-        next_a = torch.lerp(a_thrust, a_thrust_cmd, control_delay_factor) - self._D.value * v
-        next_v = v + self.dt * (0.5 * (a_thrust + next_a) + self._G_vec)
-        next_state = torch.cat([next_p, next_v, next_a], dim=-1)
+        if self.action_frame == "local":
+            next_state = discrete_point_mass_dynamics_local(
+                self._state, U, self.dt, self.Rz, self._G_vec, self._D.value, self.lmbda.value
+            )
+        elif self.action_frame == "world":
+            next_state = discrete_point_mass_dynamics_world(
+                self._state, U, self.dt, self._G_vec, self._D.value, self.lmbda.value
+            )
         self.update_state(next_state)
 
 

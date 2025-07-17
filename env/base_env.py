@@ -20,6 +20,7 @@ class BaseEnv(ABC):
         self.imu = IMU(cfg.imu, dynamics=self.dynamics)
         self.action_dim = self.dynamics.action_dim
         self.obs_dim: int
+        self.obs_frame: str = cfg.obs_frame
         self.state_dim: int
         self.n_agents: int = cfg.n_agents
         self.dt: float = cfg.dt
@@ -48,6 +49,7 @@ class BaseEnv(ABC):
         self.renderer: Optional[Union[PositionControlRenderer, ObstacleAvoidanceRenderer]]
     
     def check_dims(self):
+        assert self.obs_frame in ["body", "local", "world"], f"Invalid observation frame: {self.obs_frame}. Must be one of ['body', 'local', 'world']."
         assert self.get_observations().size(-1) == self.obs_dim, f"Observation dimension mismatch: {self.get_observations().size(-1)} != {self.obs_dim}"
         assert self.get_state().size(-1) == self.state_dim, f"State dimension mismatch: {self.get_state().size(-1)} != {self.state_dim}"
     

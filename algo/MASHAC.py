@@ -239,8 +239,7 @@ class MASHAC:
     def export(
         self,
         path: str,
-        export_jit,
-        export_onnx,
-        verbose=False,
+        export_cfg: DictConfig,
+        verbose: bool = False,
     ):
-        PolicyExporter(self.agent.actor).export(path, export_jit, export_onnx, verbose)
+        PolicyExporter(self.agent.actor).export(path, export_cfg, verbose)

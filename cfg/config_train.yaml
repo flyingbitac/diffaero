@@ -1,7 +1,7 @@
 defaults:
   - algo: apg_sto
   - env: pc
-  - dynamics: pointmass_c # [pointmass_c, pointmass_d, quadrotor]
+  - dynamics: pmc # [pmc, pmd, quad]
   - network: mlp # [mlp, cnn]
   - sensor: camera # [camera, lidar, relpos]
   - logger: tensorboard # [tensorboard, wandb]
@@ -31,6 +31,8 @@ record_video: False
 runname: ""
 checkpoint:
 export:
+  obs_frame: ${env.obs_frame}
+  action_frame: ${dynamics.action_frame}
   jit: True
   onnx: True
 

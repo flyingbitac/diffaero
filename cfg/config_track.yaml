@@ -1,7 +1,7 @@
 defaults:
   - algo: track
   - env: pc
-  - dynamics: pointmass_c # [pointmass_c, pointmass_d, quadrotor]
+  - dynamics: pmc # [pmc, pmd, quad]
   - network: mlp # [mlp, cnn]
   - sensor: camera # [camera, lidar, relpos]
   - logger: tensorboard # [tensorboard, wandb]
