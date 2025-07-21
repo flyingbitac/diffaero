@@ -379,7 +379,7 @@ class Racing(BaseEnv):
             "pos": pos,
             "vel": vel,
             "quat_xyzw": quat_xyzw,
-            "env_spacing": self.L.value,
+            "env_spacing": torch.ones_like(self.L.value),
             "target_pos": target_pos,
         }
         return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}

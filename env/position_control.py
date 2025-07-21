@@ -103,7 +103,7 @@ class PositionControl(BaseEnv):
             "vel": vel,
             "quat_xyzw": quat_xyzw,
             "target_pos": target_pos,
-            "env_spacing": self.L.value,
+            "env_spacing": torch.ones_like(self.L.value),
         }
         return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
     
