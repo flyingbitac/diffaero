@@ -24,6 +24,7 @@ ground_plane: True
 loss_weights:
   pointmass:
     vel: 0.5
+    vel_zdiff_factor: 3.
     oa: 4.
     jerk: 0.005
     pos: 5.
