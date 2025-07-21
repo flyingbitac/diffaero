@@ -367,6 +367,9 @@ class Racing(BaseEnv):
         out_of_bounds |= self.p[:, 2] > 7                               # height of the grid
         return out_of_bounds | super().truncated()
     
+    def terminated(self):
+        return super().terminated()
+    
     def states_for_render(self) -> Dict[str, Tensor]:
         pos = self.p.unsqueeze(1) if self.n_agents == 1 else self.p
         vel = self.v.unsqueeze(1) if self.n_agents == 1 else self.v
