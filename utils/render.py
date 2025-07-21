@@ -6,6 +6,7 @@ from torch import Tensor
 from pytorch3d import transforms as T
 import taichi as ti
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 from quaddif.utils.assets import ObstacleManager
 from quaddif.utils.math import quaternion_to_euler, axis_rotmat
@@ -258,7 +259,7 @@ class BaseRenderer:
         env_bound = max(5, self.env_origin.max().item())
         self.gui_camera.position(-1.5*env_bound, 0.5*env_bound, -1.8*env_bound)  # x, y, z
         self.gui_camera.lookat(0, -0.1*env_bound, 0)
-        self.gui_camera.up(0, 1, 0) 
+        self.gui_camera.up(0, 1, 0)
         # self.gui_camera.z_far(200)
         self.gui_camera.projection_mode(ti.ui.ProjectionMode.Perspective)
         self.gui_canvas = self.gui_window.get_canvas()
@@ -569,7 +570,8 @@ class BaseRenderer:
             self._set_camera_state(self.video_camera, video_camera_state, fov=self.video_fov)
             self.video_scene.set_camera(self.video_camera)
             self.video_canvas.scene(self.video_scene)
-            buffer: np.ndarray = (self.video_window.get_image_buffer_as_numpy() * 255).astype(np.uint8)
+            with tqdm.external_write_mode():
+                buffer: np.ndarray = (self.video_window.get_image_buffer_as_numpy() * 255).astype(np.uint8)
             self.video_frame[i] = np.flip(buffer[..., :3].transpose(1, 0, 2), axis=0)
         return self.video_frame
 
@@ -659,30 +661,32 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.sphere_n_triangles = 4 * self.sphere_n_segments * (self.sphere_n_segments - 1)
         
         n_cubes = self.obstacle_manager.n_cubes
-        self.cube_mesh_dict = {
-            "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_cubes *  8)),
-            "indices":                  ti.field(   ti.i32, shape=(self.n_envs * n_cubes * 36)),
-            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_cubes *  8))
-        }
-        self.cube_mesh_dict_one_env = {
-            "vertices":          ti.Vector.field(3, ti.f32, shape=(n_cubes *  8, )),
-            "indices":                  ti.field(   ti.i32, shape=(n_cubes * 36, )),
-            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(n_cubes *  8, ))
-        }
-        self.cube_vertices_tensor = torch.empty(self.n_envs, n_cubes, 8, 3, device=self.device)
+        if n_cubes > 0:
+            self.cube_mesh_dict = {
+                "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_cubes *  8)),
+                "indices":                  ti.field(   ti.i32, shape=(self.n_envs * n_cubes * 36)),
+                "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_cubes *  8))
+            }
+            self.cube_mesh_dict_one_env = {
+                "vertices":          ti.Vector.field(3, ti.f32, shape=(n_cubes *  8, )),
+                "indices":                  ti.field(   ti.i32, shape=(n_cubes * 36, )),
+                "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(n_cubes *  8, ))
+            }
+            self.cube_vertices_tensor = torch.empty(self.n_envs, n_cubes, 8, 3, device=self.device)
         
         n_spheres = self.obstacle_manager.n_spheres
-        self.sphere_mesh_dict = {
-            "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres * self.sphere_n_vertices)),
-            "indices":                  ti.field(   ti.i32, shape=(self.n_envs * n_spheres * self.sphere_n_triangles * 3)),
-            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres * self.sphere_n_vertices))
-        }
-        self.sphere_mesh_dict_one_env = {
-            "vertices":          ti.Vector.field(3, ti.f32, shape=(n_spheres * self.sphere_n_vertices,)),
-            "indices":                  ti.field(   ti.i32, shape=(n_spheres * self.sphere_n_triangles * 3,)),
-            "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(n_spheres * self.sphere_n_vertices,))
-        }
-        self.sphere_vertices_tensor = torch.empty(self.n_envs, n_spheres, self.sphere_n_vertices, 3, device=self.device)
+        if n_spheres > 0:
+            self.sphere_mesh_dict = {
+                "vertices":          ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres * self.sphere_n_vertices)),
+                "indices":                  ti.field(   ti.i32, shape=(self.n_envs * n_spheres * self.sphere_n_triangles * 3)),
+                "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(self.n_envs * n_spheres * self.sphere_n_vertices))
+            }
+            self.sphere_mesh_dict_one_env = {
+                "vertices":          ti.Vector.field(3, ti.f32, shape=(n_spheres * self.sphere_n_vertices,)),
+                "indices":                  ti.field(   ti.i32, shape=(n_spheres * self.sphere_n_triangles * 3,)),
+                "per_vertex_color":  ti.Vector.field(3, ti.f32, shape=(n_spheres * self.sphere_n_vertices,))
+            }
+            self.sphere_vertices_tensor = torch.empty(self.n_envs, n_spheres, self.sphere_n_vertices, 3, device=self.device)
         
         self._init_obstacles()
         
@@ -696,35 +700,37 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         self.nearest_points_field_one_env = ti.Vector.field(3, ti.f32, shape=(self.obstacle_manager.n_obstacles))
     
     def _init_obstacles(self):
-        # initialize meshes of the cubes
-        lwh = self.obstacle_manager.lwh_cubes[:self.n_envs]
-        xyz = torch.zeros_like(lwh)
-        vertices_tensor, indices_tensor, color_tensor = add_box(
-            xyz=xyz,
-            lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
-            rpy=self.obstacle_manager.rpy_cubes[:self.n_envs],
-            color=torch.tensor([[self.cube_color]], device=self.device).expand_as(lwh)
-        )
-        self.cube_vertices_tensor.copy_(vertices_tensor)
-        self.cube_mesh_dict["indices"].from_torch(indices_tensor.flatten())
-        self.cube_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
-        self.cube_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
-        self.cube_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
+        if self.obstacle_manager.n_cubes > 0:
+            # initialize meshes of the cubes
+            lwh = self.obstacle_manager.lwh_cubes[:self.n_envs]
+            xyz = torch.zeros_like(lwh)
+            vertices_tensor, indices_tensor, color_tensor = add_box(
+                xyz=xyz,
+                lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
+                rpy=self.obstacle_manager.rpy_cubes[:self.n_envs],
+                color=torch.tensor([[self.cube_color]], device=self.device).expand_as(lwh)
+            )
+            self.cube_vertices_tensor.copy_(vertices_tensor)
+            self.cube_mesh_dict["indices"].from_torch(indices_tensor.flatten())
+            self.cube_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
+            self.cube_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
+            self.cube_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
         
-        # initialize meshes of the spheres
-        xyz = torch.zeros_like(self.obstacle_manager.p_spheres[:self.n_envs])
-        vertices_tensor, indices_tensor, color_tensor = add_sphere(
-            xyz=xyz,
-            radius=self.obstacle_manager.r_spheres[:self.n_envs],
-            lat_segments=self.sphere_n_segments,
-            lon_segments=self.sphere_n_segments * 2,
-            color=torch.tensor([[self.sphere_color]], device=self.device).expand_as(xyz)
-        )
-        self.sphere_vertices_tensor.copy_(vertices_tensor)
-        self.sphere_mesh_dict["indices"].from_torch(indices_tensor.flatten())
-        self.sphere_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
-        self.sphere_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
-        self.sphere_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
+        if self.obstacle_manager.n_spheres > 0:
+            # initialize meshes of the spheres
+            xyz = torch.zeros_like(self.obstacle_manager.p_spheres[:self.n_envs])
+            vertices_tensor, indices_tensor, color_tensor = add_sphere(
+                xyz=xyz,
+                radius=self.obstacle_manager.r_spheres[:self.n_envs],
+                lat_segments=self.sphere_n_segments,
+                lon_segments=self.sphere_n_segments * 2,
+                color=torch.tensor([[self.sphere_color]], device=self.device).expand_as(xyz)
+            )
+            self.sphere_vertices_tensor.copy_(vertices_tensor)
+            self.sphere_mesh_dict["indices"].from_torch(indices_tensor.flatten())
+            self.sphere_mesh_dict["per_vertex_color"].from_torch(color_tensor.flatten(end_dim=-2))
+            self.sphere_mesh_dict_one_env["indices"].from_torch(indices_tensor[0].flatten())
+            self.sphere_mesh_dict_one_env["per_vertex_color"].from_torch(color_tensor[0].flatten(end_dim=-2))
     
     def _update_state(self, states_for_rendering: Dict[str, Tensor]):
         super()._update_state(states_for_rendering)
@@ -735,9 +741,10 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             nearest_points_tensor = nearest_points[:self.n_envs] + self.env_origin.unsqueeze(-2) # [n_envs, n_obstacles, 3]
             self.nearest_points_field.from_torch(torch2ti(nearest_points_tensor.flatten(end_dim=-2)))
             self.nearest_points_field_one_env.from_torch(torch2ti(nearest_points_tensor[self.gui_states["tracking_env_idx"]].flatten(end_dim=-2)))
-
-    def _update_obstacles(self):
+    
+    def _update_cubes(self):
         # update the pose of the cubes
+        idx = self.gui_states["tracking_env_idx"]
         cube_vertices_tensor, cube_indices_tensor, cube_color_tensor = add_box(
             xyz=torch.zeros(self.n_envs, self.obstacle_manager.n_cubes, 3, device=self.device),
             lwh=self.obstacle_manager.lwh_cubes[:self.n_envs],
@@ -746,6 +753,18 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         )
         self.cube_vertices_tensor.copy_(cube_vertices_tensor)
         
+        cube_vertices_tensor = (
+            self.cube_vertices_tensor + 
+            self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
+            self.env_origin.unsqueeze(-2).unsqueeze(-2))
+
+        if self.enable_rendering:
+            self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
+        self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[idx].flatten(end_dim=-2)))
+    
+    def _update_spheres(self):
+        # update the pose of the spheres
+        idx = self.gui_states["tracking_env_idx"]
         sphere_vertices_tensor, sphere_indices_tensor, sphere_color_tensor = add_sphere(
             xyz=torch.zeros_like(self.obstacle_manager.p_spheres[:self.n_envs]),
             radius=self.obstacle_manager.r_spheres[:self.n_envs],
@@ -755,11 +774,6 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         )
         self.sphere_vertices_tensor.copy_(sphere_vertices_tensor)
         
-        idx = self.gui_states["tracking_env_idx"]
-        cube_vertices_tensor = (
-            self.cube_vertices_tensor + 
-            self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
-            self.env_origin.unsqueeze(-2).unsqueeze(-2))
         sphere_vertices_tensor = (
             self.sphere_vertices_tensor +
             self.obstacle_manager.p_spheres[:self.n_envs].unsqueeze(-2) + 
@@ -767,24 +781,31 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         )
         
         if self.enable_rendering:
-            self.cube_mesh_dict["vertices"].from_torch(torch2ti(cube_vertices_tensor.flatten(end_dim=-2)))
             self.sphere_mesh_dict["vertices"].from_torch(torch2ti(sphere_vertices_tensor.flatten(end_dim=-2)))
-        
-        self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[idx].flatten(end_dim=-2)))
         self.sphere_mesh_dict_one_env["vertices"].from_torch(torch2ti(sphere_vertices_tensor[idx].flatten(end_dim=-2)))
+
+    def _update_obstacles(self):
+        if self.obstacle_manager.n_cubes > 0:
+            self._update_cubes()
+        if self.obstacle_manager.n_spheres > 0:
+            self._update_spheres()
     
     def _render_obstacles(self):
         if self.gui_states["tracking_view"]:
-            self.gui_scene.mesh(**self.cube_mesh_dict_one_env)
-            self.gui_scene.mesh(**self.sphere_mesh_dict_one_env)
+            if self.obstacle_manager.n_cubes > 0:
+                self.gui_scene.mesh(**self.cube_mesh_dict_one_env)
+            if self.obstacle_manager.n_spheres > 0:
+                self.gui_scene.mesh(**self.sphere_mesh_dict_one_env)
             self.gui_scene.particles(
                 centers=self.nearest_points_field_one_env,
                 radius=0.1,
                 color=(0.2, 0.8, 0.2),
             )
         else:
-            self.gui_scene.mesh(**self.cube_mesh_dict)
-            self.gui_scene.mesh(**self.sphere_mesh_dict)
+            if self.obstacle_manager.n_cubes > 0:
+                self.gui_scene.mesh(**self.cube_mesh_dict)
+            if self.obstacle_manager.n_spheres > 0:
+                self.gui_scene.mesh(**self.sphere_mesh_dict)
             self.gui_scene.particles(
                 centers=self.nearest_points_field,
                 radius=0.1,
@@ -795,19 +816,21 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         assert self.record_video
         unbind = lambda xyz: tuple(map(lambda x: x.item(), torch2ti(xyz).unbind(dim=-1)))
         for i in range(self.n_envs):
-            cube_vertices_tensor = (
-                self.cube_vertices_tensor + 
-                self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
-                self.env_origin.unsqueeze(-2).unsqueeze(-2))
-            self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[i].flatten(end_dim=-2)))
-            self.video_scene.mesh(**self.cube_mesh_dict_one_env)
+            if self.obstacle_manager.n_cubes > 0:
+                cube_vertices_tensor = (
+                    self.cube_vertices_tensor + 
+                    self.obstacle_manager.p_cubes[:self.n_envs].unsqueeze(-2) + 
+                    self.env_origin.unsqueeze(-2).unsqueeze(-2))
+                self.cube_mesh_dict_one_env["vertices"].from_torch(torch2ti(cube_vertices_tensor[i].flatten(end_dim=-2)))
+                self.video_scene.mesh(**self.cube_mesh_dict_one_env)
             
-            sphere_vertices_tensor = (
-                self.sphere_vertices_tensor + 
-                self.obstacle_manager.p_spheres[:self.n_envs].unsqueeze(-2) + 
-                self.env_origin.unsqueeze(-2).unsqueeze(-2))
-            self.sphere_mesh_dict_one_env["vertices"].from_torch(torch2ti(sphere_vertices_tensor[i].flatten(end_dim=-2)))
-            self.video_scene.mesh(**self.sphere_mesh_dict_one_env)
+            if self.obstacle_manager.n_spheres > 0:
+                sphere_vertices_tensor = (
+                    self.sphere_vertices_tensor + 
+                    self.obstacle_manager.p_spheres[:self.n_envs].unsqueeze(-2) + 
+                    self.env_origin.unsqueeze(-2).unsqueeze(-2))
+                self.sphere_mesh_dict_one_env["vertices"].from_torch(torch2ti(sphere_vertices_tensor[i].flatten(end_dim=-2)))
+                self.video_scene.mesh(**self.sphere_mesh_dict_one_env)
             
             self.video_scene.mesh(**self.ground_plane_mesh_dict)
             self.video_scene.point_light(pos=(0, 50, 0), color=(1., 1., 1.))
@@ -821,7 +844,8 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self._set_camera_state(self.video_camera, video_camera_state, fov=self.video_fov)
             self.video_scene.set_camera(self.video_camera)
             self.video_canvas.scene(self.video_scene)
-            buffer: np.ndarray = (self.video_window.get_image_buffer_as_numpy() * 255).astype(np.uint8)
+            with tqdm.external_write_mode():
+                buffer: np.ndarray = (self.video_window.get_image_buffer_as_numpy() * 255).astype(np.uint8)
             self.video_frame[i] = np.flip(buffer[..., :3].transpose(1, 0, 2), axis=0)
         return self.video_frame
     

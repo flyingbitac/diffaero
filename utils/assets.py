@@ -114,10 +114,17 @@ class ObstacleManager:
     
     def nearest_distance_to_obstacles(self, points: Tensor) -> Tuple[Tensor, Tensor]: # [n_envs, n_points, n_obstacle(, 3)]
         rpy_cubes = self.rpy_cubes if self.randomize_cube_pose else None
-        nearest_dist_spheres, nearest_points_spheres = nearest_distance_to_spheres(points, self.p_spheres, self.r_spheres)    # [n_envs, n_points, n_spheres]
-        nearest_dist_cubes, nearest_points_cubes = nearest_distance_to_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes) # [n_envs, n_points, n_cubes]
-        nearest_dist = torch.cat([nearest_dist_spheres, nearest_dist_cubes], dim=-1)       # [n_envs, n_points, n_obstacles]
-        nearest_points = torch.cat([nearest_points_spheres, nearest_points_cubes], dim=-2) # [n_envs, n_points, n_obstacles, 3]
+        nearest_dist_list, nearest_points_list = [], []
+        if self.n_spheres > 0:
+            nearest_dist_spheres, nearest_points_spheres = nearest_distance_to_spheres(points, self.p_spheres, self.r_spheres)    # [n_envs, n_points, n_spheres]
+            nearest_dist_list.append(nearest_dist_spheres)
+            nearest_points_list.append(nearest_points_spheres)  # [n_envs, n_points, n_spheres, 3]
+        if self.n_cubes > 0:
+            nearest_dist_cubes, nearest_points_cubes = nearest_distance_to_cubes(points, self.p_cubes, self.lwh_cubes, rpy_cubes) # [n_envs, n_points, n_cubes]
+            nearest_dist_list.append(nearest_dist_cubes)
+            nearest_points_list.append(nearest_points_cubes)  # [n_envs, n_points, n_cubes, 3]
+        nearest_dist = torch.cat(nearest_dist_list, dim=-1)  # [n_envs, n_points, n_obstacles]
+        nearest_points = torch.cat(nearest_points_list, dim=-2)  # [n_envs, n_points, n_obstacles, 3]
         return nearest_dist, nearest_points
 
     def randomize_obstacles_sizes(
@@ -126,22 +133,25 @@ class ObstacleManager:
         env_idx: Tensor, # [n_resets]
     ):
         n_resets = len(env_idx)
-        # randomly generate spheral obstacles
-        radius = torch.arange(self.sphere_rmin, self.sphere_rmax, self.sphere_rstep, device=self.device)
-        idx_radius = torch.randint(0, len(radius), (n_resets, self.n_spheres), device=self.device)
-        selected_radius = radius[idx_radius]
-        self.r_obstacles[env_idx, :self.n_spheres] = selected_radius
+        
+        if self.n_spheres > 0:
+            # randomly generate spheral obstacles
+            radius = torch.arange(self.sphere_rmin, self.sphere_rmax, self.sphere_rstep, device=self.device)
+            idx_radius = torch.randint(0, len(radius), (n_resets, self.n_spheres), device=self.device)
+            selected_radius = radius[idx_radius]
+            self.r_obstacles[env_idx, :self.n_spheres] = selected_radius
 
-        # randomly generate cubical obstacles
-        cube_lw = torch.arange(self.cube_lwmin, self.cube_lwmax, self.cube_lwstep, device=self.device)
-        cube_h  = torch.arange(self.cube_hmin,  self.cube_hmax,  self.cube_hstep, device=self.device)
-        idx_lw = torch.randint(0, len(cube_lw), (n_resets, self.n_cubes, 2), device=self.device)
-        idx_h  = torch.randint(0, len(cube_h),  (n_resets, self.n_cubes, 1), device=self.device)
-        randomized_cube_lw = cube_lw[idx_lw]
-        randomized_cube_h  = cube_h[idx_h]
-        randomized_cube_lwh = torch.cat([randomized_cube_lw, randomized_cube_h], dim=-1)
-        self.lwh_cubes[env_idx] = randomized_cube_lwh
-        self.r_obstacles[env_idx, self.n_spheres:] = randomized_cube_lwh.div(2).norm(dim=-1)
+        if self.n_cubes - 4 * int(self.walls) - int(self.ceiling) > 0:
+            # randomly generate cubical obstacles
+            cube_lw = torch.arange(self.cube_lwmin, self.cube_lwmax, self.cube_lwstep, device=self.device)
+            cube_h  = torch.arange(self.cube_hmin,  self.cube_hmax,  self.cube_hstep, device=self.device)
+            idx_lw = torch.randint(0, len(cube_lw), (n_resets, self.n_cubes, 2), device=self.device)
+            idx_h  = torch.randint(0, len(cube_h),  (n_resets, self.n_cubes, 1), device=self.device)
+            randomized_cube_lw = cube_lw[idx_lw]
+            randomized_cube_h  = cube_h[idx_h]
+            randomized_cube_lwh = torch.cat([randomized_cube_lw, randomized_cube_h], dim=-1)
+            self.lwh_cubes[env_idx] = randomized_cube_lwh
+            self.r_obstacles[env_idx, self.n_spheres:] = randomized_cube_lwh.div(2).norm(dim=-1)
         
         L, H = env_spacing, self.height_scale * env_spacing
         ones = torch.ones_like(L)
@@ -157,6 +167,8 @@ class ObstacleManager:
     
     def randomize_obstacles_poses(self, env_idx: Tensor):
         n_resets = len(env_idx)
+        if self.n_cubes == 0:
+            return
         if self.randomize_cube_pose:
             self.rpy_cubes[env_idx, :, :2] = rand_range(
                 -self.cube_roll_pitch_range, self.cube_roll_pitch_range, (n_resets, self.n_cubes, 2), device=self.device)

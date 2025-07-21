@@ -152,25 +152,26 @@ def get_ray_dist(
     H, W = ray_directions_b.shape[:2]
     ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
     
-    sphere_ray_starts = start[sphere_env_ids] # [m_spheres, n_rays, 3]
-    sphere_ray_directions_w = ray_directions_w[sphere_env_ids] # [m_spheres, n_rays, 3]
-    p_spheres = p_spheres[sphere_env_ids, sphere_ids] # [m_spheres, 3]
-    r_spheres = r_spheres[sphere_env_ids, sphere_ids] # [m_spheres]
-    raydist_sphere = raydist3d_sphere(p_spheres, r_spheres, sphere_ray_starts, sphere_ray_directions_w, max_dist)
-    sphere_ray_dists[sphere_env_ids, sphere_ids] = raydist_sphere
+    n_spheres = p_spheres.shape[1]
+    if n_spheres > 0:
+        sphere_ray_starts = start[sphere_env_ids] # [m_spheres, n_rays, 3]
+        sphere_ray_directions_w = ray_directions_w[sphere_env_ids] # [m_spheres, n_rays, 3]
+        p_spheres = p_spheres[sphere_env_ids, sphere_ids] # [m_spheres, 3]
+        r_spheres = r_spheres[sphere_env_ids, sphere_ids] # [m_spheres]
+        raydist_sphere = raydist3d_sphere(p_spheres, r_spheres, sphere_ray_starts, sphere_ray_directions_w, max_dist)
+        sphere_ray_dists[sphere_env_ids, sphere_ids] = raydist_sphere
     
-    cube_ray_starts = start[cube_env_ids] # [m_cubes, n_rays, 3]
-    cube_ray_directions_w = ray_directions_w[cube_env_ids] # [m_cubes, n_rays, 3]
-    p_cubes = p_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
-    lwh_cubes = lwh_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
-    rpy_cubes = rpy_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
-    raydist_cube = raydist3d_cube(p_cubes, lwh_cubes, rpy_cubes, cube_ray_starts, cube_ray_directions_w, max_dist)
-    cube_ray_dists[cube_env_ids, cube_ids] = raydist_cube
+    n_cubes = p_cubes.shape[1]
+    if n_cubes > 0:
+        cube_ray_starts = start[cube_env_ids] # [m_cubes, n_rays, 3]
+        cube_ray_directions_w = ray_directions_w[cube_env_ids] # [m_cubes, n_rays, 3]
+        p_cubes = p_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
+        lwh_cubes = lwh_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
+        rpy_cubes = rpy_cubes[cube_env_ids, cube_ids] # [m_cubes, 3]
+        raydist_cube = raydist3d_cube(p_cubes, lwh_cubes, rpy_cubes, cube_ray_starts, cube_ray_directions_w, max_dist)
+        cube_ray_dists[cube_env_ids, cube_ids] = raydist_cube
     
-    raydist = torch.minimum( # [n_envs, n_rays]
-        torch.min(sphere_ray_dists, dim=1).values,
-        torch.min(cube_ray_dists, dim=1).values
-    )
+    raydist = torch.concat([sphere_ray_dists, cube_ray_dists], dim=1).min(dim=1).values # [n_envs, n_rays]
     if z_ground_plane is not None:
         raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions_w, max_dist) # [n_envs, n_rays]
         raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
