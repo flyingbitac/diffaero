@@ -136,8 +136,8 @@ class Racing(BaseEnv):
         return states if with_grad else states.detach()
     
     @timeit
-    def step(self, action, need_obs_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+    def step(self, action, next_obs_before_reset=False, next_state_before_reset=False):
+        # type: (Tensor, bool, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         prev_pos = self._p.clone()
         # simulation step
         self.dynamics.step(action)
@@ -176,8 +176,9 @@ class Racing(BaseEnv):
                 "n_passed_gates": self.n_passed_gates[reset],
             },
         }
-        if need_obs_before_reset:
+        if next_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+        if next_state_before_reset:
             extra["next_state_before_reset"] = self.get_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)

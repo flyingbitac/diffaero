@@ -106,8 +106,8 @@ class ObstacleAvoidance(BaseEnv):
         ))
     
     @timeit
-    def step(self, action, need_obs_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[TensorDict, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+    def step(self, action, next_obs_before_reset=False, next_state_before_reset=False):
+        # type: (Tensor, bool, bool) -> Tuple[TensorDict, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
@@ -130,8 +130,9 @@ class ObstacleAvoidance(BaseEnv):
             },
             "sensor": self.sensor_tensor.clone()
         }
-        if need_obs_before_reset:
+        if next_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+        if next_state_before_reset:
             extra["next_state_before_reset"] = self.get_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)

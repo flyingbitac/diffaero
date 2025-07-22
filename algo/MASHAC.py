@@ -114,7 +114,7 @@ class MASHAC:
         self.cumulated_loss = self.cumulated_loss + self.rollout_gamma * loss
         cumulated_loss = self.cumulated_loss[reset].sum()
         # add terminal value if rollout ends or truncated
-        next_value = self.value_target(tensordict2tuple(env_info["next_global_state_before_reset"]))
+        next_value = self.value_target(tensordict2tuple(env_info["next_state_before_reset"]))
         terminal_value = (self.rollout_gamma * self.discount * next_value)[truncated].sum()
         assert terminal_value.requires_grad == True
         # add up the discounted cumulated loss, the terminal value and the entropy loss
@@ -178,7 +178,7 @@ class MASHAC:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(obs, global_state)
-            (next_obs, next_global_state), (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
+            (next_obs, next_global_state), (loss, reward), terminated, env_info = env.step(env.rescale_action(action), next_state_before_reset=True)
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(

@@ -61,8 +61,8 @@ class PositionControl(BaseEnv):
         return obs if with_grad else obs.detach()
     
     @timeit
-    def step(self, action, need_obs_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
+    def step(self, action, next_obs_before_reset=False, next_state_before_reset=False):
+        # type: (Tensor, bool, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
@@ -86,8 +86,9 @@ class PositionControl(BaseEnv):
                 "arrive_time": self.arrive_time.clone()[success]
             },
         }
-        if need_obs_before_reset:
+        if next_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+        if next_state_before_reset:
             extra["next_state_before_reset"] = self.get_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
@@ -216,8 +217,8 @@ class Sim2RealPositionControl(PositionControl):
         self.target_pos = self.square_positions[target_index]
     
     @timeit
-    def step(self, action, need_obs_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
+    def step(self, action, next_obs_before_reset=False, next_state_before_reset=False):
+        # type: (Tensor, bool, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
         self.update_target()
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
@@ -237,8 +238,9 @@ class Sim2RealPositionControl(PositionControl):
                 "arrive_time": self.arrive_time.clone()[success]
             },
         }
-        if need_obs_before_reset:
+        if next_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+        if next_state_before_reset:
             extra["next_state_before_reset"] = self.get_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
@@ -320,8 +322,8 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         return global_state if with_grad else global_state.detach()
     
     @timeit
-    def step(self, action, need_global_state_before_reset=True):
-        # type: (Tensor, bool) -> Tuple[Tuple[Tensor, Tensor], Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
+    def step(self, action, next_obs_before_reset=False, next_state_before_reset=False):
+        # type: (Tensor, bool, bool) -> Tuple[Tuple[Tensor, Tensor], Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, float], Tensor]]]
         self.dynamics.step(action)
         (terminated, collision, out_of_bound), truncated = self.terminated(), self.truncated()
         self.progress += 1
@@ -357,8 +359,10 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
                 "arrive_time": self.arrive_time.clone()[success],
             },
         }
-        if need_global_state_before_reset:
-            extra["next_global_state_before_reset"] = self.get_global_state(with_grad=True)
+        if next_obs_before_reset:
+            extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
+        if next_state_before_reset:
+            extra["next_state_before_reset"] = self.get_global_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_obs_and_state(), (loss, reward), terminated, extra

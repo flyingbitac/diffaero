@@ -177,7 +177,7 @@ class SHAC:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(obs)
-            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
+            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), next_obs_before_reset=True)
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(
@@ -274,7 +274,7 @@ class SHAC_PPO(SHAC):
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(obs)
-            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
+            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), next_obs_before_reset=True)
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             # divide by 10 to avoid disstability
             self.buffer.add(
@@ -505,7 +505,7 @@ class SHAC_Q:
         self.clear_loss()
         for t in range(cfg.l_rollout):
             action, policy_info = self.act(obs)
-            next_obs, loss, terminated, env_info = env.step(env.rescale_action(action))
+            next_obs, loss, terminated, env_info = env.step(env.rescale_action(action), next_obs_before_reset=True)
             self.record_loss(loss, policy_info, env_info, terminated)
             # divide by 10 to avoid disstability
             self.buffer.add(obs, action, loss/10, env_info["next_obs_before_reset"], terminated)
@@ -664,7 +664,7 @@ class SHA2C(SHAC):
             with torch.no_grad():
                 value = self.agent.get_value(state)
             policy_info["value"] = value
-            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
+            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), next_state_before_reset=True)
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             self.buffer.add(
                 obs=state,
@@ -740,7 +740,7 @@ class SHA2C_PPO(SHA2C):
             state = env.get_state()
             with torch.no_grad():
                 value = self.agent.get_value(state)
-            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))
+            next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), next_state_before_reset=True)
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             self.buffer.add(
                 obs=obs,

@@ -61,7 +61,7 @@ def main(cfg: DictConfig):
                 rpy[:, i] = quaternion_to_euler(env.q) * 180 / torch.pi
                 
                 action, policy_info = agent.act(obs, test=True)
-                obs, loss, terminated, env_info = env.step(env.rescale_action(action), need_obs_before_reset=False)
+                obs, loss, terminated, env_info = env.step(env.rescale_action(action))
                 if cfg.algo.name != 'world' and hasattr(agent, "reset"):
                     agent.reset(env_info["reset"])
 
