@@ -21,10 +21,16 @@ class PointMassModelBase(BaseDynamics):
         self._state = torch.zeros(self.n_envs, self.n_agents, self.state_dim, device=device)
         self._vel_ema = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
         self._acc = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
+        xyz = torch.zeros(self.n_envs, self.n_agents, 3, device=device)
+        w = torch.ones(self.n_envs, self.n_agents, 1, device=device)
+        self.quat_xyzw = torch.cat([xyz, w], dim=-1)
+        self.quat_xyzw_init = self.quat_xyzw.clone()
         if self.n_agents == 1:
             self._state.squeeze_(1)
             self._vel_ema.squeeze_(1)
             self._acc.squeeze_(1)
+            self.quat_xyzw.squeeze_(1)
+            self.quat_xyzw_init.squeeze_(1)
         self.align_yaw_with_target_direction: bool = cfg.align_yaw_with_target_direction
         self.align_yaw_with_vel_ema: bool = cfg.align_yaw_with_vel_ema
     
@@ -59,16 +65,16 @@ class PointMassModelBase(BaseDynamics):
         self._acc.detach_()
     
     def reset_idx(self, env_idx: Tensor) -> None:
-        mask = torch.zeros_like(self._vel_ema, dtype=torch.bool)
+        mask = torch.zeros(*self._vel_ema.shape[:-1], dtype=torch.bool, device=self.device)
         mask[env_idx] = True
-        self._vel_ema = torch.where(mask, 0., self._vel_ema)
-        self._acc = torch.where(mask, 0., self._acc)
+        mask3 = mask.unsqueeze(-1).expand_as(self._vel_ema)
+        self._vel_ema = torch.where(mask3, 0., self._vel_ema)
+        self._acc = torch.where(mask3, 0., self._acc)
+        mask4 = mask.unsqueeze(-1).expand_as(self.quat_xyzw)
+        self.quat_xyzw = torch.where(mask4, self.quat_xyzw_init, self.quat_xyzw)
     
     @property
-    @torch.no_grad()
-    def q(self) -> Tensor:
-        orientation = self._vel_ema if self.align_yaw_with_vel_ema else self.v
-        return point_mass_quat(self.a_thrust, orientation=orientation)
+    def q(self) -> Tensor: return self.quat_xyzw
     @property
     def w(self) -> Tensor:
         warnings.warn("Access of angular velocity in point mass model is not supported. Returning zero tensor instead.")
@@ -96,6 +102,9 @@ class PointMassModelBase(BaseDynamics):
         self._state = self.grad_decay(next_state)
         self._vel_ema = torch.lerp(self._vel_ema, self._v, self.vel_ema_factor.value)
         self._acc = self._a_thrust + self._G_vec - self._D.value * self._v
+        with torch.no_grad():
+            orientation = self._vel_ema if self.align_yaw_with_vel_ema else self.v
+            self.quat_xyzw = point_mass_quat(self.a_thrust, orientation=orientation)
 
 @torch.jit.script
 def continuous_point_mass_dynamics_local(
