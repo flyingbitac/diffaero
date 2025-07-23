@@ -78,7 +78,7 @@ class RecordEpisodeStatistics:
         # dictionary to be used to store scalar metrics
         extra["stats"] = {} # Dict[str, float]
         # traverse through all metrics to be sliding-window-averaged
-        for k, v in extra["stats_raw"].items(): # Dict[str, Tensor]
+        for k, v in extra.get("stats_raw", {}).items(): # Dict[str, Tensor]
             assert v.ndim == 1
             # construct a queue to record new data and discard old ones
             l = v.size(0)
@@ -110,13 +110,9 @@ class TrainRunner:
             self.torch_profiler = torch.profiler.profile(
                 activities=activities,
                 schedule=torch.profiler.schedule(wait=0, warmup=10, active=10, repeat=1, skip_first=0),
-                record_shapes=True,
-                profile_memory=True,
-                # with_stack=True,
-                with_flops=True,
                 on_trace_ready=torch.profiler.tensorboard_trace_handler(
                     dir_name=os.path.join(self.logger.logdir, "profiling_data"),
-                    # use_gzip=True
+                    use_gzip=True
                 ),
             )
         else: 
@@ -185,7 +181,7 @@ class TrainRunner:
         """
         if self.torch_profiler is not None and self.torch_profiler.step_num == self.cfg.n_updates:
             self.torch_profiler.stop()
-            print(self.torch_profiler.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=20))
+            print(self.torch_profiler.key_averages(group_by_input_shape=True).table(sort_by="cuda_time_total", row_limit=20))
         ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
         self.agent.save(ckpt_path)
         Logger.info(f"The checkpoint is saved to {ckpt_path}.")
@@ -250,7 +246,7 @@ class TestRunner:
             action, policy_info = self.agent.act(obs, test=True)
             if self.cfg.algo.name != "yopo":
                 action = self.env.rescale_action(action)
-            obs, loss, terminated, env_info = self.env.step(action, need_obs_before_reset=False)
+            obs, loss, terminated, env_info = self.env.step(action)
             if self.cfg.algo.name != 'world' and hasattr(self.agent, "reset"):
                 self.agent.reset(env_info["reset"])
             l_episode = env_info["stats"].get("l_episode", 0.)
