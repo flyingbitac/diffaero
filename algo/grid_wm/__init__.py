@@ -10,11 +10,11 @@ import torch.nn as nn
 import tensordict
 from tensordict import TensorDict
 
-from quaddif.env.obstacle_avoidance import ObstacleAvoidanceGrid
-from quaddif.dynamics.pointmass import point_mass_quat
-from quaddif.algo.buffer import RolloutBufferGRID
-from quaddif.network.agents import  StochasticActor
-from quaddif.utils.runner import timeit
+from diffaero.env.obstacle_avoidance import ObstacleAvoidanceGrid
+from diffaero.dynamics.pointmass import point_mass_quat
+from diffaero.algo.buffer import RolloutBufferGRID
+from diffaero.network.agents import  StochasticActor
+from diffaero.utils.runner import timeit
 from .world.backbone import WorldModel, WorldModelTesttime
 
 

@@ -2,5 +2,5 @@
 run.sh
 outputs/
 imgui.ini
-quaddif.egg-info/
+diffaero.egg-info/
 *.log

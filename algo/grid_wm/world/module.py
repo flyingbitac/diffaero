@@ -8,9 +8,9 @@ import torch.nn.functional as F
 from torch import Tensor
 from einops import rearrange
 
-from quaddif.network.networks import CNNBackbone
-from quaddif.utils.nn import mlp
-from quaddif.utils.math import quat_rotate
+from diffaero.network.networks import CNNBackbone
+from diffaero.utils.nn import mlp
+from diffaero.utils.math import quat_rotate
 
 class MLP(nn.Module):
     def __init__(self, input_dim:int, output_dim:int, hidden_units: List, norm:str=None, act:str=None):

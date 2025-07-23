@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from quaddif.utils.runner import timeit
+from diffaero.utils.runner import timeit
 
 @dataclass
 class buffercfg:

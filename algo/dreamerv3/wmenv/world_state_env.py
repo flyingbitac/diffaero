@@ -4,11 +4,11 @@ from typing import Any, Dict, Generator, List, Tuple,Optional
 import torch
 from torch import Tensor
 
-from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel
-from quaddif.algo.dreamerv3.models.blocks import symexp,symlog
+from diffaero.algo.dreamerv3.models.state_predictor import DepthStateModel
+from diffaero.algo.dreamerv3.models.blocks import symexp,symlog
 from .replaybuffer import ReplayBuffer
-from quaddif.utils.logger import Logger
-from quaddif.utils.runner import timeit
+from diffaero.utils.logger import Logger
+from diffaero.utils.runner import timeit
 # from models.rew_end_model import RewEndModel
 
 ResetOutput = Tuple[torch.FloatTensor, Dict[str, Any]]

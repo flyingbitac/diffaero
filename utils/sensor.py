@@ -7,8 +7,8 @@ import torch.nn.functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
-from quaddif.dynamics.base_dynamics import BaseDynamics
-from quaddif.utils.math import (
+from diffaero.dynamics.base_dynamics import BaseDynamics
+from diffaero.utils.math import (
     quaternion_apply,
     mvp,
     quat_rotate,
@@ -16,8 +16,8 @@ from quaddif.utils.math import (
     quat_mul,
     euler_to_quaternion
 )
-from quaddif.utils.assets import ObstacleManager
-from quaddif.utils.logger import Logger
+from diffaero.utils.assets import ObstacleManager
+from diffaero.utils.logger import Logger
 
 @torch.jit.script
 def raydist3d_sphere(

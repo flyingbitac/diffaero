@@ -12,9 +12,9 @@ from omegaconf import DictConfig
 import taichi as ti
 from tqdm import tqdm
 
-from quaddif.env.obstacle_avoidance import ObstacleAvoidanceYOPO
-from quaddif.utils.render import torch2ti
-from quaddif.utils.runner import timeit
+from diffaero.env.obstacle_avoidance import ObstacleAvoidanceYOPO
+from diffaero.utils.render import torch2ti
+from diffaero.utils.runner import timeit
 
 class YOPONet(nn.Module):
     def __init__(

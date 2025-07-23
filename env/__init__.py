@@ -3,10 +3,10 @@ from typing import Union
 import torch
 from omegaconf import DictConfig
 
-from quaddif.env.position_control import PositionControl, Sim2RealPositionControl, MultiAgentPositionControl
-from quaddif.env.position_control import PositionControl, MultiAgentPositionControl
-from quaddif.env.obstacle_avoidance import ObstacleAvoidance, ObstacleAvoidanceYOPO, ObstacleAvoidanceGrid
-from quaddif.env.racing import Racing
+from diffaero.env.position_control import PositionControl, Sim2RealPositionControl, MultiAgentPositionControl
+from diffaero.env.position_control import PositionControl, MultiAgentPositionControl
+from diffaero.env.obstacle_avoidance import ObstacleAvoidance, ObstacleAvoidanceYOPO, ObstacleAvoidanceGrid
+from diffaero.env.racing import Racing
 
 ENV_ALIAS = {
     "position_control": PositionControl,

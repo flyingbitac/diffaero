@@ -8,9 +8,9 @@ import taichi as ti
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from quaddif.utils.assets import ObstacleManager
-from quaddif.utils.math import quaternion_to_euler, axis_rotmat
-from quaddif.utils.logger import Logger
+from diffaero.utils.assets import ObstacleManager
+from diffaero.utils.math import quaternion_to_euler, axis_rotmat
+from diffaero.utils.logger import Logger
 
 @torch.jit.script
 def torch2ti(tensor_from_torch: Tensor):

@@ -18,8 +18,8 @@ from .module import (
     GridDecoder
 )
 from .function import *
-from quaddif.utils.nn import mlp
-from quaddif.utils.runner import timeit
+from diffaero.utils.nn import mlp
+from diffaero.utils.runner import timeit
 
 class RSSM(nn.Module):
     def __init__(

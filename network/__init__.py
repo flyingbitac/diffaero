@@ -3,7 +3,7 @@ from typing import Union, Dict, Tuple, List, Optional
 from omegaconf import DictConfig
 import torch.nn as nn
 
-from quaddif.network.networks import MLP, CNN, RNN, RCNN
+from diffaero.network.networks import MLP, CNN, RNN, RCNN
 
 BACKBONE_ALIAS: Dict[str, Union[type[MLP], type[CNN], type[RNN], type[RCNN]]] = {
     "mlp": MLP,

@@ -2,10 +2,10 @@ import torch
 from torch import Tensor
 from omegaconf import DictConfig
 
-from quaddif.dynamics.base_dynamics import BaseDynamics
-from quaddif.dynamics.controller import RateController
-from quaddif.utils.math import *
-from quaddif.utils.randomizer import build_randomizer
+from diffaero.dynamics.base_dynamics import BaseDynamics
+from diffaero.dynamics.controller import RateController
+from diffaero.utils.math import *
+from diffaero.utils.randomizer import build_randomizer
 
 class QuadrotorModel(BaseDynamics):
     def __init__(self, cfg: DictConfig, device: torch.device):

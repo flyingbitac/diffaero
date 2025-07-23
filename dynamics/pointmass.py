@@ -6,9 +6,9 @@ from torch.nn import functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
-from quaddif.dynamics.base_dynamics import BaseDynamics
-from quaddif.utils.math import EulerIntegral, rk4, axis_rotmat, mvp
-from quaddif.utils.randomizer import build_randomizer
+from diffaero.dynamics.base_dynamics import BaseDynamics
+from diffaero.utils.math import EulerIntegral, rk4, axis_rotmat, mvp
+from diffaero.utils.randomizer import build_randomizer
 
 class PointMassModelBase(BaseDynamics):
     def __init__(self, cfg: DictConfig, device: torch.device):

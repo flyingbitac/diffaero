@@ -8,14 +8,14 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.algo.buffer import RolloutBufferPPO, RolloutBufferAPPO, RNNStateBuffer
-from quaddif.network.agents import (
+from diffaero.algo.buffer import RolloutBufferPPO, RolloutBufferAPPO, RNNStateBuffer
+from diffaero.network.agents import (
     tensordict2tuple,
     StochasticActorCriticV,
     StochasticAsymmetricActorCriticV,
     RPLActorCritic)
-from quaddif.utils.runner import timeit
-from quaddif.utils.exporter import PolicyExporter
+from diffaero.utils.runner import timeit
+from diffaero.utils.exporter import PolicyExporter
 
 class PPO:
     def __init__(

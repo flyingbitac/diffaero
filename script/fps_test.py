@@ -13,7 +13,7 @@ def main(cfg: DictConfig):
     import torch
     import numpy as np
 
-    from quaddif.env import build_env
+    from diffaero.env import build_env
     from gpustat import new_query as gpu_query
 
     device_idx = cfg.device

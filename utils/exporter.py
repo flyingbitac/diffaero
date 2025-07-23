@@ -7,11 +7,11 @@ from torch import Tensor
 import torch.nn as nn
 from omegaconf import DictConfig
 
-from quaddif.network.agents import StochasticActor, DeterministicActor
-from quaddif.network.networks import MLP, CNN, RNN, RCNN
-from quaddif.dynamics.pointmass import point_mass_quat
-from quaddif.utils.math import axis_rotmat
-from quaddif.utils.logger import Logger
+from diffaero.network.agents import StochasticActor, DeterministicActor
+from diffaero.network.networks import MLP, CNN, RNN, RCNN
+from diffaero.dynamics.pointmass import point_mass_quat
+from diffaero.utils.math import axis_rotmat
+from diffaero.utils.logger import Logger
 
 class PolicyExporter(nn.Module):
     def __init__(self, actor: Union[StochasticActor, DeterministicActor]):

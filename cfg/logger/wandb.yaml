@@ -1,5 +1,5 @@
 name: wandb
 
-project: quaddif
+project: diffaero
 entity: 
 quiet: True

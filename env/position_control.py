@@ -6,11 +6,11 @@ import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
 
-from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
-from quaddif.dynamics import PointMassModelBase, QuadrotorModel
-from quaddif.utils.math import mvp
-from quaddif.utils.render import PositionControlRenderer
-from quaddif.utils.runner import timeit
+from diffaero.env.base_env import BaseEnv, BaseEnvMultiAgent
+from diffaero.dynamics import PointMassModelBase, QuadrotorModel
+from diffaero.utils.math import mvp
+from diffaero.utils.render import PositionControlRenderer
+from diffaero.utils.runner import timeit
 
 class PositionControl(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):

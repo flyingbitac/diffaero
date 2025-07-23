@@ -11,13 +11,13 @@ from tensordict import TensorDict
 import open3d as o3d
 import numpy as np
 
-from quaddif.env.base_env import BaseEnv
-from quaddif.dynamics.pointmass import PointMassModelBase
-from quaddif.utils.sensor import build_sensor
-from quaddif.utils.render import PositionControlRenderer
-from quaddif.utils.assets import ObstacleManager
-from quaddif.utils.runner import timeit
-from quaddif.utils.math import mvp
+from diffaero.env.base_env import BaseEnv
+from diffaero.dynamics.pointmass import PointMassModelBase
+from diffaero.utils.sensor import build_sensor
+from diffaero.utils.render import PositionControlRenderer
+from diffaero.utils.assets import ObstacleManager
+from diffaero.utils.runner import timeit
+from diffaero.utils.math import mvp
 
 @torch.jit.script
 def get_gate_rotmat_w2g(gate_yaw: Tensor) -> Tensor:

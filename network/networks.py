@@ -5,7 +5,7 @@ from omegaconf import DictConfig
 import torch
 from torch import Tensor
 import torch.nn as nn
-from quaddif.utils.nn import mlp
+from diffaero.utils.nn import mlp
 
 def obs_action_concat(state: Union[Tensor, Tuple[Tensor, Tensor]], action: Optional[Tensor] = None) -> Tensor:
     if isinstance(state, Tensor):
