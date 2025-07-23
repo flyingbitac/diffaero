@@ -179,14 +179,15 @@ class ObstacleAvoidance(BaseEnv):
         if isinstance(self.dynamics, PointMassModelBase):
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
-            vel_diff = self.dynamics._vel_ema - self.target_vel
-            vel_diff = torch.norm(vel_diff * torch.tensor([[1, 1, self.loss_weights.pointmass.vel_zdiff_factor]], device=self.device), dim=-1)
+            vel_diff = torch.norm(self.dynamics._vel_ema - self.target_vel, dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-            
+            z_loss = 1 - (-(self._p[..., 2]-self.target_pos[..., 2]).abs()).exp()
+
             jerk_loss = F.mse_loss(self.dynamics.a_thrust, self.dynamics.local2world(action), reduction="none").sum(dim=-1)
             
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
+                self.loss_weights.pointmass.z * z_loss +
                 self.loss_weights.pointmass.oa * oa_loss +
                 self.loss_weights.pointmass.jerk * jerk_loss +
                 self.loss_weights.pointmass.pos * pos_loss +
@@ -203,6 +204,7 @@ class ObstacleAvoidance(BaseEnv):
             ).detach()
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
+                "z_loss": z_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
                 "arrive_loss": arrive_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
