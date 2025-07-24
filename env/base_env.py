@@ -214,11 +214,11 @@ class BaseEnvMultiAgent(BaseEnv, ABC):
         raise NotImplementedError
     
     @abstractmethod
-    def get_global_state(self, with_grad=False):
+    def get_state(self, with_grad=False):
         raise NotImplementedError
     
     def get_obs_and_state(self, with_grad=False):
-        return self.get_observations(with_grad), self.get_global_state(with_grad)
+        return self.get_observations(with_grad), self.get_state(with_grad)
     
     def reset(self):
         self.reset_idx(torch.arange(self.n_envs, device=self.device))

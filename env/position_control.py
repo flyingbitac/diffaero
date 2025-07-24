@@ -1,4 +1,5 @@
 from typing import Tuple, Dict, Union
+import math
 
 from omegaconf import DictConfig
 import torch
@@ -268,10 +269,17 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             3 * self.n_agents + # target positions of all agents
             6 # box size
         )
-        self.box_size = torch.tensor([[self.L, -self.L, self.L, -self.L, self.L, -self.L]], device=device).expand(self.n_envs, -1)
+        self.box_size = torch.stack([
+             self.L.value,
+            -self.L.value,
+             self.L.value,
+            -self.L.value,
+             self.L.value,
+            -self.L.value
+        ], dim=-1)
         self.action_dim = self.dynamics.action_dim
         self.renderer = None if cfg.render.headless else PositionControlRenderer(cfg.render, device)
-        self.collision_distance = 0.5
+        self.collision_distance = 0.3
     
     @timeit
     def get_observations(self, with_grad=False):
@@ -308,7 +316,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         return obs if with_grad else obs.detach()
 
     @timeit
-    def get_global_state(self, with_grad=False):
+    def get_state(self, with_grad=False):
         if self.dynamic_type == "pointmass":   
             # 全局状态 为所有agent自身状态(p+q+v)+目标位置
             drone_states = torch.cat([self._p, self.q, self._v], dim=-1) # [n_envs, n_agents, 10]
@@ -362,7 +370,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         if next_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if next_state_before_reset:
-            extra["next_state_before_reset"] = self.get_global_state(with_grad=True)
+            extra["next_state_before_reset"] = self.get_state(with_grad=True)
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
         return self.get_obs_and_state(), (loss, reward), terminated, extra
@@ -376,23 +384,35 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         
         self.target_pos_base[env_idx] = 0.
 
-        self.target_pos_rel[env_idx] = 0.
-        self.target_pos_rel[env_idx, 1, 0] = 1.
-        self.target_pos_rel[env_idx, 2, 1] = 1.
+        edge_length = self.collision_distance * 4
+        radius = edge_length / (2 * math.sin(math.pi / self.n_agents))
+        angles = torch.linspace(0, 2 * math.pi, self.n_agents + 1, device=self.device)[:-1] # [n_agents]
+        angles = angles[None, :].expand(n_resets, -1) + torch.rand(n_resets, 1, device=self.device) * (2 * math.pi / self.n_agents) # [n_resets, n_agents]
+        self.target_pos_rel[env_idx] = torch.stack([
+            radius * torch.cos(angles),
+            radius * torch.sin(angles),
+            torch.zeros_like(angles)
+        ], dim=-1)
         # self.target_pos_rel[env_idx, 3, :2] = 1.
         # 随机初始化新的位置
         N = 5
+        L = self.L.unsqueeze(-1) # [n_envs, 1]
+        p_min, p_max = -L+0.5, L-0.5
+        linspace = torch.linspace(0, 1, N, device=self.device).unsqueeze(0)
+        x = y = z = (p_max - p_min) * linspace + p_min
         assert N**3 > self.n_agents
-        assert (2 * self.L - 1) / N > self.collision_distance
-        x = y = z = torch.linspace(-self.L+0.5, self.L-0.5, N, device=self.device)
-        xyz = torch.stack(torch.meshgrid([x, y, z], indexing="xy"), dim=-1).reshape(-1, 3) # [N*N*N, 3]
-        xyz = xyz.unsqueeze(0).expand(n_resets, -1, -1) # [n_envs, N*N*N, 3]
+        assert torch.all((2 * (self.L.value - 0.5)) / N > self.collision_distance)
+        xyz = torch.stack([
+            x[env_idx].reshape(-1, N, 1, 1).expand(-1,-1, N, N),
+            y[env_idx].reshape(-1, 1, N, 1).expand(-1, N,-1, N),
+            z[env_idx].reshape(-1, 1, 1, N).expand(-1, N, N,-1)
+        ], dim=-1).reshape(-1, N**3, 3)
         random_idx = torch.stack([torch.randperm(N**3, device=self.device) for _ in range(n_resets)], dim=0) # [n_resets, N**3]
         random_idx = random_idx[:, :self.n_agents, None].expand(-1, -1, 3) # [n_resets, n_agents, 3]
-        new_pos = torch.zeros(self.n_envs, self.n_agents, 3, device=self.device)
-        new_pos[env_idx] = xyz.gather(dim=1, index=random_idx)
+        p_new = torch.zeros(self.n_envs, self.n_agents, 3, device=self.device)
+        p_new[env_idx] = xyz.gather(dim=1, index=random_idx)
         new_state = torch.cat([
-            new_pos,
+            p_new,
             torch.zeros(self.n_envs, self.n_agents, self.dynamics.state_dim-3, device=self.device)
         ], dim=-1)
         
@@ -418,6 +438,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             "vel": vel,
             "quat_xyzw": quat_xyzw,
             "target_pos": target_pos,
+            "env_spacing": self.L.value,
         }
         return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
 
@@ -436,7 +457,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
 
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
 
-            collide_loss = ( -10 * (self.internal_min_distance-0.5) ).exp()
+            collide_loss = self.collision().float()
 
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
@@ -465,16 +486,18 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             raise NotImplementedError
         return total_loss, total_reward, loss_components
 
+    def collision(self) -> Tensor:
+        return self.internal_min_distance < self.collision_distance
+
     @timeit
     def terminated(self) -> Tensor:
+        prange = self.L.value.reshape(self.n_envs, 1, 1).expand(-1, self.n_agents, 3) # [n_envs, n_agents, 3]
         out_of_bound = torch.logical_or(
-            torch.any(self.p < -self.L, dim=-1),
-            torch.any(self.p >  self.L, dim=-1)
+            torch.any(self.p < -prange, dim=-1),
+            torch.any(self.p >  prange, dim=-1)
         ).any(dim=-1) # [n_envs, n_agents, 3] -> [n_envs, n_agents] -> [n_envs, ]
         
-        diag = torch.diag(torch.full((self.n_agents, ), float("inf"), device=self.device)).unsqueeze(0).expand(self.n_envs, -1, -1)
-        distances = torch.norm(self.p[:, :, None] - self.p[:, None, :], dim=-1).add(diag) # [n_envs, n_agents, n_agents]
-        collision = distances.lt(self.collision_distance).any(dim=-1).any(dim=-1) # [n_envs, ]
+        collision = self.collision().any(dim=-1) # [n_envs, ]
 
         terminated = collision | out_of_bound
         return terminated, collision, out_of_bound

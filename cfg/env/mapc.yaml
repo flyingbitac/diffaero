@@ -9,7 +9,7 @@ length:
   max: 10
 n_envs: ${n_envs}
 n_agents: ${n_agents}
-obs_frame: "local" # "world" or "local"
+obs_frame: "world" # "world" or "local"
 max_time: 20
 wait_before_truncate: 5.
 max_target_vel: 5.
@@ -22,9 +22,9 @@ n_substeps: 1
 loss_weights:
   pointmass:
     vel: 1.
-    jerk: 0.005
+    jerk: 0.0001
     pos: 1.
-    collision: 16.
+    collision: 5.
 
 reward_weights:
   constant: 4.
@@ -37,4 +37,5 @@ reward_weights:
 defaults:
   - render: pc_render
   - randomizer: default_randomizer
+  - imu: default_imu
   - _self_
