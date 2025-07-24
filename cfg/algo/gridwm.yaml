@@ -1,0 +1,96 @@
+name: grid_wm
+
+l_rollout: 32
+
+actor:
+  network:
+    name: mlp
+    hidden_dim: [256, 128]
+  
+  input_target_vel: True
+  input_quat: False
+  input_vel: False
+
+  lr: 1e-3
+  max_grad_norm: 1.
+  entropy_weight: 0.03
+
+wm:
+  compile: True
+  l_rollout: ${algo.l_rollout}
+  encoder:
+    image:
+      channels: [16, 32]
+      stride: 2
+      kernel_size: 4
+      act: SiLU
+      norm: BatchNorm2d
+
+    state:
+      encode_target_vel: False
+      encode_quat: False
+      encode_vel: False
+      
+      embedding_dim: 64
+      hidden_units: [64]
+      act: SiLU
+      norm: LayerNorm
+
+  rssm:
+    action_dim: 3
+    stoch: 32
+    classes: 32
+    deter: 256
+    hidden: 256
+    act: SiLU
+    norm: LayerNorm
+
+  decoder:
+    image:
+      enable: False
+      use_mlp: True
+      cnndecoder:
+        channels: [64, 32, 16, 3]
+        stride: 2
+        kernel_size: 4
+        act: SiLU
+        norm: BatchNorm2d
+
+      mlpdecoder:
+        hidden_units: [256, 256]
+        act: SiLU
+        norm: LayerNorm
+    
+    state:
+      decode_target_vel: False
+      decode_quat: True
+      decode_vel: True
+      decode_vel_in_body_frame: False
+    
+    grid: 
+      enable: True
+      use_mlp: True
+    
+    reward:
+      enable: False
+
+  train:
+    lr: 3e-4
+    grad_norm: 100.
+    grid_pos_weight: 15
+    term_pos_weight: 100
+
+    # weight of loss funcs
+    rec_img_weight: 1.
+    rec_state_weight: 1.
+    free_bits: 1.
+    dyn_weight: 0.5
+    rep_weight: 0.1
+    rew_weight: 1.
+    ter_weight: 1.
+    grid_weight: 1.
+    soft_label: 0.
+
+    batch_size: 256
+    buffer_size: 1e4
+    n_epochs: 4
