@@ -284,16 +284,20 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
     @timeit
     def get_observations(self, with_grad=False):
         if self.dynamic_type == "pointmass":
-            # agent观测 每个agent的观测为 自身状态(目标方向单位向量+自身姿态四元数+自身速度向量)+所有其他agent相对状态(p+v)+目标位置
+            # target velocities of all agents
             target_vel_all = self.target_vel.reshape(self.n_envs, self.n_agents*3).unsqueeze(1).expand(-1, self.n_agents, -1) # [n_envs, n_agents, n_agents*3]
+            # quaternion of its own
             quat_self = self.q # [n_envs, n_agents, 4]
+            # velocity of its own
             vel_self = self._v # [n_envs, n_agents, 3]
             
+            # relative positions and velocities of all OTHER agents
             rel_pos = self.p[:, None, :] - self._p[:, :, None] # [n_envs, n_agents, n_agents, 3]
             rel_pos_all_others = torch.stack(
                 [torch.cat([rel_pos[:, i, :i, :], rel_pos[:, i, i+1:, :]], dim=-2) for i in range(self.n_agents)],
                 dim=1).reshape(self.n_envs, self.n_agents, -1) # [n_envs, n_agents, (n_agents-1)*3]
             
+            # targets' relative positions of all agents
             rel_vel = self.v[:, None, :] - self._v[:, :, None] # [n_envs, n_agents, n_agents, 3]
             rel_vel_all_others = torch.stack(
                 [torch.cat([rel_vel[:, i, :i, :], rel_vel[:, i, i+1:, :]], dim=-2) for i in range(self.n_agents)],
@@ -318,10 +322,11 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
     @timeit
     def get_state(self, with_grad=False):
         if self.dynamic_type == "pointmass":   
-            # 全局状态 为所有agent自身状态(p+q+v)+目标位置
             drone_states = torch.cat([self._p, self.q, self._v], dim=-1) # [n_envs, n_agents, 10]
             global_state = torch.cat([
+                # positions, quaternions, velocities of all agents
                 drone_states.reshape(self.n_envs, -1),    # [n_envs, n_agents*10]
+                # target positions of all agents
                 self.target_pos.reshape(self.n_envs, -1), # [n_envs, n_agents*3]
                 self.box_size                             # [n_envs, 6]
             ], dim=-1)
@@ -384,6 +389,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
         
         self.target_pos_base[env_idx] = 0.
 
+        # formation
         edge_length = self.collision_distance * 4
         radius = edge_length / (2 * math.sin(math.pi / self.n_agents))
         angles = torch.linspace(0, 2 * math.pi, self.n_agents + 1, device=self.device)[:-1] # [n_agents]
@@ -393,8 +399,8 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
             radius * torch.sin(angles),
             torch.zeros_like(angles)
         ], dim=-1)
-        # self.target_pos_rel[env_idx, 3, :2] = 1.
-        # 随机初始化新的位置
+        
+        # init positions
         N = 5
         L = self.L.unsqueeze(-1) # [n_envs, 1]
         p_min, p_max = -L+0.5, L-0.5
