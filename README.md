@@ -1,6 +1,6 @@
-# QuadDif: A Fully Pytorch-based Differentiable Quadrotor Simulator for Efficient Policy Learning
+# DiffAero: A Fully Pytorch-based Differentiable Quadrotor Simulator for Efficient Policy Learning
 
-- [QuadDif: A Fully Pytorch-based Differentiable Quadrotor Simulator for Efficient Policy Learning](#quaddif-a-fully-pytorch-based-differentiable-quadrotor-simulator-for-efficient-policy-learning)
+- [DiffAero: A Fully Pytorch-based Differentiable Quadrotor Simulator for Efficient Policy Learning](#diffaero-a-fully-pytorch-based-differentiable-quadrotor-simulator-for-efficient-policy-learning)
   - [Introduction](#introduction)
   - [Features](#features)
     - [Environments](#environments)
@@ -8,15 +8,15 @@
     - [Dynamic Models](#dynamic-models)
   - [Installation](#installation)
     - [Requirements](#requirements)
-    - [Install the QuadDif](#install-the-quaddif)
+    - [Install the DiffAero](#install-the-diffaero)
   - [Usage](#usage)
   - [Deploy](#deploy)
 
 ## Introduction
 
-QuadDif is a fully Pytorch-based differentiable quadrotor simulator that utilizes the parallel computing power of GPUs for efficient policy learning. It supports multiple types of dynamic models, all of which are customizable and implemented in [Pytorch](https://www.pytorch.org) so that they run efficiently on modern GPUs and are fully differentiable.
+DiffAero is a fully Pytorch-based differentiable quadrotor simulator that utilizes the parallel computing power of GPUs for efficient policy learning. It supports multiple types of dynamic models, all of which are customizable and implemented in [Pytorch](https://www.pytorch.org) so that they run efficiently on modern GPUs and are fully differentiable.
 
-QuadDif utilizes a modular design where different components (e.g., environment, dynamics, network architecture, and learning algorithms) are decoupled from each other and can be configured independently. As a result, users can combine different components almost arbitrarily to initiate a custom-configured training process with minimal effort.
+DiffAero utilizes a modular design where different components (e.g., environment, dynamics, network architecture, and learning algorithms) are decoupled from each other and can be configured independently. As a result, users can combine different components almost arbitrarily to initiate a custom-configured training process with minimal effort.
 
 ## Features
 <!-- Inserted English summary table -->
@@ -30,7 +30,7 @@ QuadDif utilizes a modular design where different components (e.g., environment,
 
 ### Environments
 
-QuadDif now supports two flight tasks: 
+DiffAero now supports two flight tasks: 
 - **Position Control**: The goal is to move the quadrotor to a target position and hover stably.
 - **Obstacle Avoidance**: The goal is to navigate the quadrotor to a target position while avoiding obstacles along the way, given external perceptional informations:
   - Relative positions of obstacles w.r.t. the quadrotor, or
@@ -64,7 +64,7 @@ We have implemented three types of dynamic models for the quadrotor:
 - System: Ubuntu.
 - Pytorch 2.x.
 
-### Install the QuadDif
+### Install the DiffAero
 
 Install the pytorch and pytorch3d:
 ```bash
@@ -80,8 +80,8 @@ Clone this repo and install the python package:
 
 ```bash
 cd /path/to/your/workspace
-git clone https://github.com/zxh0916/quaddif.git
-cd quaddif && pip install -e .
+git clone https://github.com/zxh0916/diffaero.git
+cd diffaero && pip install -e .
 ```
 
 ## Usage

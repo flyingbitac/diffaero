@@ -10,12 +10,12 @@ from torch import Tensor
 import tensordict
 from tensordict import TensorDict
 
-from quaddif.env.obstacle_avoidance import ObstacleAvoidanceGrid
-from quaddif.algo.buffer import RolloutBufferGRID, RNNStateBuffer
-from quaddif.network.networks import CNNBackbone
-from quaddif.network.agents import tensordict2tuple, StochasticActor
-from quaddif.utils.runner import timeit
-from quaddif.utils.nn import mlp
+from diffaero.env.obstacle_avoidance import ObstacleAvoidanceGrid
+from diffaero.algo.buffer import RolloutBufferGRID, RNNStateBuffer
+from diffaero.network.networks import CNNBackbone
+from diffaero.network.agents import tensordict2tuple, StochasticActor
+from diffaero.utils.runner import timeit
+from diffaero.utils.nn import mlp
 
 
 class RCNN(nn.Module):

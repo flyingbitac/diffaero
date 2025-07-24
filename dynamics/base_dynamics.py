@@ -7,8 +7,8 @@ import torch.nn.functional as F
 import pytorch3d.transforms as T
 from omegaconf import DictConfig
 
-from quaddif.utils.math import quat_rotate, quat_rotate_inverse, mvp, axis_rotmat, quaternion_to_euler
-from quaddif.utils.logger import Logger
+from diffaero.utils.math import quat_rotate, quat_rotate_inverse, mvp, axis_rotmat, quaternion_to_euler
+from diffaero.utils.logger import Logger
 
 class BaseDynamics(ABC):
     def __init__(self, cfg: DictConfig, device: torch.device):

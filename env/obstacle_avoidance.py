@@ -10,12 +10,12 @@ from tensordict import TensorDict
 import open3d as o3d
 import numpy as np
 
-from quaddif.env.base_env import BaseEnv
-from quaddif.dynamics import PointMassModelBase, QuadrotorModel
-from quaddif.utils.sensor import build_sensor, RayCastingSensorBase
-from quaddif.utils.render import ObstacleAvoidanceRenderer
-from quaddif.utils.assets import ObstacleManager
-from quaddif.utils.runner import timeit
+from diffaero.env.base_env import BaseEnv
+from diffaero.dynamics import PointMassModelBase, QuadrotorModel
+from diffaero.utils.sensor import build_sensor, RayCastingSensorBase
+from diffaero.utils.render import ObstacleAvoidanceRenderer
+from diffaero.utils.assets import ObstacleManager
+from diffaero.utils.runner import timeit
 
 class ObstacleAvoidance(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):

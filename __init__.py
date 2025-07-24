@@ -1,15 +1,15 @@
 import os
 
-QUADDIF_ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
-QUADDIF_ENVS_DIR = os.path.join(QUADDIF_ROOT_DIR, 'envs')
+DIFFAERO_ROOT_DIR = os.path.dirname(os.path.realpath(__file__))
+DIFFAERO_ENVS_DIR = os.path.join(DIFFAERO_ROOT_DIR, 'envs')
 
-print("The root dir of quaddif:", QUADDIF_ROOT_DIR)
+print("The root dir of DiffAero:", DIFFAERO_ROOT_DIR)
 
-import env
-import algo
-import network
-import script
-import utils
+from . import env
+from . import algo
+from . import network
+from . import script
+from . import utils
 
 __all__ = [
     "env",

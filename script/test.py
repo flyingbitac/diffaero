@@ -12,10 +12,10 @@ def main(cfg: DictConfig):
     import torch
     import numpy as np
 
-    from quaddif.env import build_env
-    from quaddif.algo import build_agent
-    from quaddif.utils.logger import Logger
-    from quaddif.utils.runner import TestRunner
+    from diffaero.env import build_env
+    from diffaero.algo import build_agent
+    from diffaero.utils.logger import Logger
+    from diffaero.utils.runner import TestRunner
 
     runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
     logger = Logger(cfg, run_name=runname)

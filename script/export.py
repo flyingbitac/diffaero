@@ -6,8 +6,8 @@ import torch
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from quaddif.env import build_env
-from quaddif.algo import build_agent
+from diffaero.env import build_env
+from diffaero.algo import build_agent
 
 @hydra.main(config_path=str(Path(__file__).parent.parent.joinpath("cfg")), config_name="config_test", version_base="1.3")
 def main(cfg: DictConfig):

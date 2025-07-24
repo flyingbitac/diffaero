@@ -8,15 +8,15 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.algo.buffer import RolloutBufferSHAC, RolloutBufferSHACQ, RNNStateBuffer
-from quaddif.network.agents import (
+from diffaero.algo.buffer import RolloutBufferSHAC, RolloutBufferSHACQ, RNNStateBuffer
+from diffaero.network.agents import (
     tensordict2tuple,
     StochasticActorCriticV,
     StochasticAsymmetricActorCriticV,
     RPLActorCritic,
     StochasticActorCriticQ)
-from quaddif.utils.runner import timeit
-from quaddif.utils.exporter import PolicyExporter
+from diffaero.utils.runner import timeit
+from diffaero.utils.exporter import PolicyExporter
 
 class SHAC:
     def __init__(

@@ -10,7 +10,7 @@ from omegaconf import OmegaConf, DictConfig
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from quaddif import QUADDIF_ROOT_DIR
+from diffaero import DIFFAERO_ROOT_DIR
 
 class TensorBoardLogger:
     def __init__(
@@ -143,7 +143,7 @@ class Logger:
     
     @staticmethod
     def _get_logger(inspect_stack: List[inspect.FrameInfo]):
-        rel_path = Path(inspect_stack[1].filename).resolve().relative_to(QUADDIF_ROOT_DIR)
+        rel_path = Path(inspect_stack[1].filename).resolve().relative_to(DIFFAERO_ROOT_DIR)
         Logger.logging.name = f"{str(rel_path)}:{inspect_stack[1].lineno}"
         return Logger.logging
     

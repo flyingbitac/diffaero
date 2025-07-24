@@ -11,7 +11,7 @@ from einops.layers.torch import Rearrange
 
 from .blocks import SymLogTwoHotLoss, MLP
 
-from quaddif.utils.runner import timeit
+from diffaero.utils.runner import timeit
 
 @dataclass
 class DepthStateModelCfg:

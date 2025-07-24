@@ -6,11 +6,11 @@ import torch
 from torch import Tensor
 from tensordict import TensorDict
 
-from quaddif.dynamics import build_dynamics
-from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
-from quaddif.utils.sensor import IMU
-from quaddif.utils.randomizer import RandomizerManager, build_randomizer
-from quaddif.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
+from diffaero.dynamics import build_dynamics
+from diffaero.dynamics.pointmass import point_mass_quat, PointMassModelBase
+from diffaero.utils.sensor import IMU
+from diffaero.utils.randomizer import RandomizerManager, build_randomizer
+from diffaero.utils.render import PositionControlRenderer, ObstacleAvoidanceRenderer
 
 class BaseEnv(ABC):
     def __init__(self, cfg: DictConfig, device: torch.device):

@@ -15,7 +15,7 @@ import hydra
 from omegaconf import OmegaConf, DictConfig
 from tqdm import tqdm
 
-from quaddif.dynamics import build_dynamics
+from diffaero.dynamics import build_dynamics
 
 class Trajectory:
     def __init__(self, cfg, device: torch.device):
@@ -220,7 +220,7 @@ class TimeOptimalRacing:
         self.dynamics.step(self.rescale_action(action))
         return self.get_observation()
 
-@hydra.main(version_base=None, config_path="/home/zxh/ws/wrqws/quaddif/cfg", config_name="config_track")
+@hydra.main(version_base=None, config_path="/home/zxh/ws/wrqws/diffaero/cfg", config_name="config_track")
 def main(cfg: DictConfig):
     env = TimeOptimalRacing(cfg, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     tracker = Tracker(cfg.algo, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))

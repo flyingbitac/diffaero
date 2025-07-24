@@ -9,11 +9,11 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from quaddif.algo.buffer import RolloutBufferMASHAC, RNNStateBuffer
-from quaddif.network.agents import tensordict2tuple
-from quaddif.network.multiagents import MAStochasticActorCriticV
-from quaddif.utils.runner import timeit
-from quaddif.utils.exporter import PolicyExporter
+from diffaero.algo.buffer import RolloutBufferMASHAC, RNNStateBuffer
+from diffaero.network.agents import tensordict2tuple
+from diffaero.network.multiagents import MAStochasticActorCriticV
+from diffaero.utils.runner import timeit
+from diffaero.utils.exporter import PolicyExporter
 
 
 class MASHAC:

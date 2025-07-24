@@ -7,7 +7,7 @@ from torch import Tensor
 from torch.nn import functional as F
 from pytorch3d import transforms as T
 
-from quaddif.utils.math import mvp, rand_range
+from diffaero.utils.math import mvp, rand_range
 
 @torch.jit.script
 def are_points_inside_spheres(

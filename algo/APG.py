@@ -6,12 +6,12 @@ import torch
 from torch import Tensor
 from tensordict import TensorDict
 
-from quaddif.network.agents import (
+from diffaero.network.agents import (
     tensordict2tuple,
     DeterministicActor,
     StochasticActor)
-from quaddif.utils.runner import timeit
-from quaddif.utils.exporter import PolicyExporter
+from diffaero.utils.runner import timeit
+from diffaero.utils.exporter import PolicyExporter
 
 class APG:
     def __init__(

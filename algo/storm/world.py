@@ -9,9 +9,9 @@ sys.path.insert(2, str(folder.parent.parent.parent))
 import torch
 import torch.nn as nn
 
-from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
-from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent, ActorCriticConfig
-from quaddif.algo.dreamerv3.models.blocks import symlog
+from diffaero.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
+from diffaero.algo.dreamerv3.models.agent import ActorCriticAgent, ActorCriticConfig
+from diffaero.algo.dreamerv3.models.blocks import symlog
 from sub_models.functions_losses import symexp
 from sub_models.world_models import WorldModel, MSELoss
 

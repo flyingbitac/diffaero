@@ -9,15 +9,15 @@ import torch.nn.functional as F
 import numpy as np
 from omegaconf import DictConfig
 
-from quaddif.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid, Racing
-from quaddif.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
-from quaddif.algo.dreamerv3.models.agent import ActorCriticAgent
-from quaddif.algo.dreamerv3.models.blocks import symlog
-from quaddif.algo.dreamerv3.wmenv.world_state_env import DepthStateEnv
-from quaddif.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
-from quaddif.algo.dreamerv3.wmenv.utils import configure_opt
-from quaddif.utils.runner import timeit
-from quaddif.dynamics.pointmass import point_mass_quat, PointMassModelBase
+from diffaero.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid, Racing
+from diffaero.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
+from diffaero.algo.dreamerv3.models.agent import ActorCriticAgent
+from diffaero.algo.dreamerv3.models.blocks import symlog
+from diffaero.algo.dreamerv3.wmenv.world_state_env import DepthStateEnv
+from diffaero.algo.dreamerv3.wmenv.replaybuffer import ReplayBuffer
+from diffaero.algo.dreamerv3.wmenv.utils import configure_opt
+from diffaero.utils.runner import timeit
+from diffaero.dynamics.pointmass import point_mass_quat, PointMassModelBase
 
 @torch.no_grad()
 @timeit

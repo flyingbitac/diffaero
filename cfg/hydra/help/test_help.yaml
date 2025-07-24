@@ -1,9 +1,9 @@
-app_name: QuadDif Testing Script
+app_name: DiffAero Testing Script
 
 header: ===== ${hydra.help.app_name} =====
 
 footer: |-
-  View https://github.com/zxh0916/quaddif for more information.
+  View https://github.com/zxh0916/diffaero for more information.
   Powered by Hydra (https://hydra.cc)
   Use --hydra-help to view Hydra specific help and for Tab completion.
 

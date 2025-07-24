@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='quaddif',
+    name='diffaero',
     version='1.0',
     # packages=find_packages(),
     packages=[".", "env", "algo", "network", "utils", "script"],
@@ -34,5 +34,5 @@ setup(
     author='Xinhong Zhang',
     author_email='zxh0916@126.com',
     description='',
-    url='https://github.com/zxh0916/quaddif'
+    url='https://github.com/zxh0916/diffaero'
 )

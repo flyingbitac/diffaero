@@ -7,8 +7,8 @@ from torch import Tensor
 import torch.nn as nn
 from tensordict import TensorDict
 
-from quaddif.network import build_network
-from quaddif.network.agents import StochasticActor
+from diffaero.network import build_network
+from diffaero.network.agents import StochasticActor
 
 class MAAgentBase(nn.Module):
     def __init__(

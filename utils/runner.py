@@ -13,8 +13,8 @@ import cv2
 import imageio
 from omegaconf import DictConfig
 
-from quaddif.env.base_env import BaseEnv, BaseEnvMultiAgent
-from quaddif.utils.logger import Logger
+from diffaero.env.base_env import BaseEnv, BaseEnvMultiAgent
+from diffaero.utils.logger import Logger
 
 def display_image(obs, action, policy_info, env_info):
     # type: (torch.Tensor, torch.Tensor, dict, dict[str, torch.Tensor]) -> None
@@ -35,7 +35,7 @@ def timeit(fn):
     
     Usage:
     ```
-    from quaddif.utils.runner import timeit
+    from diffaero.utils.runner import timeit
     @timeit
     def foo():
         return

@@ -15,9 +15,9 @@ def main(cfg: DictConfig):
     import torch
     import numpy as np
 
-    from quaddif.env import build_env
-    from quaddif.algo import build_agent
-    from quaddif.utils.math import quaternion_to_euler
+    from diffaero.env import build_env
+    from diffaero.algo import build_agent
+    from diffaero.utils.math import quaternion_to_euler
 
     device_idx = cfg.device
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != -1 else "cpu"
