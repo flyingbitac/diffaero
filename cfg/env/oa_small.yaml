@@ -26,7 +26,7 @@ loss_weights:
     vel: 1.
     z: 2.
     oa: 4.
-    jerk: 0.01
+    jerk: 0.02
     pos: 5.
     collision: 0.
   quadrotor:

@@ -183,7 +183,8 @@ class ObstacleAvoidance(BaseEnv):
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             z_loss = 1 - (-(self._p[..., 2]-self.target_pos[..., 2]).abs()).exp()
 
-            jerk_loss = F.mse_loss(self.dynamics.a_thrust, self.dynamics.local2world(action), reduction="none").sum(dim=-1)
+            jerk_loss = F.mse_loss(self.dynamics.a_thrust, self.dynamics.local2world(action), reduction="none").sum(dim=-1) + \
+                        F.mse_loss(torch.norm(self.dynamics.a_thrust, dim=-1), torch.norm(action, dim=-1), reduction="none") * 5
             
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
