@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 from omegaconf import DictConfig
 
-from diffaero.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid, Racing
+from diffaero.env import PositionControl, ObstacleAvoidance, Racing
 from diffaero.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
 from diffaero.algo.dreamerv3.models.agent import ActorCriticAgent
 from diffaero.algo.dreamerv3.models.blocks import symlog
@@ -24,25 +24,19 @@ from diffaero.dynamics.pointmass import point_mass_quat, PointMassModelBase
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
     feats, rewards, ends, actions, org_samples = [], [], [], [], []
     imagine_length = cfg.imagine_length
-    latent, hidden, grid = env.make_generator_init(cfg.use_grid)
+    latent, hidden = env.make_generator_init()
 
     for i in range(imagine_length):
-        if cfg.use_grid:
-            feat = torch.cat([grid, hidden], dim=-1)
-        else:
-            feat = torch.cat([latent, hidden], dim=-1)
+        feat = torch.cat([latent, hidden], dim=-1)
         feats.append(feat)
         action, org_sample = agent.sample(feat)
-        latent, reward, end, hidden, grid = env.step(action, cfg.use_grid)
+        latent, reward, end, hidden = env.step(action)
         rewards.append(reward)
         actions.append(action)
         org_samples.append(org_sample)
         ends.append(end)
 
-    if cfg.use_grid:
-        feat = torch.cat([grid, hidden], dim=-1)
-    else:
-        feat = torch.cat([latent, hidden], dim=-1)
+    feat = torch.cat([latent, hidden], dim=-1)
     feats.append(feat)
     feats = torch.stack(feats, dim=1)
     actions = torch.stack(actions, dim=1)
@@ -71,17 +65,15 @@ def train_worldmodel(
 ):
     with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=training_hyper.use_amp):
         for _ in range(training_hyper.worldmodel_update_freq):
-            sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid, sample_visible_map = \
+            sample_state, sample_action, sample_reward, sample_termination, sample_perception = \
                 replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
-            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision = \
+            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss = \
                 world_model.compute_loss(
                     sample_state,
                     sample_perception,
                     sample_action,
                     sample_reward,
                     sample_termination,
-                    sample_grid,
-                    sample_visible_map
                 )
     
     if scaler is not None:
@@ -99,9 +91,6 @@ def train_worldmodel(
         'WorldModel/grad_norm':grad_norm.item(),
         'WorldModel/state_rew_loss':rew_loss.item(),
         'WorldModel/state_end_loss':end_loss.item(),
-        'WorldModel/state_grid_loss':grid_loss.item(),
-        'WorldModel/state_grid_acc':grid_acc.item(),
-        'WorldModel/state_grid_precision':grid_precision.item(),
     }
 
     return world_info
@@ -112,7 +101,7 @@ class World_Agent:
         self.n_envs = env.n_envs
         device_idx = device.index
         if isinstance(env.dynamics, PointMassModelBase) and not isinstance(env, Racing):
-            state_dim = 10
+            state_dim = 9
         else:
             state_dim = 13
         world_agent_cfg = cfg
@@ -126,13 +115,9 @@ class World_Agent:
         statemodelcfg = getattr(world_agent_cfg, "state_predictor").state_model
         statemodelcfg.state_dim = state_dim
         actorcriticcfg = getattr(world_agent_cfg, "actor_critic").model
-        if world_agent_cfg.actor_critic.training.use_grid:
-            actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + math.prod(cfg.env.grid.n_points)
-            self.deploy_grid = True
-        else:
-            actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
-            self.deploy_grid = False
+        actorcriticcfg.feat_dim = statemodelcfg.hidden_dim + statemodelcfg.latent_dim
         actorcriticcfg.hidden_dim = statemodelcfg.hidden_dim
+        
         buffercfg = getattr(world_agent_cfg, "replaybuffer")
         buffercfg.state_dim = state_dim
         worldcfg = getattr(world_agent_cfg, "world_state_env")
@@ -144,11 +129,6 @@ class World_Agent:
             buffercfg.use_perception = False
             statemodelcfg.state_dim = state_dim
             world_agent_cfg.replaybuffer.state_dim = state_dim
-        if isinstance(env, ObstacleAvoidanceGrid):
-            statemodelcfg.grid_dim = env.n_grid_points
-            buffercfg.grid_dim = env.n_grid_points
-            statemodelcfg.use_grid = True
-            buffercfg.use_grid = True
         
         self.agent = ActorCriticAgent(actorcriticcfg,env).to(device)
         self.state_model = DepthStateModel(statemodelcfg).to(device)
@@ -163,8 +143,6 @@ class World_Agent:
 
         self.num_steps = 0
         self.hidden = torch.zeros(cfg.n_envs, statemodelcfg.hidden_dim, device=device)
-        if self.deploy_grid:
-            self.grid = torch.zeros(cfg.n_envs, math.prod(cfg.env.grid.n_points), device=device)
 
     @torch.no_grad()
     def act(self, obs, test=False):
@@ -175,52 +153,30 @@ class World_Agent:
         if self.world_agent_cfg.common.use_symlog:
             state = symlog(state)
         latent = self.state_model.sample_with_post(state, perception, self.hidden, True)[0].flatten(1)
-        if self.deploy_grid:
-            action = self.agent.sample(torch.cat([self.grid, self.hidden], dim=-1), test)[0]
-        else:
-            action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1), test)[0]
+        action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1), test)[0]
         prior_sample, _, self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden, True)
-        if self.deploy_grid:
-            self.grid = self.state_model.grid_predictor(prior_sample.flatten(1), self.hidden)>0
-            self.grid = self.grid.float()
         return action, None
 
     @timeit
     def step(self, cfg, env, obs, on_step_cb):
         policy_info = {}
-        if self.num_steps%1000==0 and hasattr(env, 'visualize_grid') and hasattr(self, 'grid'):
-            imagine_grid = env.visualize_grid(self.grid[0])
-            real_grid = env.visualize_grid(obs['grid'][0])
-            logger_grid = np.stack([imagine_grid, real_grid], axis=0)
-            policy_info['grid'] = logger_grid
-            
+
         with torch.no_grad():
             if not isinstance(obs, torch.Tensor):
                 state, perception = obs['state'], obs['perception'].unsqueeze(1)
-                if 'grid' in obs:
-                    grid = obs['grid']
-                    visible_map = obs["visible_map"]
-                else:
-                    grid, visible_map = None, None
             else:
-                state, perception, grid, visible_map = obs, None, None, None
+                state, perception = obs, None
             if self.world_agent_cfg.common.use_symlog:
                 state = symlog(state)
             if self.replaybuffer.ready() or self.world_agent_cfg.common.checkpoint_path is not None:
                 latent = self.state_model.sample_with_post(state, perception, self.hidden)[0].flatten(1)
-                if self.deploy_grid:
-                    action = self.agent.sample(torch.cat([self.grid, self.hidden], dim=-1))[0]
-                else:
-                    action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1))[0]
+                action = self.agent.sample(torch.cat([latent, self.hidden], dim=-1))[0]
                 prior_sample, _, self.hidden = self.state_model.sample_with_prior(latent, action, self.hidden)
-                if self.deploy_grid:
-                    self.grid = self.state_model.grid_predictor(prior_sample.flatten(1), self.hidden)>0
-                    self.grid = self.grid.float()
             else:
                 action = torch.randn(self.n_envs,3,device=state.device)
             next_obs, (loss, rewards), terminated, env_info = env.step(env.rescale_action(action))
             rewards = rewards*10.
-            self.replaybuffer.append(state, action, rewards, terminated, perception, grid, visible_map)
+            self.replaybuffer.append(state, action, rewards, terminated, perception)
             
             if terminated.any():
                 zeros = torch.zeros_like(self.hidden)
@@ -257,11 +213,10 @@ class World_Agent:
     def export(
         self,
         path: str,
-        export_jit,
-        export_onnx,
+        export_cfg: DictConfig,
         verbose=False,
     ):
-        WorldExporter(self).export(path, export_jit, export_onnx, verbose)
+        WorldExporter(self).export(path, export_cfg, verbose)
 
 class WorldExporter(nn.Module):
     def __init__(self, agent):
@@ -279,10 +234,11 @@ class WorldExporter(nn.Module):
         self.actor = deepcopy(agent.agent.actor_mean_std)
         
         self.named_inputs = [
-            ("state", torch.rand(1, 10)),
-            ("orientation", torch.rand(1, 3)),
-            ("min_action", torch.rand(1, 3)),
-            ("max_action", torch.rand(1, 3))
+            ("state", torch.zeros(1, 9)),
+            ("orientation", torch.zeros(1, 3)),
+            ("Rz", torch.zeros(1, 3, 3)),
+            ("min_action", torch.zeros(1, 3)),
+            ("max_action", torch.zeros(1, 3)),
         ]
         if hasattr(agent.state_model, 'image_encoder'):
             self.named_inputs.insert(1, ("perception", torch.rand(1, 9, 16)))
@@ -296,6 +252,9 @@ class WorldExporter(nn.Module):
         # self.hidden_state = self.get_buffer("hidden_state")
         self.is_recurrent = True
         self.hidden_shape = (1, agent.state_model.cfg.hidden_dim)
+        
+        self.obs_frame: str
+        self.action_frame: str
         
         if self.is_recurrent:
             self.named_inputs.append(("hidden_in", torch.rand(self.hidden_shape)))
@@ -318,7 +277,7 @@ class WorldExporter(nn.Module):
         hidden = self.seq_model(state_act, hidden)
         return hidden
 
-    def forward_perc_prop(self, state, perception, orientation, min_action, max_action, hidden):
+    def forward_perc_prop(self, state, perception, orientation, Rz, min_action, max_action, hidden):
         with torch.no_grad():
             if self.use_symlog:
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
@@ -330,10 +289,10 @@ class WorldExporter(nn.Module):
             action, _ = torch.chunk(mean_std, 2, dim=-1)
             action = torch.tanh(action)
             hidden = self.sample_with_prior(latent, action, hidden)
-            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
+            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation, Rz)
         return action, quat_xyzw, acc_norm, hidden
             
-    def forward_prop(self,state, orientation, min_action, max_action, hidden):
+    def forward_prop(self, state, orientation, Rz, min_action, max_action, hidden):
         with torch.no_grad():
             if self.use_symlog:
                 state = torch.sign(state) * torch.log(1 + torch.abs(state))
@@ -343,14 +302,29 @@ class WorldExporter(nn.Module):
             action, _ = torch.chunk(mean_std, 2, dim=-1)
             action = torch.tanh(action)
             hidden = self.sample_with_prior(latent,action,hidden)
-            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation)
+            action, quat_xyzw, acc_norm = self.post_process(action, min_action, max_action, orientation, Rz)
         return action, quat_xyzw, acc_norm, hidden  
     
-    def post_process(self, action, min_action, max_action, orientation):
-        action = (action * 0.5 + 0.5) * (max_action - min_action) + min_action
+    def post_process_local(self, raw_action, min_action, max_action, orientation, Rz):
+        action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
+        acc_cmd = torch.matmul(Rz, action.unsqueeze(-1)).squeeze(-1)
+        quat_xyzw = point_mass_quat(acc_cmd, orientation)
+        acc_norm = acc_cmd.norm(p=2, dim=-1)
+        return acc_cmd, quat_xyzw, acc_norm
+
+    def post_process_world(self, raw_action, min_action, max_action, orientation, Rz):
+        action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
         quat_xyzw = point_mass_quat(action, orientation)
         acc_norm = action.norm(p=2, dim=-1)
         return action, quat_xyzw, acc_norm
+    
+    def post_process(self, raw_action, min_action, max_action, orientation, Rz):
+        if self.action_frame == "local":
+            return self.post_process_local(raw_action, min_action, max_action, orientation, Rz)
+        elif self.action_frame == "world":
+            return self.post_process_world(raw_action, min_action, max_action, orientation, Rz)
+        else:
+            raise ValueError(f"Unknown action frame: {self.action_frame}")
     
     def export_jit(self, path: str, verbose=False):
         traced_script_module = torch.jit.script(self)
@@ -373,9 +347,22 @@ class WorldExporter(nn.Module):
             output_names=self.output_names
         )
         print(f"The checkpoint is compiled and exported to {export_path}.")
-    
-    def export(self, path: str, verbose=False, export_onnx=False, export_pnnx=False):
-        if export_onnx:
-            self.export_onnx(path)
-        else:
+        
+    def export(
+        self,
+        path: str,
+        export_cfg: DictConfig,
+        verbose=False,
+    ):
+        self.obs_frame = export_cfg.obs_frame
+        self.action_frame = export_cfg.action_frame
+        if export_cfg.jit:
             self.export_jit(path, verbose)
+        if export_cfg.onnx:
+            self.export_onnx(path)
+    
+    # def export(self, path: str, verbose=False, export_onnx=False, export_pnnx=False):
+    #     if export_onnx:
+    #         self.export_onnx(path)
+    #     else:
+    #         self.export_jit(path, verbose)

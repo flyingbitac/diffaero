@@ -26,14 +26,12 @@ replaybuffer:
   perception_height: 9
   state_dim: 13
   action_dim: 3
-  grid_dim: 4000
   num_envs: 64
   max_length: 1048576
   warmup_length: 5000
   store_on_gpu: True
   device: "cuda:1"
   use_perception: True
-  use_grid: False
 
 state_predictor:
   state_model:
@@ -49,9 +47,7 @@ state_predictor:
     use_simnorm: False
     only_state: False
     img_recon_loss_weight: 1.
-    grid_loss_pos_weight: 30
-    use_grid: False
-    grid_dim: 4000
+    end_loss_pos_weight: 30
     enable_rec: True
 
   training:
@@ -86,7 +82,6 @@ actor_critic:
     imagine_length: 16
     use_states: False
     scale_rewards: False
-    use_grid: False
 
 training:
   max_grad_norm: 1.0 

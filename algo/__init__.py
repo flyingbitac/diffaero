@@ -8,8 +8,6 @@ from diffaero.algo.APG import APG, APG_stochastic
 from diffaero.algo.SHAC import SHAC, SHAC_Q, SHAC_PPO, SHAC_RPL, SHA2C
 from diffaero.algo.MASHAC import MASHAC
 from diffaero.algo.dreamerv3 import World_Agent
-from diffaero.algo.GRID import GRID
-from diffaero.algo.grid_wm import GRIDWM
 from diffaero.algo.YOPO import YOPO
 
 AGENT_ALIAS = {
@@ -25,8 +23,6 @@ AGENT_ALIAS = {
     "apg": APG,
     "apg_sto": APG_stochastic,
     "world": World_Agent,
-    "grid": GRID,
-    "grid_wm": GRIDWM,
     "yopo": YOPO,
 }
 

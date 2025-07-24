@@ -38,30 +38,30 @@ loss_weights:
 
 reward_weights:
   # for Reinforcement Learning
-  # constant: 1.
-  # pointmass:
-  #   vel: 0.06
-  #   oa: 0.6
-  #   jerk: 0.0005
-  #   pos: 0.5
-  #   arrive: 0.
-  #   collision: 5.
-
-  # for SHA2C
   constant: 1.
   pointmass:
-    vel: 0.
-    oa: 0.
-    jerk: 0.001
-    pos: 0.
-    arrive: 1.
-    collision: 50.
-  quadrotor:
-    vel: 1.
-    oa: 1.
-    jerk: 1.
-    pos: 5.
-    collision: 50.
+    vel: 0.06
+    oa: 0.6
+    jerk: 0.0005
+    pos: 0.5
+    arrive: 0.
+    collision: 5.
+
+  # for SHA2C
+  # constant: 1.
+  # pointmass:
+  #   vel: 0.
+  #   oa: 0.
+  #   jerk: 0.001
+  #   pos: 0.
+  #   arrive: 1.
+  #   collision: 50.
+  # quadrotor:
+  #   vel: 1.
+  #   oa: 1.
+  #   jerk: 1.
+  #   pos: 5.
+  #   collision: 50.
 
 defaults:
   - render: oa_render

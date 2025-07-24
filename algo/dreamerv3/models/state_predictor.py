@@ -23,12 +23,10 @@ class DepthStateModelCfg:
     latent_dim: int
     categoricals: int
     num_classes: int
-    grid_loss_pos_weight: float
+    end_loss_pos_weight: float
     img_recon_loss_weight: float
-    grid_dim: int=4000
     use_simnorm: bool=False
     only_state: bool=False
-    use_grid: bool=False
     enable_rec: bool=True
 
 @dataclass
@@ -161,17 +159,6 @@ class EndDecoder(nn.Module):
         end = self.head(feat)
         return end.squeeze(-1)
 
-class GridDecoder(nn.Module):
-    def __init__(self, hidden_dim, latent_dim, grid_dim) -> None:
-        super().__init__()
-        self.backbone = MLP(hidden_dim+latent_dim, hidden_dim, hidden_dim, 2, 'SiLU', 'LayerNorm', bias=False)
-        self.head = nn.Linear(hidden_dim, grid_dim)
-    
-    def forward(self, feat, hidden):
-        feat = self.backbone(torch.cat([feat,hidden],dim=-1))
-        grid = self.head(feat)
-        return grid
-
 class MSELoss(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -191,14 +178,12 @@ class DepthStateModel(nn.Module):
         self.mse_loss = MSELoss()
         self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
         # self.endloss = nn.BCEWithLogitsLoss()
-        self.endloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(cfg.grid_loss_pos_weight))
+        self.endloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(cfg.end_loss_pos_weight))
 
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         if not cfg.only_state:
             self.image_encoder = ImageEncoder(in_channels=1, stem_channels=16, image_width=cfg.image_width,
                                               image_height=cfg.image_height)
-            # self.image_decoder = ImageDecoder(feat_dim=cfg.latent_dim+cfg.hidden_dim,stem_channels=16,
-            #                                 last_channels=self.image_encoder.last_channels,final_image_width=4)
             if cfg.enable_rec:
                 self.image_decoder = ImageDecoderMLP(feat_dim=cfg.latent_dim+cfg.hidden_dim,hidden_dim=cfg.hidden_dim,
                                                     image_width=cfg.image_width,image_height=cfg.image_height)
@@ -231,14 +216,11 @@ class DepthStateModel(nn.Module):
 
         self.reward_predictor = RewardDecoder(cfg.num_classes,cfg.hidden_dim,cfg.latent_dim)
         self.end_predictor = EndDecoder(cfg.hidden_dim,cfg.latent_dim)
-        if cfg.use_grid:
-            self.grid_predictor = GridDecoder(cfg.hidden_dim,cfg.latent_dim,cfg.grid_dim)
-    
+
     def straight_with_gradient(self,logits:Tensor):
         probs = F.softmax(logits,dim=-1)
         dist = OneHotCategorical(probs=probs)
         sample = dist.sample()
-        # sample = onehotsample(probs=probs)
         sample_with_gradient = sample + probs - probs.detach()
         return sample_with_gradient
     
@@ -304,7 +286,7 @@ class DepthStateModel(nn.Module):
             return post_sample,post_logits
     
     @torch.no_grad()
-    def predict_next(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None,use_grid:bool=False):
+    def predict_next(self,latent:Tensor,act:Tensor,hidden:Optional[Tensor]=None):
         assert latent.ndim==act.ndim==2
         prior_sample,_,hidden = self.sample_with_prior(latent,act,hidden)
         flattend_prior_sample = self.flatten(prior_sample)
@@ -312,13 +294,7 @@ class DepthStateModel(nn.Module):
         end_logit = self.end_predictor(flattend_prior_sample,hidden)
         pred_reward = self.symlogtwohotloss.decode(reward_logit)
         pred_end = end_logit>0
-        if use_grid and hasattr(self, 'grid_predictor'):
-            grid_logits = self.grid_predictor(flattend_prior_sample,hidden)
-            grid_logits = grid_logits>0
-            grid_logits = grid_logits.float()
-        else:
-            grid_logits = None
-        return prior_sample,pred_reward,pred_end,hidden,grid_logits
+        return prior_sample,pred_reward,pred_end,hidden
 
     @timeit
     def compute_loss(
@@ -328,7 +304,6 @@ class DepthStateModel(nn.Module):
         actions: Tensor,
         rewards: Tensor,
         terminations: Tensor,
-        grid: Optional[Tensor] = None,
         visible_map: Optional[Tensor] = None,
     ):
         b, l, d = states.shape
@@ -339,7 +314,6 @@ class DepthStateModel(nn.Module):
         prior_logits = []
         reward_logits = []
         end_logits = []
-        grid_logits = []
         rec_states = []
         rec_images = []
 
@@ -355,9 +329,6 @@ class DepthStateModel(nn.Module):
             flattened_prior_sample = self.flatten(prior_sample)
             reward_logit = self.reward_predictor(flattened_prior_sample,hidden)
             end_logit = self.end_predictor(flattened_prior_sample,hidden)
-            if hasattr(self, 'grid_predictor'):
-                grid_logit = self.grid_predictor(flattened_prior_sample,hidden)
-                grid_logits.append(grid_logit)
 
             rec_states.append(rec_state)
             rec_images.append(rec_image)
@@ -378,19 +349,14 @@ class DepthStateModel(nn.Module):
         dyn_loss,_ = self.kl_loss(post_logits[:,1:].detach(),prior_logits[:,:-1])
         rew_loss = self.symlogtwohotloss(reward_logits,rewards)
         end_loss = self.endloss(end_logits,terminations)
-        if hasattr(self, 'grid_predictor'):
-            grid_logits = torch.stack(grid_logits,dim=1)
-            grid_loss = self.endloss(grid_logits,grid.float())
-        else:
-            grid_loss, grid_acc, grid_precision = torch.zeros(()), torch.zeros(()), torch.zeros(())
             
         if rec_image!=None:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean() + self.mse_loss(rec_images,depth_images)
         else:
             rec_loss = torch.sum((rec_states-states)**2,dim=-1).mean()
-        total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss + grid_loss
+        total_loss = rec_loss + 0.5*dyn_loss + 0.1*rep_loss + rew_loss + end_loss
         
-        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss, grid_acc, grid_precision
+        return total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss
 
 if __name__=='__main__':
 
