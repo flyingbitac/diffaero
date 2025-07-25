@@ -303,8 +303,7 @@ class TestRunner:
                 os.makedirs(ckpt_path)
             self.agent.export(
                 path=ckpt_path,
-                export_jit=self.cfg.export.jit,
-                export_onnx=self.cfg.export.onnx,
+                export_cfg=self.cfg.export,
                 verbose=True
             )
         if self.env.renderer is not None:
