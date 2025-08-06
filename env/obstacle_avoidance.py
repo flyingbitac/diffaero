@@ -391,7 +391,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         grid_xyz = self.p.unsqueeze(1) + self.local_grid_centers # [n_envs, n_points, 3]
         occupancy_map = self.obstacle_manager.are_points_inside_obstacles(grid_xyz) # [n_envs, n_points]
         if self.z_ground_plane is not None:
-            occupancy_ground_plane = ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane)
+            occupancy_ground_plane = ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane.unsqueeze(-1))
             occupancy_map = torch.logical_or(occupancy_map, occupancy_ground_plane)
         return occupancy_map
     
