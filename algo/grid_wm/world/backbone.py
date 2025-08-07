@@ -20,6 +20,7 @@ from .module import (
 from .function import *
 from diffaero.utils.nn import mlp
 from diffaero.utils.runner import timeit
+from diffaero.utils.logger import Logger
 
 class RSSM(nn.Module):
     def __init__(
@@ -95,6 +96,7 @@ class WorldModel(nn.Module):
         super().__init__()
         self.l_rollout: int = cfg.l_rollout
         self.recon_image: bool = cfg.decoder.image.enable
+        self.recon_state: bool = cfg.decoder.state.enable
         self.recon_grid: bool = cfg.decoder.grid.enable
         self.recon_reward: bool = cfg.decoder.reward.enable
         self.rssm_feature_dim: int = cfg.rssm.deter + cfg.rssm.stoch * cfg.rssm.classes
@@ -110,10 +112,10 @@ class WorldModel(nn.Module):
         fmap_final_shape = self.image_encoder.final_shape
         
         # state encoder
-        self.encode_state = state_enc_cfg.encode_target_vel or state_enc_cfg.encode_quat or state_enc_cfg.encode_vel
+        self.encode_state: bool = not cfg.odom_free
         if self.encode_state:
             state_embed_dim = state_enc_cfg.embedding_dim
-            self.state_encoder = StateEncoder(state_enc_cfg)
+            self.state_encoder = StateEncoder(obs_dim[0]-3, state_enc_cfg)
         else:
             state_embed_dim = 0
         
@@ -139,16 +141,14 @@ class WorldModel(nn.Module):
                     act=image_dec_cfg.act,
                     norm=image_dec_cfg.norm)
         # state decoder
-        self.recon_state = state_dec_cfg.decode_target_vel or state_dec_cfg.decode_quat or state_dec_cfg.decode_vel
         if self.recon_state:
-            self.state_decoder = StateDecoder(obs_dim[0], rssm_cfg, state_dec_cfg)
-        # grid deocder
+            self.state_decoder = StateDecoder(obs_dim[0], rssm_cfg)
+        # grid decoder
         if self.recon_grid:
             if grid_dec_cfg.use_mlp:
                 self.grid_decoder = self._build_mlp(rssm_cfg, output_dim=math.prod(grid_cfg.n_points))
             else:
                 self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
-        
         # reward deocder
         if self.recon_reward:
             self.reward_decoder = self._build_mlp(rssm_cfg, output_dim=255)
@@ -345,7 +345,6 @@ class WorldModelTesttime(nn.Module):
         state_enc_cfg = cfg.encoder.state
         rssm_cfg = cfg.rssm
 
-        self.encode_state = state_enc_cfg.encode_target_vel or state_enc_cfg.encode_quat or state_enc_cfg.encode_vel
         self.deter_dim = rssm_cfg.deter
         self.latent_dim = rssm_cfg.stoch * rssm_cfg.classes
         
@@ -354,10 +353,10 @@ class WorldModelTesttime(nn.Module):
         fmap_final_shape = self.image_encoder.final_shape
         
         # state encoder
-        self.encode_state = state_enc_cfg.encode_target_vel or state_enc_cfg.encode_quat or state_enc_cfg.encode_vel
+        self.encode_state: bool = not cfg.odom_free
         if self.encode_state:
             state_embed_dim = state_enc_cfg.embedding_dim
-            self.state_encoder = StateEncoder(state_enc_cfg)
+            self.state_encoder = StateEncoder(obs_dim[0]-3, state_enc_cfg)
         else:
             state_embed_dim = 0
         

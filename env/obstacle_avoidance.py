@@ -340,27 +340,26 @@ class ObstacleAvoidance(BaseEnv):
         return (self.progress >= self.max_steps) | out_of_bound
 
 class ObstacleAvoidanceGrid(ObstacleAvoidance):
-    def __init__(self, cfg: DictConfig, device:torch.device, test:bool=False):
+    def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
+        assert cfg.grid.name != "none", "ObstacleAvoidanceGrid requires a grid configuration."
         assert isinstance(self.sensor, RayCastingSensorBase), "This environment only supports ray casting-based sensors."
         self.n_grid_points = math.prod(cfg.grid.n_points)
         
         self.x_min, self.x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
         self.y_min, self.y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
         self.z_min, self.z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
-        assert (
-            ((self.x_max - self.x_min) / cfg.grid.n_points[0]) == \
-            ((self.y_max - self.y_min) / cfg.grid.n_points[1]) == \
+        xyz_cube_size = (
+            ((self.x_max - self.x_min) / cfg.grid.n_points[0]),
+            ((self.y_max - self.y_min) / cfg.grid.n_points[1]),
             ((self.z_max - self.z_min) / cfg.grid.n_points[2])
         )
-        self.cube_size = min(
-            (cfg.grid.x_max - cfg.grid.x_min) / cfg.grid.n_points[0],
-            (cfg.grid.y_max - cfg.grid.y_min) / cfg.grid.n_points[1],
-            (cfg.grid.z_max - cfg.grid.z_min) / cfg.grid.n_points[2],
-        )
-        x_range = torch.linspace(cfg.grid.x_min, cfg.grid.x_max - self.cube_size, cfg.grid.n_points[0], device=self.device) + self.cube_size / 2
-        y_range = torch.linspace(cfg.grid.y_min, cfg.grid.y_max - self.cube_size, cfg.grid.n_points[1], device=self.device) + self.cube_size / 2
-        z_range = torch.linspace(cfg.grid.z_min, cfg.grid.z_max - self.cube_size, cfg.grid.n_points[2], device=self.device) + self.cube_size / 2
+        assert min(xyz_cube_size) == max(xyz_cube_size), "Grid cube size must be equal in all dimensions."
+        self.cube_size = min(xyz_cube_size)
+
+        x_range = torch.linspace(self.x_min, self.x_max - self.cube_size, cfg.grid.n_points[0], device=self.device) + self.cube_size / 2
+        y_range = torch.linspace(self.y_min, self.y_max - self.cube_size, cfg.grid.n_points[1], device=self.device) + self.cube_size / 2
+        z_range = torch.linspace(self.z_min, self.z_max - self.cube_size, cfg.grid.n_points[2], device=self.device) + self.cube_size / 2
         grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1) # [x_points, y_points, z_points, 3]
         self.local_grid_centers = grid_xyz_range.reshape(1, -1, 3) # [1, n_points, 3]
         n_segments = math.ceil(self.sensor.max_dist / self.cube_size)
@@ -369,22 +368,22 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         self.prev_visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
         self.visible_points = torch.zeros(self.n_envs, self.n_grid_points, 3, device=self.device)
         
-        self.vis = o3d.visualization.Visualizer()
-        self.vis.create_window(width=270, height=270, left=50, top=350, visible=self.renderer is not None)
+    #     self.vis = o3d.visualization.Visualizer()
+    #     self.vis.create_window(width=270, height=270, left=50, top=350, visible=self.renderer is not None)
     
-    def visualize_grid(self, grid):
-        xyz = self.local_grid_centers.squeeze(0)
-        points = xyz[grid.flatten()].cpu().numpy()
-        pcd_o3d = o3d.geometry.PointCloud()
-        pcd_o3d.points = o3d.utility.Vector3dVector(points)
-        # o3d.visualization.draw_geometries([pcd_o3d])
+    # def visualize_grid(self, grid):
+    #     xyz = self.local_grid_centers.squeeze(0)
+    #     points = xyz[grid.flatten()].cpu().numpy()
+    #     pcd_o3d = o3d.geometry.PointCloud()
+    #     pcd_o3d.points = o3d.utility.Vector3dVector(points)
+    #     # o3d.visualization.draw_geometries([pcd_o3d])
 
-        self.vis.clear_geometries()
-        self.vis.add_geometry(pcd_o3d)
-        self.vis.poll_events()
-        self.vis.update_renderer()
+    #     self.vis.clear_geometries()
+    #     self.vis.add_geometry(pcd_o3d)
+    #     self.vis.poll_events()
+    #     self.vis.update_renderer()
         
-        return np.asarray(self.vis.capture_screen_float_buffer(do_render=self.renderer is not None))
+    #     return np.asarray(self.vis.capture_screen_float_buffer(do_render=self.renderer is not None))
     
     @timeit
     def get_occupancy_map(self): 
@@ -392,7 +391,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         grid_xyz = self.p.unsqueeze(1) + self.local_grid_centers # [n_envs, n_points, 3]
         occupancy_map = self.obstacle_manager.are_points_inside_obstacles(grid_xyz) # [n_envs, n_points]
         if self.z_ground_plane is not None:
-            occupancy_ground_plane = ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane)
+            occupancy_ground_plane = ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane.unsqueeze(1))
             occupancy_map = torch.logical_or(occupancy_map, occupancy_ground_plane)
         return occupancy_map
     
@@ -400,7 +399,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def get_visibility_map(self):
         # get visiability map
         N, H, W = self.sensor_tensor.shape
-        start = self.p.unsqueeze(1).expand(-1, H*W, -1)
+        start = self.p.unsqueeze(1).expand(-1, H*W, -1) # [n_envs, n_rays, 3]
         contact_point = self.sensor.get_contact_point( # [n_envs, n_rays, 3]
             depth=self.sensor_tensor,
             start=start,
@@ -409,6 +408,8 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         x_min, x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
         y_min, y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
         z_min, z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
+        # grid_min = torch.tensor([[[x_min, y_min, z_min]]], device=self.device).expand(self.n_envs, self.n_grid_points, -1) # [n_envs, n_points, 3]
+        # grid_max = torch.tensor([[[x_max, y_max, z_max]]], device=self.device).expand(self.n_envs, self.n_grid_points, -1) # [n_envs, n_points, 3]
         n_x, n_y, n_z = self.cfg.grid.n_points
         
         # 1. check if previous visible points are inside the current range of the grid

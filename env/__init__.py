@@ -14,10 +14,12 @@ ENV_ALIAS = {
     "multi_agent_position_control": MultiAgentPositionControl,
     "obstacle_avoidance": ObstacleAvoidance,
     "obstacle_avoidance_yopo": ObstacleAvoidanceYOPO,
-    "obstacle_avoidance_grid": ObstacleAvoidanceGrid,
     "racing": Racing
 }
 
 def build_env(cfg, device):
     # type: (DictConfig, torch.device) -> Union[PositionControl, MultiAgentPositionControl, ObstacleAvoidance, ObstacleAvoidanceYOPO]
-    return ENV_ALIAS[cfg.name](cfg, device)
+    env_class = ENV_ALIAS[cfg.name]
+    if env_class == ObstacleAvoidance and cfg.enable_grid:
+        env_class = ObstacleAvoidanceGrid
+    return env_class(cfg, device)

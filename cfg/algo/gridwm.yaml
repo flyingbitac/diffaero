@@ -2,15 +2,13 @@ name: grid_wm
 
 l_rollout: 32
 
+odom_free: False
+
 actor:
   network:
     name: mlp
     hidden_dim: [256, 128]
   
-  input_target_vel: True
-  input_quat: False
-  input_vel: False
-
   lr: 1e-3
   max_grad_norm: 1.
   entropy_weight: 0.03
@@ -18,6 +16,7 @@ actor:
 wm:
   compile: True
   l_rollout: ${algo.l_rollout}
+  odom_free: ${algo.odom_free}
   encoder:
     image:
       channels: [16, 32]
@@ -27,10 +26,6 @@ wm:
       norm: BatchNorm2d
 
     state:
-      encode_target_vel: False
-      encode_quat: False
-      encode_vel: False
-      
       embedding_dim: 64
       hidden_units: [64]
       act: SiLU
@@ -47,7 +42,7 @@ wm:
 
   decoder:
     image:
-      enable: False
+      enable: True
       use_mlp: True
       cnndecoder:
         channels: [64, 32, 16, 3]
@@ -62,10 +57,7 @@ wm:
         norm: LayerNorm
     
     state:
-      decode_target_vel: False
-      decode_quat: True
-      decode_vel: True
-      decode_vel_in_body_frame: False
+      enable: True
     
     grid: 
       enable: True

@@ -1,5 +1,5 @@
 import math
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 from omegaconf import DictConfig
 import torch
@@ -48,7 +48,7 @@ class MiniGru(nn.Module):
 
 
 class ImageEncoder(nn.Module):
-    def __init__(self, image_shape:List):
+    def __init__(self, image_shape: Tuple[int, int]):
         super().__init__()
         self.encoder = CNNBackbone([0, image_shape])
         self.final_shape = self.encoder.out_dim
@@ -183,39 +183,17 @@ class GridDecoder(nn.Module):
 
 
 class StateEncoder(nn.Module):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, input_dim: int, cfg: DictConfig):
         super().__init__()
-        self.encode_target_vel: bool = cfg.encode_target_vel
-        self.encode_quat: bool = cfg.encode_quat
-        self.encode_vel: bool = cfg.encode_vel
-        assert self.encode_target_vel or self.encode_quat or self.encode_vel
-        input_dim = (
-            self.encode_target_vel * 3 +
-            self.encode_quat * 4 +
-            self.encode_vel * 3
-        )
-        self.state_encoder = mlp(input_dim, cfg.hidden_units, cfg.embedding_dim)
+        self.net = mlp(input_dim, cfg.hidden_units, cfg.embedding_dim)
     
     def forward(self, x: Tensor) -> Tensor:
-        target_vel, quat, vel = x[..., 0:3], x[..., 3:7], x[..., 7:10]
-        inputs = []
-        if self.encode_target_vel:
-            inputs.append(target_vel)
-        if self.encode_quat:
-            inputs.append(quat)
-        if self.encode_vel:
-            inputs.append(vel)
-        return self.state_encoder(torch.cat(inputs, dim=-1))
+        return self.net(x[..., 3:])
 
 
 class StateDecoder(nn.Module):
-    def __init__(self, state_dim: int, rssm_cfg: DictConfig, cfg: DictConfig):
+    def __init__(self, state_dim: int, rssm_cfg: DictConfig):
         super().__init__()
-        self.decode_target_vel: bool = cfg.decode_target_vel
-        self.decode_quat: bool = cfg.decode_quat
-        self.decode_vel: bool = cfg.decode_vel
-        self.decode_vel_in_body_frame: bool = cfg.decode_vel_in_body_frame
-        assert self.decode_target_vel or self.decode_quat or self.decode_vel
         self.state_decoder = mlp(
             in_dim=rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes,
             mlp_dims=[rssm_cfg.hidden, rssm_cfg.hidden],
@@ -227,16 +205,7 @@ class StateDecoder(nn.Module):
 
     def compute_loss(self, inputs: Tensor, targets: Tensor) -> Tensor:
         preds = self.forward(inputs)
-        target_vel, quat, vel_w = targets[..., 0:3], targets[..., 3:7], targets[..., 7:10]
-        pred_target_vel, pred_quat, pred_vel = preds[..., 0:3], preds[..., 3:7], preds[..., 7:10]
-        loss = 0.
-        if self.decode_target_vel:
-            loss = loss + F.mse_loss(pred_target_vel, target_vel)
-        if self.decode_quat:
-            loss = loss + F.mse_loss(pred_quat, quat)
-        if self.decode_vel:
-            vel_target = quat_rotate(quat, vel_w) if self.decode_vel_in_body_frame else vel_w
-            loss = loss + F.mse_loss(pred_vel, vel_target)
+        loss = F.mse_loss(preds, targets)
         return loss
 
 class Encoder(nn.Module):

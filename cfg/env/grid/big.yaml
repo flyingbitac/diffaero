@@ -1,0 +1,9 @@
+name: grid_big
+
+x_min: -6.
+x_max:  6.
+y_min: -6.
+y_max:  6.
+z_min: -3.
+z_max:  3.
+n_points: [20, 20, 10]

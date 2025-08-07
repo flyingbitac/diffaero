@@ -52,9 +52,11 @@ reward_weights:
     pos: 5.
     collision: 50.
 
+enable_grid: False
 defaults:
   - render: oa_render
   - randomizer: default_randomizer
   - imu: default_imu
   - obstacles: small_room
+  - grid: small
   - _self_
