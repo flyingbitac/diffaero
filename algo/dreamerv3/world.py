@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 from omegaconf import DictConfig
 
-from diffaero.env import PositionControl, ObstacleAvoidance, Racing
+from diffaero.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid, Racing
 from diffaero.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
 from diffaero.algo.dreamerv3.models.agent import ActorCriticAgent
 from diffaero.algo.dreamerv3.models.blocks import symlog
@@ -22,35 +22,44 @@ from diffaero.dynamics.pointmass import point_mass_quat, PointMassModelBase
 @torch.no_grad()
 @timeit
 def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig):
-    feats, rewards, ends, actions, org_samples = [], [], [], [], []
+    latents, hiddens, rewards, ends, actions, org_samples = [], [], [], [], [], []
     imagine_length = cfg.imagine_length
     latent, hidden = env.make_generator_init()
 
     for i in range(imagine_length):
-        feat = torch.cat([latent, hidden], dim=-1)
-        feats.append(feat)
-        action, org_sample = agent.sample(feat)
-        latent, reward, end, hidden = env.step(action)
+        latents.append(latent)
+        hiddens.append(hidden)
+        action, org_sample = agent.sample(torch.cat([latent, hidden], dim=-1))
+        latent, reward, end, hidden, _ = env.step(action)
         rewards.append(reward)
         actions.append(action)
         org_samples.append(org_sample)
         ends.append(end)
 
-    feat = torch.cat([latent, hidden], dim=-1)
-    feats.append(feat)
-    feats = torch.stack(feats, dim=1)
+    latents.append(latent)
+    hiddens.append(hidden)
+    latents = torch.stack(latents, dim=1)
+    hiddens = torch.stack(hiddens, dim=1)
     actions = torch.stack(actions, dim=1)
     org_samples = torch.stack(org_samples, dim=1)
     rewards = torch.stack(rewards, dim=1)
     ends = torch.stack(ends, dim=1)
 
-    return feats, actions, rewards, ends, org_samples
+    return latents, hiddens, actions, rewards, ends, org_samples
+
+@torch.no_grad()
+def generate_video(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictConfig, imagine_length:int=64):
+    cfg.imagine_length = imagine_length
+    latents, hiddens, _, _, _, _ = collect_imagine_trj(env, agent, cfg)   
+    videos = env.decode(latents, hiddens)
+    videos = videos[::videos.shape[0]//16]
+    return videos.unsqueeze(2).repeat(1, 1, 3, 1, 1) # B L 3 H W
 
 @timeit
 def train_agents(agent: ActorCriticAgent, state_env: DepthStateEnv, cfg: DictConfig):
     trainingcfg = getattr(cfg, "actor_critic").training
-    feats, _, rewards, ends, org_samples = collect_imagine_trj(state_env, agent, trainingcfg)
-    agent_info = agent.update(feats, org_samples, rewards, ends)
+    latents, hiddens,  _, rewards, ends, org_samples = collect_imagine_trj(state_env, agent, trainingcfg)
+    agent_info = agent.update(torch.cat([latents, hiddens], dim=-1), org_samples, rewards, ends)
     reward_sum = rewards.sum(dim=-1).mean()
     agent_info["reward_sum"] = reward_sum.item()
     return agent_info
@@ -65,15 +74,16 @@ def train_worldmodel(
 ):
     with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=training_hyper.use_amp):
         for _ in range(training_hyper.worldmodel_update_freq):
-            sample_state, sample_action, sample_reward, sample_termination, sample_perception = \
+            sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid = \
                 replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
-            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss = \
+            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss = \
                 world_model.compute_loss(
                     sample_state,
                     sample_perception,
                     sample_action,
                     sample_reward,
                     sample_termination,
+                    sample_grid
                 )
     
     if scaler is not None:
@@ -91,12 +101,13 @@ def train_worldmodel(
         'WorldModel/grad_norm':grad_norm.item(),
         'WorldModel/state_rew_loss':rew_loss.item(),
         'WorldModel/state_end_loss':end_loss.item(),
+        'WorldModel/state_grid_loss':grid_loss.item(),
     }
 
     return world_info
 
 class World_Agent:
-    def __init__(self, cfg: DictConfig, env: Union[PositionControl, ObstacleAvoidance], device: torch.device):
+    def __init__(self, cfg: DictConfig, env: Union[PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid], device: torch.device):
         self.cfg = cfg
         self.n_envs = env.n_envs
         device_idx = device.index
@@ -104,6 +115,8 @@ class World_Agent:
             state_dim = 9
         else:
             state_dim = 13
+        use_grid = True if isinstance(env, ObstacleAvoidanceGrid) else False
+        world_agent_cfg = deepcopy(cfg)
         world_agent_cfg = cfg
         world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
         world_agent_cfg.replaybuffer.num_envs = self.n_envs
@@ -123,6 +136,13 @@ class World_Agent:
         worldcfg = getattr(world_agent_cfg, "world_state_env")
         training_hyper = getattr(world_agent_cfg, "state_predictor").training
         self.training_hyper = training_hyper
+        
+        if use_grid:
+            grid_dim = math.prod(env.ocp_map.grid_size)
+            buffercfg.use_grid = True
+            buffercfg.grid_dim = grid_dim
+            statemodelcfg.use_grid = True
+            statemodelcfg.grid_dim = grid_dim
 
         if isinstance(env, PositionControl) or isinstance(env, Racing):
             statemodelcfg.only_state = True
@@ -164,6 +184,10 @@ class World_Agent:
         with torch.no_grad():
             if not isinstance(obs, torch.Tensor):
                 state, perception = obs['state'], obs['perception'].unsqueeze(1)
+                if 'grid' in obs.keys():
+                    grid = obs['grid']
+                else:
+                    grid = None
             else:
                 state, perception = obs, None
             if self.world_agent_cfg.common.use_symlog:
@@ -176,7 +200,7 @@ class World_Agent:
                 action = torch.randn(self.n_envs,3,device=state.device)
             next_obs, (loss, rewards), terminated, env_info = env.step(env.rescale_action(action))
             rewards = rewards*10.
-            self.replaybuffer.append(state, action, rewards, terminated, perception)
+            self.replaybuffer.append(state, action, rewards, terminated, perception, grid)
             
             if terminated.any():
                 zeros = torch.zeros_like(self.hidden)
@@ -193,6 +217,9 @@ class World_Agent:
 
         obs = next_obs
         self.num_steps+=1
+        if self.num_steps%2500==0:
+            logger_video = generate_video(self.world_model_env, self.agent, self.world_agent_cfg.actor_critic.training, 64)
+            policy_info["video"] = logger_video
 
         return obs, policy_info, env_info, 0.0, 0.0
 

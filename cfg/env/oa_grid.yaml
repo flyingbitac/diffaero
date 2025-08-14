@@ -37,14 +37,14 @@ loss_weights:
     collision: 10.
 
 reward_weights:
-  constant: 4.
+  constant: 1.
   pointmass:
-    vel: 0.5
-    oa: 4.
-    jerk: 0.005
-    pos: 5.
+    vel: 0.06
+    oa: 0.6
+    jerk: 0.0005
+    pos: 0.5
     arrive: 0.
-    collision: 10.
+    collision: 5.
   quadrotor:
     vel: 1.
     oa: 1.
@@ -53,12 +53,12 @@ reward_weights:
     collision: 10.
 
 grid:
-  x_min: -6.
-  x_max:  6.
-  y_min: -6.
-  y_max:  6.
-  z_min: -3.
-  z_max:  3.
+  x_min: -4.
+  x_max:  4.
+  y_min: -4.
+  y_max:  4.
+  z_min: -2.
+  z_max:  2.
   n_points: [20, 20, 10]
 
 defaults:

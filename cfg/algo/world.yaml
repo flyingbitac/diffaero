@@ -32,6 +32,8 @@ replaybuffer:
   store_on_gpu: True
   device: "cuda:1"
   use_perception: True
+  use_grid: False
+  grid_dim: 4000
 
 state_predictor:
   state_model:
@@ -49,6 +51,14 @@ state_predictor:
     img_recon_loss_weight: 1.
     end_loss_pos_weight: 30
     enable_rec: True
+    use_grid: False
+    grid_dim: 4000
+    rec_coef: 1.0
+    rew_coef: 1.0
+    end_coef: 1.0
+    rep_coef: 0.1
+    dyn_coef: 0.5
+    ocp_coef: 0.5
 
   training:
     max_grad_norm: 100.0

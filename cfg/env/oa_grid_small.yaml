@@ -37,14 +37,14 @@ loss_weights:
     collision: 10.
 
 reward_weights:
-  constant: 4.
+  constant: 1.
   pointmass:
-    vel: 1.
-    oa: 2.
-    jerk: 0.005
-    pos: 5.
+    vel: 0.06
+    oa: 0.6
+    jerk: 0.0005
+    pos: 0.5
     arrive: 0.
-    collision: 10.
+    collision: 5.
   quadrotor:
     vel: 1.
     oa: 1.

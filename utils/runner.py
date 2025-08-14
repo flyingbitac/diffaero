@@ -161,6 +161,9 @@ class TrainRunner:
                 if "WorldModel/state_total_loss" in policy_info.keys():
                     log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
                 self.logger.log_scalars(log_info, i+1)
+                
+            if "video" in policy_info.keys():
+                self.logger.log_video("imagine_video", policy_info["video"], i+1, fps=30)
             
             if i % 100 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
                 grid_gt = self.env.visualize_grid(policy_info["grid_gt"])

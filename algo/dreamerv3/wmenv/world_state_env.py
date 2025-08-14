@@ -40,7 +40,7 @@ class DepthStateEnv:
     def make_generator_init(self,):
         batch_size = self.cfg.batch_size
         batch_length = self.cfg.batch_length
-        states, actions, _ , _, perceptions = self.replaybuffer.sample(batch_size, batch_length)
+        states, actions, _ , _, perceptions, _ = self.replaybuffer.sample(batch_size, batch_length)
         hidden = None
             
         for i in range(batch_length):
@@ -54,14 +54,19 @@ class DepthStateEnv:
         latent = self.state_model.flatten(latent)
         self.latent = latent
         self.hidden = hidden
-        return latent,hidden
+        return latent, hidden
         
     @torch.no_grad()
     @timeit
     def step(self,action:Tensor):
         assert action.ndim==2
-        prior_sample,pred_reward,pred_end,hidden = self.state_model.predict_next(latent=self.latent, act=action, hidden=self.hidden)
+        prior_sample,pred_reward,pred_end,hidden,grid = self.state_model.predict_next(latent=self.latent, act=action, hidden=self.hidden)
         flattened_sample = prior_sample.view(*prior_sample.shape[:-2],-1)
         self.latent = flattened_sample
         self.hidden = hidden
-        return flattened_sample,pred_reward,pred_end,hidden
+        return flattened_sample,pred_reward,pred_end,hidden,grid
+    
+    def decode(self, latents:Tensor, hiddens:Tensor):
+        _, videos = self.state_model.decode(latents, hiddens)
+        assert videos.ndim == 4, f"Expected videos to have 4 dimensions, got {videos.ndim}"
+        return videos

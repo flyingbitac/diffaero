@@ -17,6 +17,8 @@ class buffercfg:
     store_on_gpu: bool
     device: str
     use_perception: bool
+    use_grid: bool = False
+    grid_dim: int = 4000
 
 class ReplayBuffer():
     def __init__(self, cfg:buffercfg) -> None:
@@ -24,10 +26,13 @@ class ReplayBuffer():
         device = torch.device(cfg.device)
         if cfg.store_on_gpu:
             self.state_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.state_dim), dtype=torch.float32, device=device, requires_grad=False)
-            self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_height, cfg.perception_width), dtype=torch.float32, device=device, requires_grad=False)
             self.action_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs,cfg.action_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
+            if cfg.use_perception:
+                self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_height, cfg.perception_width), dtype=torch.float32, device=device, requires_grad=False)
+            if cfg.use_grid:
+                self.ocp_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.uint8, device=device, requires_grad=False)
         else:
             raise ValueError("Only support gpu!!!")
 
@@ -37,6 +42,7 @@ class ReplayBuffer():
         self.max_length = cfg.max_length
         self.warmup_length = cfg.warmup_length
         self.use_perception = cfg.use_perception
+        self.use_grid = cfg.use_grid
 
     def ready(self):
         return self.length * self.num_envs > self.warmup_length and self.length > 64
@@ -44,6 +50,7 @@ class ReplayBuffer():
     @torch.no_grad()
     @timeit
     def sample(self, batch_size, batch_length):
+        perception, ocp = None, None
         if batch_size < self.num_envs:
             batch_size = self.num_envs
         if self.store_on_gpu:
@@ -57,15 +64,14 @@ class ReplayBuffer():
             termination = self.termination_buffer[idxs, env_idx].reshape(batch_size, batch_length)
             if self.use_perception:
                 perception = self.perception_buffer[idxs, env_idx].reshape(batch_size, batch_length, *self.perception_buffer.shape[2:])
-            else:
-                perception = None
-            
+            if self.use_grid:
+                ocp = self.ocp_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
         else:
             raise ValueError("Only support gpu!!!")
 
-        return state, action, reward, termination, perception
+        return state, action, reward, termination, perception, ocp
 
-    def append(self, state, action, reward, termination, perception=None, visible_map=None):
+    def append(self, state, action, reward, termination, perception=None, ocp=None):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length//self.num_envs)
         if self.store_on_gpu:
             self.state_buffer[self.last_pointer] = state
@@ -74,6 +80,8 @@ class ReplayBuffer():
             self.termination_buffer[self.last_pointer] = termination
             if self.use_perception and perception is not None:
                 self.perception_buffer[self.last_pointer] = perception
+            if self.use_grid and ocp is not None:
+                self.ocp_buffer[self.last_pointer] = ocp.reshape(ocp.shape[0], -1)
         else:
             raise ValueError("Only support gpu!!!")
 
