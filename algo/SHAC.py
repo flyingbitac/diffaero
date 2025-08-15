@@ -658,7 +658,7 @@ class SHA2C(SHAC):
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()
         self.clear_loss()
-        for t in range(cfg.l_rollout):
+        for t in range(self.l_rollout):
             action, policy_info = self.act(obs)
             state = env.get_state()
             with torch.no_grad():

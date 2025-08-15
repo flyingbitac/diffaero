@@ -4,6 +4,8 @@ import torch
 from torch import Tensor
 from tensordict import TensorDict
 
+from diffaero.utils.logger import Logger
+
 class RNNStateBuffer:
     def __init__(self, l_rollout, n_envs, rnn_hidden_dim, rnn_n_layers, device):
         # type: (int, int, int, int, torch.device) -> None
@@ -183,6 +185,7 @@ class RolloutBufferGRID:
         l_rollout: int,
         buffer_size: int,
         obs_dim: Tuple[int, Tuple[int, int]],
+        state_dim: int,
         action_dim: int,
         grid_dim: int,
         device: torch.device
@@ -194,34 +197,57 @@ class RolloutBufferGRID:
             "grid":        torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool),
             "visible_map": torch.zeros((buffer_size, l_rollout, grid_dim), device=device, dtype=torch.bool),
         }, batch_size=(buffer_size, l_rollout))
-        self.dones = torch.zeros((buffer_size, l_rollout), device=device, dtype=torch.bool)
+        self.states = torch.zeros((buffer_size, l_rollout, state_dim), **factory_kwargs)
         self.actions = torch.zeros((buffer_size, l_rollout, action_dim), **factory_kwargs)
         self.rewards = torch.zeros((buffer_size, l_rollout), **factory_kwargs)
+        self.values = torch.zeros((buffer_size, l_rollout), **factory_kwargs)
+        self.dones = torch.zeros((buffer_size, l_rollout), device=device, dtype=torch.bool)
+        self.terminated = torch.zeros((buffer_size, l_rollout), device=device, dtype=torch.bool)
+        self.next_values = torch.zeros((buffer_size, l_rollout), **factory_kwargs)
+        self.l_rollout = l_rollout
         self.device = device
         self.max_size = buffer_size
         self.size = 0
         self.ptr = 0
+        self.time = 0
     
     @torch.no_grad()
-    def add(self, obs, action, done, reward):
-        # type: (TensorDict, Tensor, Tensor, Tensor) -> None
+    def add(self, obs, state, action, reward, value, next_done, next_terminated, next_value):
+        # type: (TensorDict, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
         n = obs.shape[0]
         start1, end1 = self.ptr, min(self.max_size, self.ptr + n)
         start2, end2 = 0, max(0, self.ptr + n - self.max_size)
         n1, n2 = end1 - start1, end2 - start2
-        self.obs[start1:end1] = obs[:n1]
-        self.dones[start1:end1] = done[:n1]
-        self.rewards[start1:end1] = reward[:n1]
-        self.actions[start1:end1] = action[:n1]
+        self.obs[start1:end1, self.time] = obs[:n1]
+        self.states[start1:end1, self.time] = state[:n1]
+        self.actions[start1:end1, self.time] = action[:n1]
+        self.rewards[start1:end1, self.time] = reward[:n1]
+        self.values[start1:end1, self.time] = value[:n1]
+        self.dones[start1:end1, self.time] = next_done[:n1]
+        self.terminated[start1:end1, self.time] = next_terminated[:n1]
+        self.next_values[start1:end1, self.time] = next_value[:n1]
         if n2 > 0:
-            self.obs[start2:end2] = obs[n1:]
-            self.dones[start2:end2] = done[n1:]
-            self.actions[start2:end2] = action[n1:]
-            self.rewards[start2:end2] = reward[n1:]
-        self.ptr = (self.ptr + n) % self.max_size
-        self.size = min(self.size + n, self.max_size)
+            self.obs[start2:end2, self.time] = obs[n1:]
+            self.states[start1:end1, self.time] = state[:n1]
+            self.actions[start2:end2, self.time] = action[n1:]
+            self.rewards[start2:end2, self.time] = reward[n1:]
+            self.values[start2:end2, self.time] = value[n1:]
+            self.dones[start2:end2, self.time] = next_done[n1:]
+            self.terminated[start2:end2, self.time] = next_terminated[n1:]
+            self.next_values[start2:end2, self.time] = next_value[n1:]
+        self.time += 1
+        if self.time >= self.l_rollout:
+            self.time = 0
+            self.ptr = (self.ptr + n) % self.max_size
+            self.size = min(self.size + n, self.max_size)
     
-    def sample(self, batch_size):
+    def sample4wm(self, batch_size):
         # type: (int) -> Tuple[TensorDict, Tensor, Tensor, Tensor]
         ind = torch.randint(0, self.size, size=(batch_size,), device=self.device)
-        return self.obs[ind], self.actions[ind], self.dones[ind], self.rewards[ind]
+        return self.obs[ind], self.actions[ind], self.terminated[ind], self.rewards[ind]
+    
+    def sample4critic(self, batch_size):
+        # type: (int) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        ind = torch.randint(0, self.size, size=(batch_size,), device=self.device)
+        return tuple(map(lambda x: x[ind].transpose(0, 1).contiguous().clone().float(), 
+            [self.states, self.next_values, self.rewards, self.dones, self.terminated]))

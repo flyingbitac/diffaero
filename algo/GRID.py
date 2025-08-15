@@ -10,7 +10,7 @@ from torch import Tensor
 import tensordict
 from tensordict import TensorDict
 
-from diffaero.env.obstacle_avoidance import ObstacleAvoidanceGrid
+from diffaero.env.obstacle_avoidance_grid import ObstacleAvoidanceGrid
 from diffaero.algo.buffer import RolloutBufferGRID, RNNStateBuffer
 from diffaero.network.networks import CNNBackbone
 from diffaero.network.agents import tensordict2tuple, StochasticActor
@@ -141,7 +141,6 @@ class GRID:
             self.l_rollout,
             int(cfg.buffer_size),
             obs_dim,
-            self.latent_dim,
             action_dim,
             self.n_grid_points,
             device

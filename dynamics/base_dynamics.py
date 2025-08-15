@@ -109,7 +109,6 @@ class BaseDynamics(ABC):
         "Rotation matrix with columns being coordinate of axis unit vectors of body frame in world frame."
         return T.quaternion_to_matrix(self.q.roll(1, -1))
     
-    # Rotation utilities
     @property
     def Rz(self) -> Tensor:
         "Rotation matrix with columns being coordinate of axis unit vectors of local frame in world frame."

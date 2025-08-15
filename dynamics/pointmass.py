@@ -7,7 +7,7 @@ from pytorch3d import transforms as T
 from omegaconf import DictConfig
 
 from diffaero.dynamics.base_dynamics import BaseDynamics
-from diffaero.utils.math import EulerIntegral, rk4, axis_rotmat, mvp
+from diffaero.utils.math import EulerIntegral, rk4, axis_rotmat, mvp, quat_standardize, quat_mul
 from diffaero.utils.randomizer import build_randomizer
 
 class PointMassModelBase(BaseDynamics):
@@ -258,11 +258,10 @@ def point_mass_quat(a: Tensor, orientation: Tensor) -> Tensor:
     quat_angle = torch.atan2(sin, cos)
     quat_pitch_roll_xyz = quat_axis * torch.sin(0.5 * quat_angle).unsqueeze(-1)
     quat_pitch_roll_w = torch.cos(0.5 * quat_angle).unsqueeze(-1)
-    quat_pitch_roll = T.standardize_quaternion(torch.cat([quat_pitch_roll_w, quat_pitch_roll_xyz], dim=-1))
+    quat_pitch_roll = quat_standardize(torch.cat([quat_pitch_roll_xyz, quat_pitch_roll_w], dim=-1))
     yaw_half = yaw.unsqueeze(-1) / 2
-    quat_yaw = torch.concat([torch.cos(yaw_half), torch.sin(yaw_half) * z], dim=-1) # T.matrix_to_quaternion(mat_yaw)
-    quat_wxyz = T.quaternion_multiply(quat_yaw, quat_pitch_roll)
-    quat_xyzw = quat_wxyz.roll(-1, dims=-1)
+    quat_yaw = torch.concat([torch.sin(yaw_half) * z, torch.cos(yaw_half)], dim=-1) # T.matrix_to_quaternion(mat_yaw)
+    quat_xyzw = quat_mul(quat_yaw, quat_pitch_roll)
     
     # ori = torch.stack([orientation[..., 0], orientation[..., 1], torch.zeros_like(orientation[..., 2])], dim=-1)
     # print(F.normalize(quaternion_apply(quaternion_invert(quat_yaw), ori), dim=-1)[..., 0]) # 1

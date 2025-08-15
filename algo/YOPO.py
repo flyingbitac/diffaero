@@ -12,7 +12,7 @@ from omegaconf import DictConfig
 import taichi as ti
 from tqdm import tqdm
 
-from diffaero.env.obstacle_avoidance import ObstacleAvoidanceYOPO
+from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
 from diffaero.utils.render import torch2ti
 from diffaero.utils.runner import timeit
 

@@ -148,7 +148,7 @@ def get_ray_dist(
     quat_xyzw: Tensor,        # [n_envs, 4]
     max_dist: float,
     z_ground_plane: Optional[Tensor] = None, # [n_envs]
-) -> Tensor: # [n_envs, H, W]
+) -> Tuple[Tensor, Tensor]: # [n_envs, H, W], [n_envs, n_rays, 3]
     H, W = ray_directions_b.shape[:2]
     ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
     
@@ -176,8 +176,9 @@ def get_ray_dist(
         raydist_ground_plane: Tensor = raydist3d_ground_plane(z_ground_plane, start, ray_directions_w, max_dist) # [n_envs, n_rays]
         raydist = torch.minimum(raydist, raydist_ground_plane) # [n_envs, n_rays]
     raydist.clamp_(max=max_dist)
+    contact_points = ray_directions_w * raydist.unsqueeze(-1) + start # [n_envs, n_rays, 3]
     depth = 1. - raydist.reshape(-1, H, W) / max_dist # [n_envs, H, W]
-    return depth
+    return depth, contact_points # [n_envs, H, W], [n_envs, n_rays, 3]
 
 @torch.jit.script
 def get_contact_point(

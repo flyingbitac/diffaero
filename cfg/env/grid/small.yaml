@@ -1,9 +1,10 @@
 name: grid_small
 
-x_min: -2.
-x_max:  2.
-y_min: -2.
-y_max:  2.
-z_min: -1.
-z_max:  1.
+frame: local
+x_min: -3.
+x_max:  3.
+y_min: -3.
+y_max:  3.
+z_min: -1.5
+z_max:  1.5
 n_points: [20, 20, 10]

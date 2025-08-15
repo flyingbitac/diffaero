@@ -121,7 +121,6 @@ def quat_axis(quat_xyzw: Tensor, axis: int = 0) -> Tensor:
 
 @torch.jit.script
 def quat_mul(a: Tensor, b: Tensor) -> Tensor:
-    assert a.shape == b.shape
     shape = a.shape
     a = a.reshape(-1, 4)
     b = b.reshape(-1, 4)
@@ -138,9 +137,12 @@ def quat_mul(a: Tensor, b: Tensor) -> Tensor:
     y = qq - yy + (w1 - x1) * (y2 + z2)
     z = qq - zz + (z1 + y1) * (w2 - x2)
 
-    quat = torch.stack([x, y, z, w], dim=-1).view(shape)
+    quat = torch.stack([x, y, z, w], dim=-1).reshape(shape)
 
     return quat
+
+def quat_standardize(quat_xyzw: torch.Tensor) -> torch.Tensor:
+    return torch.where(quat_xyzw[..., -1:] < 0, -quat_xyzw, quat_xyzw)
 
 @torch.jit.script
 def quat_inv(quat_xyzw: Tensor) -> Tensor:

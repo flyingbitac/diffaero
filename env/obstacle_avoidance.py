@@ -1,21 +1,17 @@
 from typing import Tuple, Dict, Union, List
-import os
-import math
 
 from omegaconf import DictConfig
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 from tensordict import TensorDict
-import open3d as o3d
-import numpy as np
 
 from diffaero.env.base_env import BaseEnv
-from diffaero.dynamics import PointMassModelBase, QuadrotorModel
-from diffaero.utils.sensor import build_sensor, RayCastingSensorBase
+from diffaero.utils.sensor import build_sensor
 from diffaero.utils.render import ObstacleAvoidanceRenderer
 from diffaero.utils.assets import ObstacleManager
 from diffaero.utils.runner import timeit
+from diffaero.utils.logger import Logger
 
 class ObstacleAvoidance(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -33,9 +29,12 @@ class ObstacleAvoidance(BaseEnv):
         H, W = self.sensor.H, self.sensor.W
         
         self.last_action_in_obs: bool = cfg.last_action_in_obs
-        if isinstance(self.dynamics, PointMassModelBase):
-            state_dim = 9
-        elif isinstance(self.dynamics, QuadrotorModel):
+        if self.dynamic_type == "pointmass":
+            if self.obs_frame == "local":
+                state_dim = 9
+            elif self.obs_frame == "world":
+                state_dim = 10
+        elif self.dynamic_type == "quadrotor":
             state_dim = 10
         if self.last_action_in_obs:
             state_dim += self.action_dim
@@ -67,7 +66,7 @@ class ObstacleAvoidance(BaseEnv):
             self.target_pos - self.p,
             self.q,
             self._v,
-            self._a if isinstance(self.dynamics, PointMassModelBase) else self._w,
+            self._a if self.dynamic_type == "pointmass" else self._w,
         ], dim=-1)
         return state if with_grad else state.detach()
 
@@ -98,12 +97,13 @@ class ObstacleAvoidance(BaseEnv):
     @timeit
     def update_sensor_data(self):
         z_ground_plane = -self.height_scale*self.L if self.ground_plane else None
-        self.sensor_tensor.copy_(self.sensor(
+        sensory_data, contact_points = self.sensor(
             obstacle_manager=self.obstacle_manager,
             pos=self.p,
             quat_xyzw=self.q,
             z_ground_plane=z_ground_plane
-        ))
+        )
+        self.sensor_tensor.copy_(sensory_data)
     
     @timeit
     def step(self, action, next_obs_before_reset=False, next_state_before_reset=False):
@@ -176,16 +176,18 @@ class ObstacleAvoidance(BaseEnv):
         collision_loss = self.collision().float()
         arrive_loss = 1 - torch.norm(self.p - self.target_pos, dim=-1).lt(0.5).float()
         
-        if isinstance(self.dynamics, PointMassModelBase):
+        if self.dynamic_type == "pointmass":
             pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
             
             vel_diff = torch.norm(self.dynamics._vel_ema - self.target_vel, dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             z_loss = 1 - (-(self._p[..., 2]-self.target_pos[..., 2]).abs()).exp()
 
-            jerk_loss = F.mse_loss(self.dynamics.a_thrust, self.dynamics.local2world(action), reduction="none").sum(dim=-1) + \
-                        F.mse_loss(torch.norm(self.dynamics.a_thrust, dim=-1), torch.norm(action, dim=-1), reduction="none") * 5
-            
+            if self.dynamics.action_frame == "local":
+                action = self.dynamics.local2world(action)
+            # jerk_loss = F.mse_loss(self.dynamics.a_thrust, action, reduction="none").sum(dim=-1) + \
+            #             F.mse_loss(torch.norm(self.dynamics.a_thrust, dim=-1), torch.norm(action, dim=-1), reduction="none") * 5
+            jerk_loss = F.mse_loss(self.dynamics.a_thrust, action, reduction="none").sum(dim=-1)
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
                 self.loss_weights.pointmass.z * z_loss +
@@ -338,291 +340,3 @@ class ObstacleAvoidance(BaseEnv):
         range = torch.stack([x_range, y_range, z_range], dim=-1)
         out_of_bound = torch.any(self.p < -range, dim=-1) | torch.any(self.p > range, dim=-1)
         return (self.progress >= self.max_steps) | out_of_bound
-
-class ObstacleAvoidanceGrid(ObstacleAvoidance):
-    def __init__(self, cfg: DictConfig, device: torch.device):
-        super().__init__(cfg, device)
-        assert cfg.grid.name != "none", "ObstacleAvoidanceGrid requires a grid configuration."
-        assert isinstance(self.sensor, RayCastingSensorBase), "This environment only supports ray casting-based sensors."
-        self.n_grid_points = math.prod(cfg.grid.n_points)
-        
-        self.x_min, self.x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
-        self.y_min, self.y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
-        self.z_min, self.z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
-        xyz_cube_size = (
-            ((self.x_max - self.x_min) / cfg.grid.n_points[0]),
-            ((self.y_max - self.y_min) / cfg.grid.n_points[1]),
-            ((self.z_max - self.z_min) / cfg.grid.n_points[2])
-        )
-        assert min(xyz_cube_size) == max(xyz_cube_size), "Grid cube size must be equal in all dimensions."
-        self.cube_size = min(xyz_cube_size)
-
-        x_range = torch.linspace(self.x_min, self.x_max - self.cube_size, cfg.grid.n_points[0], device=self.device) + self.cube_size / 2
-        y_range = torch.linspace(self.y_min, self.y_max - self.cube_size, cfg.grid.n_points[1], device=self.device) + self.cube_size / 2
-        z_range = torch.linspace(self.z_min, self.z_max - self.cube_size, cfg.grid.n_points[2], device=self.device) + self.cube_size / 2
-        grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1) # [x_points, y_points, z_points, 3]
-        self.local_grid_centers = grid_xyz_range.reshape(1, -1, 3) # [1, n_points, 3]
-        n_segments = math.ceil(self.sensor.max_dist / self.cube_size)
-        self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device)
-        
-        self.prev_visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
-        self.visible_points = torch.zeros(self.n_envs, self.n_grid_points, 3, device=self.device)
-        
-    #     self.vis = o3d.visualization.Visualizer()
-    #     self.vis.create_window(width=270, height=270, left=50, top=350, visible=self.renderer is not None)
-    
-    # def visualize_grid(self, grid):
-    #     xyz = self.local_grid_centers.squeeze(0)
-    #     points = xyz[grid.flatten()].cpu().numpy()
-    #     pcd_o3d = o3d.geometry.PointCloud()
-    #     pcd_o3d.points = o3d.utility.Vector3dVector(points)
-    #     # o3d.visualization.draw_geometries([pcd_o3d])
-
-    #     self.vis.clear_geometries()
-    #     self.vis.add_geometry(pcd_o3d)
-    #     self.vis.poll_events()
-    #     self.vis.update_renderer()
-        
-    #     return np.asarray(self.vis.capture_screen_float_buffer(do_render=self.renderer is not None))
-    
-    @timeit
-    def get_occupancy_map(self): 
-        # get occupancy map
-        grid_xyz = self.p.unsqueeze(1) + self.local_grid_centers # [n_envs, n_points, 3]
-        occupancy_map = self.obstacle_manager.are_points_inside_obstacles(grid_xyz) # [n_envs, n_points]
-        if self.z_ground_plane is not None:
-            occupancy_ground_plane = ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane.unsqueeze(1))
-            occupancy_map = torch.logical_or(occupancy_map, occupancy_ground_plane)
-        return occupancy_map
-    
-    @timeit
-    def get_visibility_map(self):
-        # get visiability map
-        N, H, W = self.sensor_tensor.shape
-        start = self.p.unsqueeze(1).expand(-1, H*W, -1) # [n_envs, n_rays, 3]
-        contact_point = self.sensor.get_contact_point( # [n_envs, n_rays, 3]
-            depth=self.sensor_tensor,
-            start=start,
-            quat_xyzw=self.q)
-        
-        x_min, x_max = self.cfg.grid.x_min, self.cfg.grid.x_max
-        y_min, y_max = self.cfg.grid.y_min, self.cfg.grid.y_max
-        z_min, z_max = self.cfg.grid.z_min, self.cfg.grid.z_max
-        # grid_min = torch.tensor([[[x_min, y_min, z_min]]], device=self.device).expand(self.n_envs, self.n_grid_points, -1) # [n_envs, n_points, 3]
-        # grid_max = torch.tensor([[[x_max, y_max, z_max]]], device=self.device).expand(self.n_envs, self.n_grid_points, -1) # [n_envs, n_points, 3]
-        n_x, n_y, n_z = self.cfg.grid.n_points
-        
-        # 1. check if previous visible points are inside the current range of the grid
-        # if so, mark them as visible and update their coordinate
-        curr_visible_map_prev = torch.zeros(self.n_envs, self.n_grid_points, device=self.device, dtype=torch.bool)
-            
-        # 1.1 get the local coordinate of previous visible points
-        prev_visible_points_local = self.visible_points - self.p.unsqueeze(1)
-        env_ids, prev_point_ids = torch.where(self.prev_visible_map)
-        valid_visible_local = prev_visible_points_local[env_ids, prev_point_ids]
-        # 1.2 check if previous visible points are inside the current range of the grid
-        valid_mask = (
-            (valid_visible_local[:, 0] >= x_min) & (valid_visible_local[:, 0] < x_max) &
-            (valid_visible_local[:, 1] >= y_min) & (valid_visible_local[:, 1] < y_max) &
-            (valid_visible_local[:, 2] >= z_min) & (valid_visible_local[:, 2] < z_max)
-        )
-        # 1.3 mark the previous visible points as visible in the current occupancy map
-        valid_env_ids = env_ids[valid_mask]
-        valid_prev_id = prev_point_ids[valid_mask] # indices in previous local frame for points that are visible in previous timestep
-        valid_current_local = valid_visible_local[valid_mask]
-        x_idx = ((valid_current_local[:, 0] - x_min).clamp(max=x_max-x_min-1e-5) / self.cube_size).long()
-        y_idx = ((valid_current_local[:, 1] - y_min).clamp(max=y_max-y_min-1e-5) / self.cube_size).long()
-        z_idx = ((valid_current_local[:, 2] - z_min).clamp(max=z_max-z_min-1e-5) / self.cube_size).long()
-        # indices in current local frame for points that are visible in previous timestep
-        linear_ids = x_idx * (n_y * n_z) + y_idx * n_z + z_idx
-        curr_visible_map_prev[valid_env_ids, linear_ids] = True
-        # assert torch.all(
-        #     (x_idx >= 0) & (x_idx < n_x) &
-        #     (y_idx >= 0) & (y_idx < n_y) &
-        #     (z_idx >= 0) & (z_idx < n_z)
-        # )
-        # 1.4 update the position of previous visible points by its current relative position
-        prev_visible_points_global = torch.zeros_like(self.visible_points)
-        prev_visible_points_global[valid_env_ids, linear_ids] = self.visible_points[valid_env_ids, valid_prev_id]
-        self.visible_points.copy_(prev_visible_points_global)
-        
-        # 2. get the current visible points
-        # 2.1 sample visible points on the ray segments
-        curr_visible_points = torch.lerp( # [n_envs, n_segments * n_rays, 3]
-            input=start.unsqueeze(1),                           # [n_envs, 1, n_rays, 3]
-            end=contact_point.unsqueeze(1),                     # [n_envs, 1, n_rays, 3]
-            weight=self.ray_segment_weight.reshape(1, -1, 1, 1) # [1, n_segments, 1, 1]
-        ).reshape(N, -1, 3)
-        # 2.2 get the local coordinate of the current visible points
-        local_visible_points = curr_visible_points - self.p.unsqueeze(1) # [n_envs, n_segments * n_rays, 3]
-        valid_mask = (
-            (local_visible_points[:, :, 0] >= x_min) & (local_visible_points[:, :, 0] < x_max) &
-            (local_visible_points[:, :, 1] >= y_min) & (local_visible_points[:, :, 1] < y_max) &
-            (local_visible_points[:, :, 2] >= z_min) & (local_visible_points[:, :, 2] < z_max)
-        ) # [n_envs, n_segments * n_rays]
-        env_ids, prev_point_ids = torch.where(valid_mask) # [n_valid_points, ]
-        local_valid_visible_points = local_visible_points[env_ids, prev_point_ids] # [n_valid_points, 3]
-        x_idx = ((local_valid_visible_points[:, 0] - x_min).clamp(max=x_max-x_min-1e-5) / self.cube_size).long()
-        y_idx = ((local_valid_visible_points[:, 1] - y_min).clamp(max=y_max-y_min-1e-5) / self.cube_size).long()
-        z_idx = ((local_valid_visible_points[:, 2] - z_min).clamp(max=z_max-z_min-1e-5) / self.cube_size).long()
-        linear_ids = x_idx * (n_y * n_z) + y_idx * n_z + z_idx
-        
-        # 3. mark the current visible points as visible in the occupancy map
-        # flatten env and voxel index into one combined index
-        combined = env_ids * self.n_grid_points + linear_ids # [n_valid_points, ]
-        # collect one 3D point per visible voxel by picking the first ray‐segment hit (vectorized)
-        # find unique combined indices in input order, get their first occurrence positions
-        _, first_idx = torch.unique(combined, sorted=False, return_inverse=True) # [n_valid_points, ]
-        first_idx_unique = torch.unique(first_idx, sorted=False) # [n_unique_points]
-        # select corresponding env, voxel for each first hit
-        env_sel = env_ids[first_idx_unique]    # [n_unique_points]
-        lin_sel = linear_ids[first_idx_unique] # [n_unique_points]
-        
-        voxel_centers = self.p.unsqueeze(1) + self.local_grid_centers # [n_envs, n_points, 3]
-        # fill the visible points tensor with the global coordinate of the first hit points
-        self.visible_points[env_sel, lin_sel] = voxel_centers[env_sel, lin_sel]
-        diff = self.visible_points - voxel_centers # [n_envs, n_points, 3]
-        # mark voxels where the first hit point actually falls inside the voxel
-        curr_visible_map = (diff.abs() <= (self.cube_size / 2)).all(dim=-1)  # [n_envs, n_points]
-        
-        # current visible map should also include points that are visible in the previous steps
-        curr_visible_map |= curr_visible_map_prev
-        self.prev_visible_map.copy_(curr_visible_map)
-        
-        return curr_visible_map # [n_envs, n_points]
-    
-    @timeit
-    def get_observations(self, with_grad=False):
-        if self.obs_frame == "local":
-            target_vel = self.dynamics.world2local(self.target_vel)
-            _v = self.dynamics.world2local(self._v)
-        elif self.obs_frame == "world":
-            target_vel = self.target_vel
-            _v = self._v
-        
-        if self.dynamic_type == "pointmass":
-            obs = torch.cat([
-                target_vel,
-                self.dynamics.uz if self.obs_frame == "local" else self.q,
-                _v,
-            ], dim=-1)
-        else:
-            obs = torch.cat([target_vel, self._q, _v], dim=-1)
-        if self.last_action_in_obs:
-            obs = torch.cat([obs, self.last_action], dim=-1)
-        grid, visible_map = self.get_occupancy_map(), self.get_visibility_map()
-        if self.renderer is not None:
-            grid_tobe_visualized = visible_map
-            self.visualize_grid(grid_tobe_visualized[self.renderer.gui_states["tracking_env_idx"]])
-
-        obs = TensorDict({
-            "state": obs, "perception": self.sensor_tensor.clone(), "grid": grid, "visible_map": visible_map}, batch_size=self.n_envs)
-        obs = obs if with_grad else obs.detach()
-        return obs
-    
-    @timeit
-    def reset_idx(self, env_idx):
-        super().reset_idx(env_idx)
-        self.prev_visible_map[env_idx] = False
-        self.visible_points[env_idx] = 0.
-    
-class ObstacleAvoidanceYOPO(ObstacleAvoidance):
-    def __init__(self, cfg: DictConfig, device: torch.device):
-        super().__init__(cfg, device)
-    
-    def get_observations(self):
-        return self.p, self.q, self.v, self.a, self.target_vel, self.sensor_tensor.unsqueeze(1)
-    
-    @timeit
-    def step(self, action):
-        # type: (Tensor) -> Tuple[TensorDict, Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
-        self.dynamics.step(action)
-        terminated, truncated = self.terminated(), self.truncated()
-        self.progress += 1
-        if self.renderer is not None:
-            self.renderer.render(self.states_for_render())
-            truncated = torch.full_like(truncated, self.renderer.gui_states["reset_all"]) | truncated
-        arrived = (self.p - self.target_pos).norm(dim=-1) < 0.5
-        self.arrive_time.copy_(torch.where(arrived & (self.arrive_time == 0), self.progress.float() * self.dt, self.arrive_time))
-        truncated |= arrived & ((self.progress.float() * self.dt) > (self.arrive_time + self.wait_before_truncate))
-        avg_vel = (self.init_pos - self.target_pos).norm(dim=-1) / self.arrive_time
-        success = arrived & truncated
-        reset = terminated | truncated
-        reset_indices = reset.nonzero().view(-1)
-        loss, loss_components, _ = self.loss_fn(self.p.unsqueeze(1), self.v.unsqueeze(1), self.a.unsqueeze(1))
-        self.update_sensor_data()
-        extra = {
-            "truncated": truncated,
-            "l": self.progress.clone(),
-            "reset": reset,
-            "reset_indices": reset_indices,
-            "success": success,
-            "arrive_time": self.arrive_time.clone(),
-            "loss_components": loss_components,
-            "stats_raw": {
-                "success_rate": success[reset],
-                "survive_rate": truncated[reset],
-                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
-                "avg_vel": avg_vel[success],
-                "arrive_time": self.arrive_time.clone()[success],
-            },
-            "sensor": self.sensor_tensor.clone()
-        }
-        if reset_indices.numel() > 0:
-            self.reset_idx(reset_indices)
-        return self.get_observations(), loss, terminated, extra
-    
-    @timeit
-    def loss_fn(self, _p, _v, _a):
-        # type: (ObstacleAvoidance, Tensor, Tensor, Tensor) -> Tuple[Tensor, Dict[str, float], Tensor]
-        p, v, a = _p.detach(), _v.detach(), _a.detach()
-        target_relpos = self.target_pos.unsqueeze(1) - _p
-        target_dist = target_relpos.norm(dim=-1)
-        target_vel = target_relpos / torch.max(target_dist / self.max_vel.unsqueeze(-1), torch.ones_like(target_dist)).unsqueeze(-1)
-        target_vel.detach_()
-        virtual_radius = 0.2
-        # calculating the closest point on each sphere to the quadrotor
-        sphere_relpos = self.obstacle_manager.p_spheres.unsqueeze(2) - p.unsqueeze(1) # [n_envs, n_spheres, 3]
-        dist2surface_sphere = (sphere_relpos.norm(dim=-1) - self.obstacle_manager.r_spheres.unsqueeze(2)).clamp(min=0) # [n_envs, n_spheres]
-        # calculating the closest point on each cube to the quadrotor
-        nearest_point = p.unsqueeze(1).clamp(
-            min=self.obstacle_manager.box_min.unsqueeze(2),
-            max=self.obstacle_manager.box_max.unsqueeze(2)) # [n_envs, n_cubes, 3]
-        cube_relpos = nearest_point - p.unsqueeze(1) # [n_envs, n_cubes, 3]
-        dist2surface_cube = cube_relpos.norm(dim=-1).clamp(min=0) # [n_envs, n_cubes]
-        # concatenate the relative direction and distance to the surface of both type of obstacles
-        obstacle_reldirection = F.normalize(torch.cat([sphere_relpos, cube_relpos], dim=1), dim=-1) # [n_envs, n_obstacles, 3]
-        dist2surface = torch.cat([dist2surface_sphere, dist2surface_cube], dim=1) # [n_envs, n_obstacles]
-        dist2surface = (dist2surface - self.r_drone - virtual_radius).clamp(min=0)
-        # calculate the obstacle avoidance loss
-        approaching_vel = torch.sum(obstacle_reldirection * _v.unsqueeze(1), dim=-1) # [n_envs, n_obstacles]
-        approaching = approaching_vel > 0
-        avoiding_vel = torch.norm(_v.unsqueeze(1) - approaching_vel.detach().unsqueeze(-1) * obstacle_reldirection, dim=-1) # [n_envs, n_obstacles]
-        approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dist2surface.neg().exp()).max(dim=1) # [n_envs]
-        avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dist2surface.neg().exp() # [n_envs, n_obstacles]
-        avoiding_reward = avoiding_reward.gather(dim=1, index=most_dangerous.unsqueeze(1)).squeeze(1) # [n_envs]
-        oa_loss = approaching_penalty - 0.2 * avoiding_reward
-        # oa_loss = approaching_penalty
-        
-        pos_loss = 1 - target_relpos.norm(dim=-1).neg().exp()
-        
-        vel_diff = torch.norm(_v - target_vel, dim=-1)
-        vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-        
-        collision = torch.any(dist2surface < self.r_drone, dim=1) # [n_envs]
-        collision = collision | (p[..., 2] - self.r_drone < self.z_ground_plane)
-        # out_of_bound = torch.any(p < -1.5*self.L, dim=-1) | torch.any(p > 1.5*self.L, dim=-1)
-        
-        total_loss = (
-            self.loss_weights.pointmass.vel * vel_loss +
-            self.loss_weights.pointmass.oa * oa_loss +
-            self.loss_weights.pointmass.pos * pos_loss +
-            self.loss_weights.pointmass.collision * collision.float()
-        )
-        loss_components = {
-            "vel_loss": vel_loss.mean().item(),
-            "pos_loss": pos_loss.mean().item(),
-            "oa_loss": oa_loss.mean().item(),
-            "total_loss": total_loss.mean().item()
-        }
-        return total_loss, loss_components, collision

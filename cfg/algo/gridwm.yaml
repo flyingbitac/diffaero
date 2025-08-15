@@ -1,16 +1,23 @@
 name: grid_wm
 
 l_rollout: 32
-
+gamma: 0.99
+lmbda: 0.95
 odom_free: False
 
-actor:
-  network:
+agent:
+  actor:
     name: mlp
     hidden_dim: [256, 128]
+    lr: 0.001
+    max_grad_norm: 1.
+  critic:
+    name: mlp
+    hidden_dim: [256, 128]
+    lr: 0.003
+    max_grad_norm: 1.
+    n_minibatch: 8
   
-  lr: 1e-3
-  max_grad_norm: 1.
   entropy_weight: 0.03
 
 wm:

@@ -3,9 +3,11 @@ from typing import Union
 import torch
 from omegaconf import DictConfig
 
-from diffaero.env.position_control import PositionControl, Sim2RealPositionControl, MultiAgentPositionControl
-from diffaero.env.position_control import PositionControl, MultiAgentPositionControl
-from diffaero.env.obstacle_avoidance import ObstacleAvoidance, ObstacleAvoidanceYOPO, ObstacleAvoidanceGrid
+from diffaero.env.position_control import PositionControl, Sim2RealPositionControl
+from diffaero.env.position_control_multi_agent import MultiAgentPositionControl
+from diffaero.env.obstacle_avoidance import ObstacleAvoidance
+from diffaero.env.obstacle_avoidance_grid import ObstacleAvoidanceGrid
+from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
 from diffaero.env.racing import Racing
 
 ENV_ALIAS = {

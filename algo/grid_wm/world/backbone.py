@@ -204,7 +204,7 @@ class WorldModel(nn.Module):
         state: Tensor,      # [B T S]
         actions: Tensor,    # [B T D]
         rewards: Tensor,    # [B T]
-        terminals: Tensor,  # [B T]
+        terminated: Tensor, # [B T]
         gt_grids: Tensor,   # [B T N_grids]
         visible_map: Tensor # [B T N_grids]
     ) -> Tuple[Dict[str, float], Dict[str, float], Optional[Tensor]]:
@@ -255,10 +255,10 @@ class WorldModel(nn.Module):
         
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
         rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
-        term_loss = self.term_loss(ter_logits, terminals.float())
+        term_loss = self.term_loss(ter_logits, terminated.float())
         term_pred = ter_logits > 0
-        term_acc = (term_pred == terminals).float().mean()
-        term_precision = term_pred[terminals].float().mean() if torch.any(terminals) else torch.tensor(1.0)
+        term_acc = (term_pred == terminated).float().mean()
+        term_precision = term_pred[terminated].float().mean() if torch.any(terminated) else torch.tensor(1.0)
         
         total_loss = (
             self.rec_img_weight * rec_img_loss +
