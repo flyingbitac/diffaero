@@ -114,7 +114,7 @@ class ImageDecoderMLP(nn.Module):
     def compute_loss(self, inputs: Tensor, targets: Tensor):
         preds = self.forward(inputs)
         loss = F.mse_loss(preds, targets.reshape_as(preds), reduction="none").flatten(start_dim=2).sum(dim=-1).mean()
-        return loss
+        return preds.detach(), loss
 
 class GridDecoder(nn.Module):
     def __init__(self, rssm_cfg: DictConfig, grid_cfg: DictConfig):

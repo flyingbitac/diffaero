@@ -10,6 +10,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 import tensordict
 from tensordict import TensorDict
+import numpy as np
 
 from diffaero.env.obstacle_avoidance_grid import ObstacleAvoidanceGrid
 from diffaero.dynamics.pointmass import point_mass_quat
@@ -127,7 +128,7 @@ class GRIDWM:
             # find ground truth and visible grid
             ground_truth_grid = observations["grid"]
             visible_map = observations["visible_map"]
-            total_loss, grad_norms, grid_pred = self.wm.update(
+            total_loss, grad_norms, predictions = self.wm.update(
                 obs=observations['perception'],
                 state=observations['state'],
                 actions=actions,
@@ -136,20 +137,22 @@ class GRIDWM:
                 gt_grids=ground_truth_grid,
                 visible_map=visible_map
             )
-        
-        if grid_pred is not None:
+
+        if "occupancy_pred" in predictions.keys():
             visible_grid_gt_for_plot = ground_truth_grid & visible_map
-            visible_grid_pred_for_plot = grid_pred & visible_map
-            
+            visible_grid_pred_for_plot = predictions["occupancy_pred"] & visible_map
+
             n_missd_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
             env_idx, time_idx = torch.where(n_missd_predictions == n_missd_predictions.max())
             env_idx, time_idx = env_idx[0], time_idx[0]
-            selected_grid_gt = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
-            selected_grid_pred = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
-        else:
-            selected_grid_gt, selected_grid_pred = None, None
+            predictions["occupancy_gt"] = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
+            predictions["occupancy_pred"] = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
         
-        return total_loss, grad_norms, selected_grid_gt, selected_grid_pred
+        if "image_pred" in predictions.keys():
+            predictions["image_gt"] = predictions["image_gt"][env_idx, time_idx]
+            predictions["image_pred"] = predictions["image_pred"][env_idx, time_idx]
+        
+        return total_loss, grad_norms, predictions
     
     @torch.no_grad()
     def bootstrap(
@@ -245,17 +248,26 @@ class GRIDWM:
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
-        wm_losses, wm_grad_norm, selected_grid_gt, selected_grid_pred = self.update_wm()
+        wm_losses, wm_grad_norm, predictions = self.update_wm()
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic()
         losses = {**wm_losses, **actor_losses, **critic_losses}
         grad_norms = {**wm_grad_norm, **actor_grad_norms, **critic_grad_norms}
         self.detach()
-        if selected_grid_gt is not None and selected_grid_pred is not None:
-            policy_info.update({
-                "grid_gt": selected_grid_gt,
-                "grid_pred": selected_grid_pred
-            })
+            
+        if logger.n % 100 == 0:
+            if "occupancy_pred" in predictions.keys() and "occupancy_gt" in predictions.keys():
+                occupancy_gt = env.visualize_grid(predictions["occupancy_gt"])
+                occupancy_pred = env.visualize_grid(predictions["occupancy_pred"])
+                occupancy = np.concatenate([occupancy_gt, occupancy_pred], axis=1).transpose(2, 0, 1)
+                logger.log_image("recon/occupancy", occupancy)
+            if "image_pred" in predictions.keys() and "image_gt" in predictions.keys():
+                preprocess = lambda x: x.clamp(0., 1.).permute(1, 2, 0).expand(-1, -1, 3).cpu().numpy()
+                img_gt = preprocess(predictions["image_gt"])
+                img_pred = preprocess(predictions["image_pred"])
+                img = np.concatenate([img_gt, img_pred], axis=1).transpose(2, 0, 1)
+                logger.log_image("recon/image", img)
+
         return obs, policy_info, env_info, losses, grad_norms
 
     def clear_loss(self):

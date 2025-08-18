@@ -123,23 +123,22 @@ class WorldModel(nn.Module):
         self.rssm = RSSM.build(token_dim=fmap_final_shape + state_embed_dim, rssm_cfg=rssm_cfg)
         
         # image decoder
-        if self.recon_image:
-            if image_dec_cfg.use_mlp:
-                self.image_decoder = ImageDecoderMLP(
-                    final_image_shape=[1, obs_dim[1][0], obs_dim[1][1]],
-                    feat_dim=self.rssm_feature_dim,
-                    hidden_units=image_dec_cfg.mlpdecoder.hidden_units,
-                    act=image_dec_cfg.mlpdecoder.act,
-                    norm=image_dec_cfg.mlpdecoder.norm)
-            else:
-                self.image_decoder = ImageDecoder(
-                    final_image_shape=fmap_final_shape,
-                    feat_dim=self.rssm_feature_dim,
-                    channels=image_dec_cfg.channels,
-                    stride=image_dec_cfg.stride,
-                    kernel_size=image_dec_cfg.kernel_size,
-                    act=image_dec_cfg.act,
-                    norm=image_dec_cfg.norm)
+        if image_dec_cfg.use_mlp:
+            self.image_decoder = ImageDecoderMLP(
+                final_image_shape=[1, obs_dim[1][0], obs_dim[1][1]],
+                feat_dim=self.rssm_feature_dim,
+                hidden_units=image_dec_cfg.mlpdecoder.hidden_units,
+                act=image_dec_cfg.mlpdecoder.act,
+                norm=image_dec_cfg.mlpdecoder.norm)
+        else:
+            self.image_decoder = ImageDecoder(
+                final_image_shape=fmap_final_shape,
+                feat_dim=self.rssm_feature_dim,
+                channels=image_dec_cfg.channels,
+                stride=image_dec_cfg.stride,
+                kernel_size=image_dec_cfg.kernel_size,
+                act=image_dec_cfg.act,
+                norm=image_dec_cfg.norm)
         # state decoder
         if self.recon_state:
             self.state_decoder = StateDecoder(obs_dim[0], rssm_cfg)
@@ -207,7 +206,7 @@ class WorldModel(nn.Module):
         terminated: Tensor, # [B T]
         gt_grids: Tensor,   # [B T N_grids]
         visible_map: Tensor # [B T N_grids]
-    ) -> Tuple[Dict[str, float], Dict[str, float], Optional[Tensor]]:
+    ) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, Tensor]]:
         deter = torch.zeros(obs.size(0), self.deter_dim, device=obs.device)
         tokens = [self.image_encoder(obs)]
         if self.encode_state:
@@ -232,9 +231,10 @@ class WorldModel(nn.Module):
             reward_logits = self.reward_decoder(feats)
             rew_loss = self.symlogtwohot(reward_logits, rewards)
         
-        rec_img_loss = torch.tensor(0)
         if self.recon_image:
-            rec_img_loss = self.image_decoder.compute_loss(feats, obs)
+            rec_img, rec_img_loss = self.image_decoder.compute_loss(feats, obs)
+        else:
+            rec_img, rec_img_loss = self.image_decoder.compute_loss(feats.detach(), obs)
         
         rec_state_loss = torch.tensor(0)
         if self.recon_state:
@@ -251,7 +251,6 @@ class WorldModel(nn.Module):
             visible_pred_grid = visible_grid_logits > 0
             grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
             grid_precision = visible_pred_grid[visible_gt_grid].float().mean()
-        grid_pred = grid_logits > 0 if self.recon_grid else None
         
         dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
         rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
@@ -284,8 +283,7 @@ class WorldModel(nn.Module):
             'wm/total_loss': total_loss.item(),
         }
         
-        if self.recon_image:
-            losses['wm/image_recon'] = rec_img_loss.item()
+        losses['wm/image_recon'] = rec_img_loss.item()
         if self.recon_state:
             losses['wm/state_recon'] = rec_state_loss.item()
         if self.recon_grid:
@@ -299,7 +297,14 @@ class WorldModel(nn.Module):
             'wm/grad_norm': grad_norm.item()
         }
         
-        return losses, grad_norms, grid_pred
+        predictions = {}
+        if self.recon_grid:
+            predictions["occupancy_pred"] = grid_logits > 0
+            predictions["occupancy_gt"] = gt_grids
+        predictions["image_pred"] = rec_img
+        predictions["image_gt"] = obs.reshape_as(rec_img)
+        
+        return losses, grad_norms, predictions
     
     def save(self, path: str):
         if not os.path.exists(path):
@@ -311,8 +316,7 @@ class WorldModel(nn.Module):
         }
         if self.encode_state:
             state_dicts["state_encoder"] = self.state_encoder.state_dict()
-        if self.recon_image:
-            state_dicts["image_decoder"] = self.image_decoder.state_dict()
+        state_dicts["image_decoder"] = self.image_decoder.state_dict()
         if self.recon_state:
             state_dicts["state_decoder"] = self.state_decoder.state_dict()
         if self.recon_grid:
@@ -329,8 +333,7 @@ class WorldModel(nn.Module):
         self.termination_decoder.load_state_dict(state_dicts["termination_decoder"])
         if self.encode_state:
             self.state_encoder.load_state_dict(state_dicts["state_encoder"])
-        if self.recon_image:
-            self.image_decoder.load_state_dict(state_dicts["image_decoder"])
+        self.image_decoder.load_state_dict(state_dicts["image_decoder"])
         if self.recon_state:
             self.state_decoder.load_state_dict(state_dicts["state_decoder"])
         if self.recon_grid:
