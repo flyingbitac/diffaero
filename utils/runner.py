@@ -164,7 +164,7 @@ class TrainRunner:
                 
             if "video" in policy_info.keys():
                 self.logger.log_video("imagine_video", policy_info["video"], i+1, fps=30)
-            
+                        
             if i % 100 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
                 grid_gt = self.env.visualize_grid(policy_info["grid_gt"])
                 grid_pred = self.env.visualize_grid(policy_info["grid_pred"])

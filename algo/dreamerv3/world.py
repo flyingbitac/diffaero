@@ -217,6 +217,7 @@ class World_Agent:
 
         obs = next_obs
         self.num_steps+=1
+
         if self.num_steps%2500==0:
             logger_video = generate_video(self.world_model_env, self.agent, self.world_agent_cfg.actor_critic.training, 64)
             policy_info["video"] = logger_video

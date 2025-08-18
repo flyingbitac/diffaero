@@ -41,6 +41,7 @@ reward_weights:
   constant: 1.
   pointmass:
     vel: 0.06
+    z: 0.2
     oa: 0.6
     jerk: 0.0005
     pos: 0.5

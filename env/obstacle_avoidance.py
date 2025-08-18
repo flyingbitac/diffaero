@@ -1,6 +1,7 @@
 from typing import Tuple, Dict, Union, List
 import os
 import math
+from collections import deque
 
 from omegaconf import DictConfig
 import torch
@@ -139,7 +140,8 @@ class OccupancyGridMap3D:
         self.log_odds.zero_()
     
     def reset_idx(self, env_idx):
-        self.log_odds[env_idx].zero_()
+        # self.log_odds[env_idx].zero_()
+        self.log_odds[env_idx] = 0.
 
 class ObstacleAvoidance(BaseEnv):
     def __init__(self, cfg: DictConfig, device: torch.device):
@@ -319,6 +321,7 @@ class ObstacleAvoidance(BaseEnv):
             )
             total_reward = (
                 self.reward_weights.constant - 
+                self.reward_weights.pointmass.z * z_loss -
                 self.reward_weights.pointmass.vel * vel_loss -
                 self.reward_weights.pointmass.oa * oa_loss -
                 self.reward_weights.pointmass.jerk * jerk_loss -
