@@ -144,7 +144,7 @@ class PPO:
         return losses, grad_norms
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()
@@ -322,7 +322,7 @@ class AsymmetricPPO(PPO):
         return losses, grad_norms
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()

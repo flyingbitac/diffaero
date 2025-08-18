@@ -51,7 +51,7 @@ class APG:
         return {"actor_loss": actor_loss}, {"actor_grad_norm": grad_norm}
 
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(obs)
             obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action))

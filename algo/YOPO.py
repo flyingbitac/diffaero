@@ -15,6 +15,7 @@ from tqdm import tqdm
 from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
 from diffaero.utils.render import torch2ti
 from diffaero.utils.runner import timeit
+from diffaero.utils.logger import Logger
 
 class YOPONet(nn.Module):
     def __init__(
@@ -276,7 +277,7 @@ class YOPO:
         return pva_next
 
     @timeit
-    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, obs: Tuple[Tensor], on_step_cb=None):
+    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: Tuple[Tensor], on_step_cb=None):
         N, HW = env.n_envs, self.n_pitch * self.n_yaw
         
         p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = obs

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
 from diffaero import DIFFAERO_ROOT_DIR
@@ -135,11 +135,19 @@ class Logger:
         self.cfg = copy.deepcopy(cfg)
         assert str(cfg.log_level).upper() in logging._nameToLevel.keys()
         Logger.logging.setLevel(logging._nameToLevel[str(cfg.log_level).upper()])
-        self.logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+        hydra_cfg = hydra.core.hydra_config.HydraConfig.get() # type: ignore
+        
+        self.logdir = hydra_cfg.runtime.output_dir
         run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
         type = cfg.logger.name.lower()
         self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](self.cfg, self.logdir, run_name)
         Logger.info("Output directory:", self.logdir)
+        
+        is_multirun = hydra_cfg.mode == hydra.types.RunMode.MULTIRUN # type: ignore
+        job_id = hydra_cfg.job.num if is_multirun else 0
+        desc = f"Job {job_id:2d}" if is_multirun else ""
+        n = cfg.n_updates if hasattr(cfg, "n_updates") else cfg.n_steps
+        self.pbar = tqdm(range(n), position=job_id%self.cfg.n_jobs, desc=desc)
     
     @staticmethod
     def _get_logger(inspect_stack: List[inspect.FrameInfo]):
@@ -171,24 +179,28 @@ class Logger:
     def critical(*msgs):
         with tqdm.external_write_mode():
             Logger._get_logger(inspect.stack()).critical(msg2str(*msgs))
+    
+    @property
+    def n(self):
+        return self.pbar.n
 
-    def log_scalar(self, tag, value, step):
-        return self._logger.log_scalar(tag, value, step)
+    def log_scalar(self, tag, value):
+        return self._logger.log_scalar(tag, value, self.n)
     
-    def log_scalars(self, value_dict, step):
-        return self._logger.log_scalars(value_dict, step)
+    def log_scalars(self, value_dict):
+        return self._logger.log_scalars(value_dict, self.n)
     
-    def log_histogram(self, tag, values, step):
-        return self._logger.log_histogram(tag, values, step)
+    def log_histogram(self, tag, values):
+        return self._logger.log_histogram(tag, values, self.n)
     
-    def log_image(self, tag, img, step):
-        return self._logger.log_image(tag, img, step)
+    def log_image(self, tag, img):
+        return self._logger.log_image(tag, img, self.n)
     
-    def log_images(self, tag, img, step):
-        return self._logger.log_images(tag, img, step)
+    def log_images(self, tag, img):
+        return self._logger.log_images(tag, img, self.n)
             
-    def log_video(self, tag, video, step, fps):
-        return self._logger.log_video(tag, video, step, fps)
+    def log_video(self, tag, video, fps):
+        return self._logger.log_video(tag, video, self.n, fps)
             
     def close(self):
         return self._logger.close()

@@ -270,7 +270,7 @@ class GRID:
         return {"actor_loss": actor_loss.mean().item(), "entropy_loss": entropy_loss.mean().item()}, {"actor_grad_norm": grad_norm}
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         rollout_obs, rollout_dones, rollout_actions = [], [], []
         for _ in range(cfg.l_rollout):
             action, policy_info = self.act(obs)

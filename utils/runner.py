@@ -121,31 +121,25 @@ class TrainRunner:
     def run(self):
         """Start training."""
         # make progress bars to display on different rows in multirun mode
-        hydra_cfg = hydra.core.hydra_config.HydraConfig.get() # type: ignore
-        is_multirun = hydra_cfg.mode == hydra.types.RunMode.MULTIRUN # type: ignore
-        job_id = hydra_cfg.job.num if is_multirun else 0
-        desc = f"Job {job_id:2d}" if is_multirun else ""
-        pbar = tqdm(range(self.cfg.n_updates), position=job_id%self.cfg.n_jobs, desc=desc)
-        
         obs = self.env.reset()
         on_step_cb = display_image if self.cfg.display_image else None
         if self.torch_profiler is not None:
             self.torch_profiler.start()
-        for i in pbar:
+        for i in self.logger.pbar:
             if self.torch_profiler is not None:
                 self.torch_profiler.step()
-            t1 = pbar._time()
+            t1 = self.logger.pbar._time()
             self.env.detach()
-            obs, policy_info, env_info, losses, grad_norms = self.agent.step(self.cfg, self.env, obs, on_step_cb=on_step_cb)
+            obs, policy_info, env_info, losses, grad_norms = self.agent.step(self.cfg, self.env, self.logger, obs, on_step_cb=on_step_cb)
             l_episode = env_info["stats"].get("l_episode", 0.)
             success_rate = env_info["stats"].get("success_rate", 0.)
             survive_rate = env_info["stats"].get("survive_rate", 0.)
-            pbar.set_postfix({
+            self.logger.pbar.set_postfix({
                 "loss": f"{env_info['loss_components']['total_loss']:6.3f}",
                 "l_episode": f"{l_episode:4.1f}",
                 "success_rate": f"{success_rate:.2f}",
                 "survive_rate": f"{survive_rate:.2f}",
-                "fps": f"{int(self.cfg.l_rollout*self.cfg.n_envs/(pbar._time()-t1)):,d}"})
+                "fps": f"{int(self.cfg.l_rollout*self.cfg.n_envs/(self.logger.pbar._time()-t1)):,d}"})
             if i % self.cfg.log_freq == 0:
                 log_info = {
                     "env_loss": env_info["loss_components"],
@@ -155,18 +149,9 @@ class TrainRunner:
                 }
                 if "value" in policy_info.keys():
                     log_info["value"] = policy_info["value"].mean().item()
-                if "grid" in policy_info.keys():
-                    self.logger.log_images("grid", deepcopy(policy_info["grid"]), i+1)
-                    del(policy_info["grid"])
                 if "WorldModel/state_total_loss" in policy_info.keys():
                     log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
-                self.logger.log_scalars(log_info, i+1)
-            
-            if i % 100 == 0 and any([k.startswith("grid") for k in policy_info.keys()]):
-                grid_gt = self.env.visualize_grid(policy_info["grid_gt"])
-                grid_pred = self.env.visualize_grid(policy_info["grid_pred"])
-                grid = np.concatenate([grid_gt, grid_pred], axis=1).transpose(2, 0, 1)
-                self.logger.log_image("grid", grid, i+1)
+                self.logger.log_scalars(log_info)
             
             if success_rate >= self.max_success_rate:
                 self.max_success_rate = success_rate
@@ -236,12 +221,11 @@ class TestRunner:
             video_array = np.empty((self.env.renderer.n_envs, self.env.max_steps, H, W, 3), dtype=np.uint8)
         
         obs = self.env.reset()
-        pbar = tqdm(range(self.cfg.n_steps))
         n_resets = 1
         n_survive = 0
         n_success = 0
-        for i in pbar:
-            t1 = pbar._time()
+        for i in self.logger.pbar:
+            t1 = self.logger.pbar._time()
             self.env.detach()
             action, policy_info = self.agent.act(obs, test=True)
             if self.cfg.algo.name != "yopo":
@@ -252,15 +236,15 @@ class TestRunner:
             l_episode = env_info["stats"].get("l_episode", 0.)
             success_rate = env_info["stats"].get("success_rate", 0.)
             survive_rate = env_info["stats"].get("survive_rate", 0.)
-            pbar.set_postfix({
+            self.logger.pbar.set_postfix({
                 "l_episode": f"{l_episode:.1f}",
                 "success_rate": f"{success_rate:.2f}",
                 "survive_rate": f"{survive_rate:.2f}",
-                "fps": f"{int(self.cfg.env.n_envs/(pbar._time()-t1)):,d}"})
+                "fps": f"{int(self.cfg.env.n_envs/(self.logger.pbar._time()-t1)):,d}"})
             log_info = {
                 "env_loss": env_info.get("loss_components", {}), 
                 "metrics": env_info["stats"]}
-            self.logger.log_scalars(log_info, i+1)
+            self.logger.log_scalars(log_info)
             self.success_rate = n_success / n_resets
             
             if self.cfg.record_video:

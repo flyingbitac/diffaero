@@ -158,7 +158,7 @@ class World_Agent:
         return action, None
 
     @timeit
-    def step(self, cfg, env, obs, on_step_cb):
+    def step(self, cfg, env, logger, obs, on_step_cb):
         policy_info = {}
 
         with torch.no_grad():

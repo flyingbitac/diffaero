@@ -170,7 +170,7 @@ class MASHAC:
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm}
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         obs, global_state = obs
         self.buffer.clear()
         if self.agent.is_rnn_based:

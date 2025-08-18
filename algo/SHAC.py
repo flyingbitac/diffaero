@@ -170,7 +170,7 @@ class SHAC:
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm.item()}
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()
@@ -267,7 +267,7 @@ class SHAC_PPO(SHAC):
         return next_value.detach()
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()
@@ -498,7 +498,7 @@ class SHAC_Q:
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm.item()}
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()
@@ -653,7 +653,7 @@ class SHA2C(SHAC):
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm.item()}
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()
@@ -730,7 +730,7 @@ class SHA2C_PPO(SHA2C):
         return next_value.detach()
     
     @timeit
-    def step(self, cfg, env, obs, on_step_cb=None):
+    def step(self, cfg, env, logger, obs, on_step_cb=None):
         self.buffer.clear()
         if self.agent.is_rnn_based:
             self.rnn_state_buffer.clear()

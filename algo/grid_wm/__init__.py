@@ -215,7 +215,7 @@ class GRIDWM:
         return {"actor_loss": actor_loss.mean().item(), "entropy_loss": entropy_loss.mean().item()}, {"actor_grad_norm": grad_norm}
     
     @timeit
-    def step(self, cfg: DictConfig, env: ObstacleAvoidanceGrid, obs: TensorDict, on_step_cb=None):
+    def step(self, cfg: DictConfig, env: ObstacleAvoidanceGrid, logger: Logger, obs: TensorDict, on_step_cb=None):
         # env.prev_visible_map.fill_(False) # clear the memory that wm shouldn't have
         self.clear_loss()
         for t in range(self.l_rollout):
