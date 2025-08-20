@@ -122,7 +122,7 @@ class GRIDWM:
     @timeit
     def update_wm(self):
         if not self.buffer.size >= self.batch_size:
-            return {}, {}, None, None
+            return {}, {}, {}
         for _ in range(self.n_epochs):
             observations, actions, terminated, rewards = self.buffer.sample4wm(self.batch_size)
             # find ground truth and visible grid
@@ -163,14 +163,15 @@ class GRIDWM:
         terminated: Tensor
     ):
         # value of the next obs should be zero if the next obs is a terminal obs
+        N = next_values.size(1)
         next_values = next_values * (1 - terminated)
         if self.lmbda == 0.:
             target_values = rewards + self.discount * next_values
         else:
             target_values = torch.zeros_like(next_values).to(self.device)
-            Ai = torch.zeros(self.n_envs, dtype=torch.float32, device=self.device)
-            Bi = torch.zeros(self.n_envs, dtype=torch.float32, device=self.device)
-            lam = torch.ones(self.n_envs, dtype=torch.float32, device=self.device)
+            Ai = torch.zeros(N, dtype=torch.float32, device=self.device)
+            Bi = torch.zeros(N, dtype=torch.float32, device=self.device)
+            lam = torch.ones(N, dtype=torch.float32, device=self.device)
             next_values[-1] = 1.
             for i in reversed(range(self.l_rollout)):
                 lam = lam * self.lmbda * (1. - dones[i]) + dones[i]
@@ -184,8 +185,8 @@ class GRIDWM:
     
     @timeit
     def update_critic(self) -> Tuple[Dict[str, float], Dict[str, float]]:
-        T, N = self.l_rollout, self.n_envs
-        state, next_values, rewards, dones, terminated = self.buffer.sample4critic(self.batch_size)
+        T, N = self.l_rollout, self.batch_size
+        state, next_values, rewards, dones, terminated = self.buffer.sample4critic(N)
         target_values = self.bootstrap(next_values, rewards, dones, terminated)
         batch_indices = torch.randperm(T*N, device=self.device)
         mb_size = T*N // self.critic_cfg.n_minibatch
