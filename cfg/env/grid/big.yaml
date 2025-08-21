@@ -1,10 +1,10 @@
 name: grid_big
 
 frame: local
-x_min: -6.
-x_max:  6.
-y_min: -6.
-y_max:  6.
-z_min: -3.
-z_max:  3.
+x_min: -3.
+x_max:  5.
+y_min: -4.
+y_max:  4.
+z_min: -2.
+z_max:  2.
 n_points: [20, 20, 10]
