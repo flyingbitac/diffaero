@@ -580,9 +580,6 @@ class SHA2C(SHAC):
         self.actor_optim = torch.optim.Adam(self.agent.actor.parameters(), lr=cfg.actor_lr)
         self.critic_optim = torch.optim.Adam(self.agent.critic.parameters(), lr=cfg.critic_lr)
         self.buffer = RolloutBufferSHAC(l_rollout, n_envs, state_dim, action_dim, device)
-        self._critic_target = deepcopy(self.agent.critic)
-        for p in self._critic_target.parameters():
-            p.requires_grad_(False)
         
         self.discount: float = cfg.gamma
         self.lmbda: float = cfg.lmbda
@@ -607,10 +604,6 @@ class SHA2C(SHAC):
         action, sample, logprob, entropy = self.agent.get_action(tensordict2tuple(obs), test=test)
         return action, {"sample": sample, "logprob": logprob, "entropy": entropy}
     
-    def value_target(self, state):
-        # type: (Tensor) -> Tensor
-        return self._critic_target(state).squeeze(-1)
-    
     def record_loss(self, loss, policy_info, env_info, last_step=False):
         # type: (Tensor, Dict[str, Tensor], Dict[str, Tensor], Optional[bool]) -> Tensor
         reset = torch.ones_like(env_info["reset"]) if last_step else env_info["reset"]
@@ -619,7 +612,7 @@ class SHA2C(SHAC):
         self.cumulated_loss = self.cumulated_loss + self.rollout_gamma * loss
         cumulated_loss = self.cumulated_loss[reset].sum()
         # add terminal value if rollout ends or truncated
-        next_value = self.value_target(env_info["next_state_before_reset"])
+        next_value = self.agent.get_value(env_info["next_state_before_reset"])
         terminal_value = (self.rollout_gamma * self.discount * next_value)[truncated].sum()
         assert terminal_value.requires_grad and env_info["next_state_before_reset"].requires_grad
         # add up the discounted cumulated loss, the terminal value and the entropy loss
@@ -648,8 +641,6 @@ class SHA2C(SHAC):
             else:
                 grad_norm = torch.nn.utils.get_total_norm(self.agent.critic.parameters())
             self.critic_optim.step()
-        for p, p_t in zip(self.agent.critic.parameters(), self._critic_target.parameters()):
-            p_t.data.lerp_(p.data, self.target_update_rate)
         return {"critic_loss": critic_loss.item()}, {"critic_grad_norm": grad_norm.item()}
     
     @timeit
@@ -690,6 +681,10 @@ class SHA2C(SHAC):
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return obs, policy_info, env_info, losses, grad_norms
+    
+    def detach(self):
+        if self.agent.is_rnn_based:
+            self.agent.detach()
         
     @staticmethod
     def build(cfg, env, device):

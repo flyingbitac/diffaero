@@ -23,9 +23,9 @@ ground_plane: True
 
 loss_weights:
   pointmass:
-    vel: 1.
+    vel: 1.5
     z: 0.5
-    oa: 4.
+    oa: 3.
     jerk: 0.005
     pos: 5.
     collision: 0.
@@ -48,13 +48,13 @@ reward_weights:
   #   collision: 5.
 
   # for SHA2C
-  constant: 1.
+  constant: 1.5
   pointmass:
     vel: 0.
     oa: 0.
     jerk: 0.001
     pos: 0.
-    arrive: 1.
+    arrive: 1.5
     collision: 50.
   quadrotor:
     vel: 1.
