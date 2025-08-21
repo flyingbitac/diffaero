@@ -7,6 +7,7 @@ from torch import Tensor
 from tensordict import TensorDict, merge_tensordicts
 import open3d as o3d
 import numpy as np
+from tqdm import tqdm
 
 from diffaero.env.obstacle_avoidance import ObstacleAvoidance
 from diffaero.utils.sensor import RayCastingSensorBase
@@ -48,10 +49,10 @@ def get_linear_idx(
     z_idx = ((point_list[..., 2] - z_min).clamp(max=z_max-z_min-1e-5) / cube_size).long()
     return x_idx * (n_y * n_z) + y_idx * n_z + z_idx
 
+# @timeit
 @torch.jit.script
 def get_visibility_map(
     p: Tensor,
-    sensor_tensor: Tensor,
     contact_points: Tensor,
     ray_segment_weight: Tensor,
     x_min: float,
@@ -66,57 +67,56 @@ def get_visibility_map(
     cube_size: float,
     prev_visible_map: Tensor,
     prev_points: Tensor,
-    grid_centers_local: Tensor,
+    grid_centers_rel: Tensor,
     Rz: Tensor,
     grid_in_local_frame: bool
 ) -> Tuple[Tensor, Tensor]:
-    # get visiability map
-    N, H, W = sensor_tensor.shape
+    N = contact_points.size(0)
     n_grid_points = n_x * n_y * n_z
-    start = p.unsqueeze(1).expand(-1, H*W, -1) # [n_envs, n_rays, 3]
+    start = p.unsqueeze(1).expand_as(contact_points) # [n_envs, n_rays, 3]
     
     # 1. check if previous visible points are inside the current range of the grid
     # if so, mark them as visible and update their coordinate
-    curr_visible_map_prev = torch.zeros_like(prev_visible_map) # [n_envs, n_points]
+    visible_map = torch.zeros_like(prev_visible_map) # [n_envs, n_points]
+    curr_points = torch.zeros_like(prev_points)
+    Rz_T = Rz.transpose(-1, -2)
     
     # 1.1 get the local coordinate of previous visible points
     prev_points_rel = prev_points - p.unsqueeze(1)
     if grid_in_local_frame:
         # world frame -> local frame
-        prev_points_rel = torch.matmul(Rz.transpose(-1, -2), prev_points_rel.transpose(-1, -2)).transpose(-1, -2)
-    env_ids, prev_point_ids = torch.where(prev_visible_map)
-    prev_visible_points_local = prev_points_rel[env_ids, prev_point_ids]
-    # 1.2 check if previous visible points are inside the current range of the grid
-    valid_mask = check_if_valid(prev_visible_points_local, x_min, x_max, y_min, y_max, z_min, z_max)
-    # 1.3 mark the previous visible points as visible in the current occupancy map
-    valid_env_ids = env_ids[valid_mask]
-    valid_prev_id = prev_point_ids[valid_mask] # indices in previous local frame for points that are visible in previous timestep
-    valid_current_local = prev_visible_points_local[valid_mask]
-    linear_ids = get_linear_idx(valid_current_local, x_min, x_max, y_min, y_max, z_min, z_max, n_x, n_y, n_z, cube_size)
-    curr_visible_map_prev[valid_env_ids, linear_ids] = True
+        prev_points_rel = torch.matmul(Rz_T, prev_points_rel.transpose(-1, -2)).transpose(-1, -2)
+    # # 1.2 check if previous visible points are inside the current range of the grid
+    valid_mask = check_if_valid(prev_points_rel, x_min, x_max, y_min, y_max, z_min, z_max)
+    valid_and_visible = valid_mask & prev_visible_map
+    env_ids, point_ids = torch.where(valid_and_visible)
+    # points that are previously visible and still in the grid range currently
+    prev_visible_points_local = prev_points_rel[valid_and_visible]
+    linear_ids = get_linear_idx(prev_visible_points_local, x_min, x_max, y_min, y_max, z_min, z_max, n_x, n_y, n_z, cube_size)
+    # # 1.3 mark the previous visible points as visible in the current occupancy map
+    visible_map[env_ids, linear_ids] = True
     # 1.4 update the position of previous visible points by its current relative position
-    curr_points = torch.zeros_like(prev_points)
-    curr_points[valid_env_ids, linear_ids] = prev_points[valid_env_ids, valid_prev_id]
+    curr_points[env_ids, linear_ids] = prev_points[env_ids, point_ids]
     
     # 2. get the current visible points
     # 2.1 sample visible points on the ray segments
     curr_visible_points = torch.lerp( # [n_envs, n_segments * n_rays, 3]
         input=start.unsqueeze(1),                           # [n_envs, 1, n_rays, 3]
         end=contact_points.unsqueeze(1),                    # [n_envs, 1, n_rays, 3]
-        weight=ray_segment_weight.reshape(1, -1, 1, 1)      # [1, n_segments, 1, 1]
+        weight=ray_segment_weight                           # [1, n_segments, 1, 1]
     ).reshape(N, -1, 3)
     
     # 2.2 get the local coordinate of the current visible points
     curr_visible_points_rel = curr_visible_points - p.unsqueeze(1) # [n_envs, n_segments * n_rays, 3]
     if grid_in_local_frame:
         # world frame -> local frame
-        curr_visible_points_rel = torch.matmul(Rz.transpose(-1, -2), curr_visible_points_rel.transpose(-1, -2)).transpose(-1, -2)
+        curr_visible_points_rel = torch.matmul(Rz_T, curr_visible_points_rel.transpose(-1, -2)).transpose(-1, -2)
     valid_mask = check_if_valid(curr_visible_points_rel, x_min, x_max, y_min, y_max, z_min, z_max)
-    env_ids, prev_point_ids = torch.where(valid_mask) # [n_valid_points, ]
-    local_valid_visible_points = curr_visible_points_rel[env_ids, prev_point_ids] # [n_valid_points, 3]
+    env_ids, point_ids = torch.where(valid_mask) # [n_valid_points, ]
+    local_valid_visible_points = curr_visible_points_rel[env_ids, point_ids] # [n_valid_points, 3]
     linear_ids = get_linear_idx(local_valid_visible_points, x_min, x_max, y_min, y_max, z_min, z_max, n_x, n_y, n_z, cube_size)
     
-    # 3. mark the current visible points as visible in the occupancy map
+    # 3. mark the current visible points as visible in the map
     # flatten env and voxel index into one combined index
     combined = env_ids * n_grid_points + linear_ids # [n_valid_points, ]
     # collect one 3D point per visible voxel by picking the first ray‐segment hit (vectorized)
@@ -127,15 +127,11 @@ def get_visibility_map(
     env_sel = env_ids[first_idx_unique]    # [n_unique_points]
     lin_sel = linear_ids[first_idx_unique] # [n_unique_points]
     
-    voxel_centers = p.unsqueeze(1) + grid_centers_local # [n_envs, n_points, 3]
+    voxel_centers = p.unsqueeze(1) + grid_centers_rel # [n_envs, n_points, 3]
+    # mark voxels where the first hit point actually falls inside the voxel
+    visible_map[env_sel, lin_sel] = True
     # fill the visible points tensor with the global coordinate of the first hit points
     curr_points[env_sel, lin_sel] = voxel_centers[env_sel, lin_sel]
-    diff = curr_points - voxel_centers # [n_envs, n_points, 3]
-    # mark voxels where the first hit point actually falls inside the voxel
-    visible_map = (diff.abs() <= (cube_size / 2)).all(dim=-1)  # [n_envs, n_points]
-    
-    # current visible map should also include points that are visible in the previous steps
-    visible_map |= curr_visible_map_prev
     
     return visible_map, curr_points # [n_envs, n_points], [n_envs, n_points, 3]
 
@@ -165,26 +161,29 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         grid_xyz_range = torch.stack(torch.meshgrid(x_range, y_range, z_range, indexing="ij"), dim=-1) # [x_points, y_points, z_points, 3]
         self.local_grid_centers = grid_xyz_range.reshape(1, -1, 3) # [1, n_points, 3]
         n_segments = math.ceil(self.sensor.max_dist / self.cube_size)
-        self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device)
+        self.ray_segment_weight = torch.linspace(0, 1, n_segments, device=self.device).reshape(1, n_segments, 1, 1)
         
         self.prev_visible_map = torch.zeros(self.n_envs, self.n_grid_points, dtype=torch.bool, device=self.device)
+        Logger.debug(f"Space allocated for self.prev_visible_map: {self.prev_visible_map.dtype.itemsize * self.prev_visible_map.numel() / 1024 / 1024:.1f} MB")
         self.grid_points = torch.zeros(self.n_envs, self.n_grid_points, 3, device=self.device)
+        Logger.debug(f"Space allocated for self.grid_points: {self.grid_points.dtype.itemsize * self.grid_points.numel() / 1024 / 1024:.1f} MB")
         self.contact_points = torch.zeros(self.n_envs, self.sensor.H * self.sensor.W, 3, device=self.device)
         
         self.vis = o3d.visualization.Visualizer()
         self.vis.create_window(width=200, height=200, left=50, top=350, visible=True)
     
     def visualize_grid(self, grid, do_render=False):
-        xyz = self.local_grid_centers.squeeze(0)
-        points = xyz[grid.flatten()].cpu().numpy()
-        pcd_o3d = o3d.geometry.PointCloud()
-        pcd_o3d.points = o3d.utility.Vector3dVector(points)
-        # o3d.visualization.draw_geometries([pcd_o3d])
+        with tqdm.external_write_mode():
+            xyz = self.local_grid_centers.squeeze(0)
+            points = xyz[grid.flatten()].cpu().numpy()
+            pcd_o3d = o3d.geometry.PointCloud()
+            pcd_o3d.points = o3d.utility.Vector3dVector(points)
+            # voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd_o3d, voxel_size=self.cube_size)
 
-        self.vis.clear_geometries()
-        self.vis.add_geometry(pcd_o3d)
-        self.vis.poll_events()
-        self.vis.update_renderer()
+            self.vis.clear_geometries()
+            self.vis.add_geometry(pcd_o3d)
+            self.vis.poll_events()
+            self.vis.update_renderer()
         
         return np.asarray(self.vis.capture_screen_float_buffer(do_render=do_render))
 
@@ -204,10 +203,10 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     def get_occupancy_map(self): 
         # get occupancy map
         if self.grid_frame == "world":
-            local_grid_centers = self.local_grid_centers
+            grid_centers_rel = self.local_grid_centers
         else:
-            local_grid_centers = torch.matmul(self.dynamics.Rz, self.local_grid_centers.transpose(-1, -2)).transpose(-1, -2)
-        grid_xyz = self.p.unsqueeze(1) + local_grid_centers # [n_envs, n_points, 3]
+            grid_centers_rel = torch.matmul(self.dynamics.Rz, self.local_grid_centers.transpose(-1, -2)).transpose(-1, -2)
+        grid_xyz = self.p.unsqueeze(1) + grid_centers_rel # [n_envs, n_points, 3]
         occupancy_map = self.obstacle_manager.are_points_inside_obstacles(grid_xyz) # [n_envs, n_points]
         if self.z_ground_plane is not None:
             occupancy_ground_plane = ((grid_xyz[..., 2] - self.r_drone) < self.z_ground_plane.unsqueeze(1))
@@ -216,11 +215,18 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     
     @timeit
     def get_visibility_map(self):
+        if self.grid_frame == "world":
+            grid_centers_rel = self.local_grid_centers
+        else:
+            grid_centers_rel = torch.matmul(self.dynamics.Rz, self.local_grid_centers.transpose(-1, -2)).transpose(-1, -2)
         visible_map, grid_points = get_visibility_map(
-            self.p, self.sensor_tensor, self.contact_points, self.ray_segment_weight,
+            # ray casting information
+            self.p, self.contact_points, self.ray_segment_weight,
+            # grid configurations
             self.x_min, self.x_max, self.y_min, self.y_max, self.z_min, self.z_max,
             self.cfg.grid.n_points[0], self.cfg.grid.n_points[1], self.cfg.grid.n_points[2],
-            self.cube_size, self.prev_visible_map, self.grid_points, self.local_grid_centers,
+            self.cube_size, self.prev_visible_map, self.grid_points, grid_centers_rel,
+            # whether in local frame or in world frame
             self.dynamics.Rz, grid_in_local_frame=self.grid_frame=="local"
         )
         self.prev_visible_map.copy_(visible_map)
@@ -237,7 +243,7 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
         # if self.renderer is not None:
         #     grid_tobe_visualized = visible_map
         #     self.visualize_grid(grid_tobe_visualized[self.renderer.gui_states["tracking_env_idx"]])
-        # grid_tobe_visualized = grid
+        # grid_tobe_visualized = visible_map
         # self.visualize_grid(grid_tobe_visualized[0], do_render=True)
         return obs
     

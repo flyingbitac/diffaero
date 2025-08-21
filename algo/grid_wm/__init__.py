@@ -91,8 +91,6 @@ class GRIDWM:
     def act(self, obs, test=False):
         # type: (TensorDict, bool) -> Tuple[Tensor, Dict[str, Tensor]]
         with torch.no_grad():
-            if self.deter is None:
-                self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=obs['state'].device)
             latent = self.wm.encode(obs['perception'], obs['state'], self.deter)
             actor_input = torch.cat([latent, self.deter, self.make_state_input(obs)], dim=-1)
         action, sample, logprob, entropy = self.agent.get_action(actor_input, test=test)
@@ -129,7 +127,7 @@ class GRIDWM:
             ground_truth_grid = observations["grid"]
             visible_map = observations["visible_map"]
             total_loss, grad_norms, predictions = self.wm.update(
-                obs=observations['perception'],
+                img=observations['perception'],
                 state=observations['state'],
                 actions=actions,
                 rewards=rewards,
@@ -139,7 +137,7 @@ class GRIDWM:
             )
 
         if "occupancy_pred" in predictions.keys():
-            visible_grid_gt_for_plot = ground_truth_grid & visible_map
+            visible_grid_gt_for_plot = predictions["occupancy_gt"] & visible_map
             visible_grid_pred_for_plot = predictions["occupancy_pred"] & visible_map
 
             n_missd_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
@@ -163,15 +161,14 @@ class GRIDWM:
         terminated: Tensor
     ):
         # value of the next obs should be zero if the next obs is a terminal obs
-        N = next_values.size(1)
         next_values = next_values * (1 - terminated)
         if self.lmbda == 0.:
             target_values = rewards + self.discount * next_values
         else:
             target_values = torch.zeros_like(next_values).to(self.device)
-            Ai = torch.zeros(N, dtype=torch.float32, device=self.device)
-            Bi = torch.zeros(N, dtype=torch.float32, device=self.device)
-            lam = torch.ones(N, dtype=torch.float32, device=self.device)
+            Ai = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
+            Bi = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
+            lam = torch.ones(self.batch_size, dtype=torch.float32, device=self.device)
             next_values[-1] = 1.
             for i in reversed(range(self.l_rollout)):
                 lam = lam * self.lmbda * (1. - dones[i]) + dones[i]
@@ -337,7 +334,7 @@ class GRIDWMTesttime:
         self.state_dim = obs_dim[0]
         actor_input_dim = self.wm.deter_dim + self.wm.latent_dim + (3 if self.odom_free else obs_dim[0])
         
-        self.actor = StochasticActor(cfg.actor.network, actor_input_dim, action_dim).to(device)
+        self.actor = StochasticActor(cfg.agent.actor, actor_input_dim, action_dim).to(device)
         self.device = device
         self.deter: Tensor = None
     

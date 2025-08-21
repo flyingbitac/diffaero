@@ -26,6 +26,7 @@ wm:
   odom_free: ${algo.odom_free}
   encoder:
     image:
+      # not used
       channels: [16, 32]
       stride: 2
       kernel_size: 4
@@ -49,7 +50,7 @@ wm:
 
   decoder:
     image:
-      enable: True
+      enable: False
       use_mlp: True
       cnndecoder:
         channels: [64, 32, 16, 3]
@@ -76,8 +77,8 @@ wm:
   train:
     lr: 3e-4
     grad_norm: 100.
-    grid_pos_weight: 15
-    term_pos_weight: 100
+    grid_pos_weight: 12
+    term_pos_weight: 85
 
     # weight of loss funcs
     rec_img_weight: 1.
@@ -90,6 +91,6 @@ wm:
     grid_weight: 1.
     soft_label: 0.
 
-    batch_size: 256
-    buffer_size: 1e4
+    batch_size: ${n_envs}
+    buffer_size: 5e4
     n_epochs: 4
