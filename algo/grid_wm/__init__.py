@@ -219,6 +219,7 @@ class GRIDWM:
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceGrid, logger: Logger, obs: TensorDict, on_step_cb=None):
         # env.prev_visible_map.fill_(False) # clear the memory that wm shouldn't have
         self.clear_loss()
+        rollout_buffer_list = defaultdict(list)
         for t in range(self.l_rollout):
             action, policy_info = self.act(obs)
             state = env.get_state()
@@ -229,16 +230,14 @@ class GRIDWM:
                 env.rescale_action(action), next_state_before_reset=True)
             self.reset(env_info['reset'])
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
-            self.buffer.add(
-                obs=obs,
-                state=state,
-                action=action,
-                reward=reward,
-                value=value,
-                next_done=env_info["reset"],
-                next_terminated=terminated,
-                next_value=next_value
-            )
+            rollout_buffer_list["obs"].append(obs)
+            rollout_buffer_list["state"].append(state)
+            rollout_buffer_list["action"].append(action)
+            rollout_buffer_list["reward"].append(reward)
+            rollout_buffer_list["value"].append(value)
+            rollout_buffer_list["next_done"].append(env_info["reset"])
+            rollout_buffer_list["next_terminated"].append(terminated)
+            rollout_buffer_list["next_value"].append(next_value)
             obs = next_obs
             if on_step_cb is not None:
                 on_step_cb(
@@ -246,6 +245,16 @@ class GRIDWM:
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
+        self.buffer.add(
+            obs=tensordict.stack(rollout_buffer_list["obs"], dim=1),
+            state=torch.stack(rollout_buffer_list["state"], dim=1),
+            action=torch.stack(rollout_buffer_list["action"], dim=1),
+            reward=torch.stack(rollout_buffer_list["reward"], dim=1),
+            value=torch.stack(rollout_buffer_list["value"], dim=1),
+            next_done=torch.stack(rollout_buffer_list["next_done"], dim=1),
+            next_terminated=torch.stack(rollout_buffer_list["next_terminated"], dim=1),
+            next_value=torch.stack(rollout_buffer_list["next_value"], dim=1)
+        )
         wm_losses, wm_grad_norm, predictions = self.update_wm()
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic()
