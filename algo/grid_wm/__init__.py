@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Tuple, Dict, Union, Optional, List
 import math
 import os
@@ -77,7 +78,7 @@ class GRIDWM:
         self.rollout_gamma = torch.ones(self.n_envs, device=self.device)
         self.cumulated_loss = torch.zeros(self.n_envs, device=self.device)
         self.entropy_loss = torch.tensor(0., device=self.device)
-        self.deter: Tensor | None = None
+        self.deter = torch.zeros(n_envs, self.wm.deter_dim, device=device)
     
     def make_state_input(self, obs: TensorDict) -> Tensor:
         state = obs["state"]
@@ -119,7 +120,7 @@ class GRIDWM:
     
     @timeit
     def update_wm(self):
-        if not self.buffer.size >= self.batch_size:
+        if self.buffer.size < self.batch_size:
             return {}, {}, {}
         for _ in range(self.n_epochs):
             observations, actions, terminated, rewards = self.buffer.sample4wm(self.batch_size)
@@ -135,13 +136,13 @@ class GRIDWM:
                 gt_grids=ground_truth_grid,
                 visible_map=visible_map
             )
-
+        
+        # select the worst prediction and return to the logger for visualization
         if "occupancy_pred" in predictions.keys():
             visible_grid_gt_for_plot = predictions["occupancy_gt"] & visible_map
             visible_grid_pred_for_plot = predictions["occupancy_pred"] & visible_map
-
-            n_missd_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
-            env_idx, time_idx = torch.where(n_missd_predictions == n_missd_predictions.max())
+            n_missed_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
+            env_idx, time_idx = torch.where(n_missed_predictions == n_missed_predictions.max())
             env_idx, time_idx = env_idx[0], time_idx[0]
             predictions["occupancy_gt"] = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
             predictions["occupancy_pred"] = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
@@ -169,29 +170,24 @@ class GRIDWM:
             Ai = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
             Bi = torch.zeros(self.batch_size, dtype=torch.float32, device=self.device)
             lam = torch.ones(self.batch_size, dtype=torch.float32, device=self.device)
-            next_values[-1] = 1.
+            dones[-1] = 1.
             for i in reversed(range(self.l_rollout)):
                 lam = lam * self.lmbda * (1. - dones[i]) + dones[i]
                 Ai = (1. - dones[i]) * (
                     self.discount * (self.lmbda * Ai + next_values[i]) + \
                     (1. - lam) / (1. - self.lmbda) * rewards[i])
-                Bi = self.discount * (next_values[i] * dones[i] + Bi * (1. - dones[i])) + \
-                     rewards[i]
+                Bi = self.discount * (next_values[i] * dones[i] + Bi * (1. - dones[i])) + rewards[i]
                 target_values[i] = (1.0 - self.lmbda) * Ai + lam * Bi
         return target_values.view(-1)
     
     @timeit
     def update_critic(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         T, N = self.l_rollout, self.batch_size
-        state, next_values, rewards, dones, terminated = self.buffer.sample4critic(N)
-        target_values = self.bootstrap(next_values, rewards, dones, terminated)
-        batch_indices = torch.randperm(T*N, device=self.device)
-        mb_size = T*N // self.critic_cfg.n_minibatch
-        for start in range(0, T*N, mb_size):
-            end = start + mb_size
-            mb_indices = batch_indices[start:end]
-            values = self.agent.get_value(state.flatten(0, 1)[mb_indices])
-            critic_loss = F.mse_loss(values, target_values[mb_indices])
+        for _ in range(self.critic_cfg.n_epochs):
+            state, next_values, rewards, dones, terminated = self.buffer.sample4critic(self.batch_size)
+            target_values = self.bootstrap(next_values, rewards, dones, terminated)
+            values = self.agent.get_value(state.flatten(0, 1))
+            critic_loss = F.mse_loss(values, target_values)
             self.critic_optim.zero_grad()
             critic_loss.backward()
             if self.critic_cfg.max_grad_norm is not None:
@@ -345,7 +341,7 @@ class GRIDWMTesttime:
         
         self.actor = StochasticActor(cfg.agent.actor, actor_input_dim, action_dim).to(device)
         self.device = device
-        self.deter: Tensor = None
+        self.deter: Union[None, Tensor] = None
     
     def make_state_input(self, obs: TensorDict) -> Tensor:
         state = obs["state"]
@@ -398,7 +394,6 @@ class GRIDWMExporter(nn.Module):
         self.actor = deepcopy(agent.actor.actor_mean).cpu()
         self.odom_free = agent.odom_free
         state_dim, perception_dim = agent.state_dim, agent.obs_dim[1]
-        Logger.warning(state_dim)
         self.named_inputs = [
             ("state", torch.zeros(1, state_dim)),
             ("perception", torch.zeros(1, perception_dim[0], perception_dim[1])),

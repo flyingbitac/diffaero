@@ -15,10 +15,10 @@ agent:
     name: mlp
     hidden_dim: [256, 128]
     lr: 0.003
-    max_grad_norm: 1.
-    n_minibatch: 8
+    max_grad_norm: 10.
+    n_epochs: 8
   
-  entropy_weight: 0.03
+  entropy_weight: 0.01
 
 wm:
   compile: True
@@ -78,7 +78,7 @@ wm:
     lr: 3e-4
     grad_norm: 100.
     grid_pos_weight: 12
-    term_pos_weight: 85
+    term_pos_weight: 60
 
     # weight of loss funcs
     rec_img_weight: 1.
