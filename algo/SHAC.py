@@ -654,7 +654,6 @@ class SHA2C(SHAC):
             state = env.get_state()
             with torch.no_grad():
                 value = self.agent.get_value(state)
-            policy_info["value"] = value
             next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), next_state_before_reset=True)
             next_value = self.record_loss(loss, policy_info, env_info, last_step=(t==cfg.l_rollout-1))
             self.buffer.add(
@@ -678,6 +677,7 @@ class SHA2C(SHAC):
         actor_losses, actor_grad_norms = self.update_actor()
         critic_losses, critic_grad_norms = self.update_critic(target_values)
         self.detach()
+        logger.log_scalar("value", value.mean().item())
         losses = {**actor_losses, **critic_losses}
         grad_norms = {**actor_grad_norms, **critic_grad_norms}
         return obs, policy_info, env_info, losses, grad_norms

@@ -332,7 +332,6 @@ class AsymmetricPPO(PPO):
                 state = env.get_state()
                 with torch.no_grad():
                     value = self.agent.get_value(state)
-                policy_info["value"] = value
                 next_obs, (loss, reward), terminated, env_info = env.step(env.rescale_action(action), next_state_before_reset=True)
                 self.buffer.add(
                     obs=obs,
@@ -352,6 +351,7 @@ class AsymmetricPPO(PPO):
                         policy_info=policy_info,
                         env_info=env_info)
             
+        logger.log_scalar("value", value.mean().item())
         advantages, target_values = self.bootstrap()
         for _ in range(cfg.algo.n_epoch):
             losses, grad_norms = self.train(advantages, target_values)

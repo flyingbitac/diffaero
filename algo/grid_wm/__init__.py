@@ -225,7 +225,6 @@ class GRIDWM:
             state = env.get_state()
             with torch.no_grad():
                 value = self.agent.get_value(state)
-            policy_info["value"] = value
             next_obs, (loss, reward), terminated, env_info = env.step(
                 env.rescale_action(action), next_state_before_reset=True)
             self.reset(env_info['reset'])
@@ -261,7 +260,8 @@ class GRIDWM:
         losses = {**wm_losses, **actor_losses, **critic_losses}
         grad_norms = {**wm_grad_norm, **actor_grad_norms, **critic_grad_norms}
         self.detach()
-            
+        
+        logger.log_scalar("value", value.mean().item())
         if logger.n % 100 == 0:
             if "occupancy_pred" in predictions.keys() and "occupancy_gt" in predictions.keys():
                 occupancy_gt = env.visualize_grid(predictions["occupancy_gt"])

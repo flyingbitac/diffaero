@@ -147,8 +147,6 @@ class TrainRunner:
                     "agent_grad_norm": grad_norms,
                     "metrics": env_info["stats"]
                 }
-                if "value" in policy_info.keys():
-                    log_info["value"] = policy_info["value"].mean().item()
                 if "WorldModel/state_total_loss" in policy_info.keys():
                     log_info.update({k: v for k, v in policy_info.items() if k.startswith("WorldModel")})
                 self.logger.log_scalars(log_info)
