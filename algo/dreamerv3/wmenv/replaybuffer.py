@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from diffaero.utils.runner import timeit
+# from diffaero.utils.runner import timeit
 
 @dataclass
 class buffercfg:
@@ -17,6 +17,8 @@ class buffercfg:
     store_on_gpu: bool
     device: str
     use_perception: bool
+    use_grid: bool = False
+    grid_dim: int = 4000
 
 class ReplayBuffer():
     def __init__(self, cfg:buffercfg) -> None:
@@ -24,10 +26,14 @@ class ReplayBuffer():
         device = torch.device(cfg.device)
         if cfg.store_on_gpu:
             self.state_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.state_dim), dtype=torch.float32, device=device, requires_grad=False)
-            self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_height, cfg.perception_width), dtype=torch.float32, device=device, requires_grad=False)
             self.action_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs,cfg.action_dim), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs), dtype=torch.float32, device=device, requires_grad=False)
+            if cfg.use_perception:
+                self.perception_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, 1, cfg.perception_height, cfg.perception_width), dtype=torch.float32, device=device, requires_grad=False)
+            if cfg.use_grid:
+                self.ocp_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.uint8, device=device, requires_grad=False)
+                self.vis_buffer = torch.empty((cfg.max_length//cfg.num_envs, cfg.num_envs, cfg.grid_dim), dtype=torch.bool, device=device, requires_grad=False)
         else:
             raise ValueError("Only support gpu!!!")
 
@@ -37,13 +43,15 @@ class ReplayBuffer():
         self.max_length = cfg.max_length
         self.warmup_length = cfg.warmup_length
         self.use_perception = cfg.use_perception
+        self.use_grid = cfg.use_grid
 
     def ready(self):
         return self.length * self.num_envs > self.warmup_length and self.length > 64
 
     @torch.no_grad()
-    @timeit
+    # @timeit
     def sample(self, batch_size, batch_length):
+        perception, ocp = None, None
         if batch_size < self.num_envs:
             batch_size = self.num_envs
         if self.store_on_gpu:
@@ -57,15 +65,15 @@ class ReplayBuffer():
             termination = self.termination_buffer[idxs, env_idx].reshape(batch_size, batch_length)
             if self.use_perception:
                 perception = self.perception_buffer[idxs, env_idx].reshape(batch_size, batch_length, *self.perception_buffer.shape[2:])
-            else:
-                perception = None
-            
+            if self.use_grid:
+                ocp = self.ocp_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
+                vis = self.vis_buffer[idxs, env_idx].reshape(batch_size, batch_length, -1)
         else:
             raise ValueError("Only support gpu!!!")
 
-        return state, action, reward, termination, perception
+        return state, action, reward, termination, perception, ocp, vis
 
-    def append(self, state, action, reward, termination, perception=None, visible_map=None):
+    def append(self, state, action, reward, termination, perception=None, ocp=None, vis=None):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length//self.num_envs)
         if self.store_on_gpu:
             self.state_buffer[self.last_pointer] = state
@@ -74,11 +82,52 @@ class ReplayBuffer():
             self.termination_buffer[self.last_pointer] = termination
             if self.use_perception and perception is not None:
                 self.perception_buffer[self.last_pointer] = perception
+            if self.use_grid and ocp is not None:
+                self.ocp_buffer[self.last_pointer] = ocp.reshape(ocp.shape[0], -1)
+                self.vis_buffer[self.last_pointer] = vis.reshape(vis.shape[0], -1)
         else:
             raise ValueError("Only support gpu!!!")
 
         if len(self) < self.max_length:
             self.length += 1
+        
+    def load_external(self, path:str, max_action:torch.Tensor=None, min_action:torch.Tensor=None):
+        if min_action == None:
+            min_action = torch.tensor([[-20, -20, 0]]).to(self.state_buffer.device)
+            max_action = torch.tensor([[20, 20, 40]]).to(self.state_buffer.device)
+        with np.load(path) as data:
+            state = np.squeeze(data["state"], axis=1) # [length, 9]
+            perception = data["perception"] # [length, 1, 9, 16]
+            action = data["action"] # [length, 3]
+        self.extern_action_buff = (torch.from_numpy(action).float().to(self.state_buffer.device) - min_action) / (max_action - min_action) * 2.0 - 1.0
+        self.extern_state_buff = torch.from_numpy(state).float().to(self.state_buffer.device)
+        self.extern_perception_buff = torch.from_numpy(perception).float().to(self.state_buffer.device)
+    
+    def sample_extern(self, batch_size:int, batch_length:int):
+        assert hasattr(self, "extern_action_buff"), "Please load external data first!!!"
+        index = torch.randint(0, self.extern_action_buff.shape[0] - batch_length, (batch_size,), device=self.state_buffer.device)
+        state = torch.stack([self.extern_state_buff[i:i + batch_length] for i in index], dim=0)
+        action = torch.stack([self.extern_action_buff[i:i + batch_length] for i in index], dim=0)
+        perception = torch.stack([self.extern_perception_buff[i:i + batch_length] for i in index], dim=0)
+        return state, action, perception
 
     def __len__(self):
         return self.length * self.num_envs
+
+if __name__ == "__main__":
+    cfg = buffercfg(
+        perception_width=16,
+        perception_height=9,
+        state_dim=9,
+        action_dim=3,
+        num_envs=16,
+        max_length=10000,
+        warmup_length=1000,
+        store_on_gpu=True,
+        device="cuda:0",
+        use_perception=True,
+    )
+    rplb = ReplayBuffer(cfg)
+    rplb.load_external("/home/zxh/ws/wrqws/diff/traj/all_trajs.npz")
+    s, a, p = rplb.sample_extern(4, 32)
+    print(s.shape, a.shape, p.shape)

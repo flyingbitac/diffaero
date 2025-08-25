@@ -198,6 +198,7 @@ class ObstacleAvoidance(BaseEnv):
             )
             total_reward = (
                 self.reward_weights.constant - 
+                self.reward_weights.pointmass.z * z_loss -
                 self.reward_weights.pointmass.vel * vel_loss -
                 self.reward_weights.pointmass.oa * oa_loss -
                 self.reward_weights.pointmass.jerk * jerk_loss -
