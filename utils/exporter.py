@@ -59,18 +59,20 @@ class PolicyExporter(nn.Module):
         self.obs_frame: str
         self.action_frame: str
     
-    def post_process_local(self, raw_action, min_action, max_action, orientation, Rz):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
-        raw_action = raw_action.tanh() if self.is_stochastic else raw_action
+    @staticmethod
+    def post_process_local(raw_action, min_action, max_action, orientation, Rz, is_stochastic):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, bool) -> Tuple[Tensor, Tensor, Tensor]
+        raw_action = raw_action.tanh() if is_stochastic else raw_action
         action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
         acc_cmd = torch.matmul(Rz, action.unsqueeze(-1)).squeeze(-1)
         quat_xyzw = point_mass_quat(acc_cmd, orientation)
         acc_norm = acc_cmd.norm(p=2, dim=-1)
         return acc_cmd, quat_xyzw, acc_norm
     
-    def post_process_world(self, raw_action, min_action, max_action, orientation, Rz):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
-        raw_action = raw_action.tanh() if self.is_stochastic else raw_action
+    @staticmethod
+    def post_process_world(raw_action, min_action, max_action, orientation, Rz, is_stochastic):
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, bool) -> Tuple[Tensor, Tensor, Tensor]
+        raw_action = raw_action.tanh() if is_stochastic else raw_action
         action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
         quat_xyzw = point_mass_quat(action, orientation)
         acc_norm = action.norm(p=2, dim=-1)
@@ -79,9 +81,9 @@ class PolicyExporter(nn.Module):
     def post_process(self, raw_action, min_action, max_action, orientation, Rz):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
         if self.action_frame == "local":
-            return self.post_process_local(raw_action, min_action, max_action, orientation, Rz)
+            return self.post_process_local(raw_action, min_action, max_action, orientation, Rz, self.is_stochastic)
         elif self.action_frame == "world":
-            return self.post_process_world(raw_action, min_action, max_action, orientation, Rz)
+            return self.post_process_world(raw_action, min_action, max_action, orientation, Rz, self.is_stochastic)
         else:
             raise ValueError(f"Unknown action frame: {self.action_frame}")
     

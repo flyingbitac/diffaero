@@ -110,11 +110,14 @@ class WorldModelTesttime(nn.Module):
             self.state_embed_dim = state_enc_cfg.embedding_dim
             self.state_encoder = StateEncoder(obs_dim[0]-3, state_enc_cfg)
         else:
+            self.state_encoder = nn.Identity()
             self.state_embed_dim = 0
         
         # state decoder
         if self.recon_state:
             self.state_decoder = StateDecoder(obs_dim[0], rssm_cfg)
+        else:
+            self.state_decoder = nn.Identity()
         # grid decoder
         if grid_cfg is not None:
             if self.recon_grid:
@@ -122,6 +125,8 @@ class WorldModelTesttime(nn.Module):
                     self.grid_decoder = self._build_mlp(rssm_cfg, output_dim=math.prod(grid_cfg.n_points))
                 else:
                     self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
+        else:
+            self.grid_decoder = nn.Identity()
         
         # sequence model
         self.rssm = RSSM.build(token_dim=self.fmap_final_shape + self.state_embed_dim, rssm_cfg=rssm_cfg)
@@ -334,7 +339,7 @@ class WorldModel(WorldModelTesttime):
         state_dicts = {
             "rssm": self.rssm.state_dict(),
             "image_encoder": self.image_encoder.state_dict(),
-            "image_deocder": self.image_decoder.state_dict(),
+            "image_decoder": self.image_decoder.state_dict(),
             "termination_decoder": self.termination_decoder.state_dict()
         }
         if self.encode_state:

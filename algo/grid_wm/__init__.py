@@ -13,16 +13,79 @@ import tensordict
 from tensordict import TensorDict
 import numpy as np
 
+from .world.backbone import WorldModel, WorldModelTesttime
 from diffaero.env.obstacle_avoidance_grid import ObstacleAvoidanceGrid
-from diffaero.dynamics.pointmass import point_mass_quat
 from diffaero.algo.buffer import RolloutBufferGRID
+from diffaero.network.networks import MLP
 from diffaero.network.agents import StochasticActor, StochasticAsymmetricActorCriticV
 from diffaero.utils.runner import timeit
 from diffaero.utils.logger import Logger
-from .world.backbone import WorldModel, WorldModelTesttime
+from diffaero.utils.exporter import PolicyExporter
 
 
-class GRIDWM:
+class GRIDWMTesttime:
+    def __init__(
+        self,
+        cfg: DictConfig,
+        obs_dim: Tuple[int, Tuple[int, int]],
+        action_dim: int,
+        device: torch.device
+    ):
+        self.obs_dim = obs_dim
+        self.wm = WorldModelTesttime(obs_dim, cfg.wm).to(device)
+        
+        self.odom_free = cfg.odom_free
+        self.state_dim = obs_dim[0]
+        actor_input_dim = self.wm.deter_dim + self.wm.latent_dim + (3 if self.odom_free else obs_dim[0])
+        
+        self.actor = StochasticActor(cfg.agent.actor, actor_input_dim, action_dim).to(device)
+        self.device = device
+        self.deter: Tensor
+    
+    def make_state_input(self, obs: TensorDict) -> Tensor:
+        state = obs["state"]
+        target_vel, odom_info = state[..., :3], state[..., 3:]
+        inputs = [target_vel]
+        if not self.odom_free:
+            inputs.append(odom_info)
+        return torch.cat(inputs, dim=-1)
+    
+    @timeit
+    def act(self, obs, test=False):
+        # type: (TensorDict, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        with torch.no_grad():
+            if not hasattr(self, "deter"):
+                self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=self.device)
+            latent = self.wm.encode(obs['perception'], obs['state'], self.deter)
+            actor_input = torch.cat([latent, self.deter, self.make_state_input(obs)], dim=-1)
+        action, sample, logprob, entropy = self.actor(actor_input, test=test)
+        self.deter = self.wm.recurrent(latent, self.deter, action)
+        return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}
+    
+    def save(self, path):
+        self.wm.save(path)
+        self.actor.save(path)
+    
+    def load(self, path):
+        self.wm.load(path)
+        self.actor.load(path)
+    
+    def detach(self):
+        self.deter.detach_()
+    
+    def reset(self, env_idx: Tensor):
+        self.deter[env_idx] = 0.
+    
+    def export(
+        self,
+        path: str,
+        export_cfg: DictConfig,
+        verbose=False,
+    ):
+        GRIDWMExporter(self).export(path, export_cfg, verbose)
+
+
+class GRIDWM(GRIDWMTesttime):
     def __init__(
         self,
         cfg: DictConfig,
@@ -79,14 +142,6 @@ class GRIDWM:
         self.cumulated_loss = torch.zeros(self.n_envs, device=self.device)
         self.entropy_loss = torch.tensor(0., device=self.device)
         self.deter = torch.zeros(n_envs, self.wm.deter_dim, device=device)
-    
-    def make_state_input(self, obs: TensorDict) -> Tensor:
-        state = obs["state"]
-        target_vel, odom_info = state[..., :3], state[..., 3:]
-        inputs = [target_vel]
-        if not self.odom_free:
-            inputs.append(odom_info)
-        return torch.cat(inputs, dim=-1)
     
     @timeit
     def act(self, obs, test=False):
@@ -287,15 +342,9 @@ class GRIDWM:
         self.wm.load(path)
         self.agent.load(path)
     
-    def detach(self):
-        self.deter.detach_()
-    
-    def reset(self, env_idx: Tensor):
-        self.deter[env_idx] = 0.
-    
     @staticmethod
     def build(cfg: DictConfig, env: ObstacleAvoidanceGrid, device: torch.device):
-        if hasattr(env.cfg, "grid"):
+        if hasattr(env.cfg, "enable_grid") and getattr(env.cfg, "enable_grid") is True:
             return GRIDWM(
                 cfg=cfg,
                 obs_dim=env.obs_dim,
@@ -318,82 +367,18 @@ class GRIDWM:
         export_cfg: DictConfig,
         verbose=False,
     ):
-        return
         testtime = GRIDWMTesttime(self.cfg, self.obs_dim, self.action_dim, self.device)
         testtime.load(path)
         testtime.export(path, export_cfg, verbose)
 
 
-class GRIDWMTesttime:
-    def __init__(
-        self,
-        cfg: DictConfig,
-        obs_dim: Tuple[int, Tuple[int, int]],
-        action_dim: int,
-        device: torch.device
-    ):
-        self.obs_dim = obs_dim
-        self.wm = WorldModelTesttime(obs_dim, cfg.wm).to(device)
-        
-        self.odom_free = cfg.odom_free
-        self.state_dim = obs_dim[0]
-        actor_input_dim = self.wm.deter_dim + self.wm.latent_dim + (3 if self.odom_free else obs_dim[0])
-        
-        self.actor = StochasticActor(cfg.agent.actor, actor_input_dim, action_dim).to(device)
-        self.device = device
-        self.deter: Union[None, Tensor] = None
-    
-    def make_state_input(self, obs: TensorDict) -> Tensor:
-        state = obs["state"]
-        target_vel, odom_info = state[..., :3], state[..., 3:]
-        inputs = [target_vel]
-        if not self.odom_free:
-            inputs.append(odom_info)
-        return torch.cat(inputs, dim=-1)
-    
-    @timeit
-    def act(self, obs, test=False):
-        # type: (TensorDict, bool) -> Tuple[Tensor, Dict[str, Tensor]]
-        with torch.no_grad():
-            if self.deter is None:
-                self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=obs['state'].device)
-            Logger.info(obs['state'].shape)
-            latent = self.wm.encode(obs['perception'], obs['state'], self.deter)
-            actor_input = torch.cat([latent, self.deter, self.make_state_input(obs)], dim=-1)
-        action, sample, logprob, entropy = self.actor(actor_input, test=test)
-        self.deter = self.wm.recurrent(latent, self.deter, action)
-        return action, {"latent": latent, "sample": sample, "logprob": logprob, "entropy": entropy}
-    
-    def save(self, path):
-        self.wm.save(path)
-        self.actor.save(path)
-    
-    def load(self, path):
-        self.wm.load(path)
-        self.actor.load(path)
-    
-    def detach(self):
-        self.deter.detach_()
-    
-    def reset(self, env_idx: Tensor):
-        self.deter[env_idx] = 0.
-    
-    def export(
-        self,
-        path: str,
-        export_cfg: DictConfig,
-        verbose=False,
-    ):
-        GRIDWMExporter(self).export(path, export_cfg, verbose)
-
-
 class GRIDWMExporter(nn.Module):
     def __init__(self, agent: GRIDWMTesttime):
         super().__init__()
-        self.wm_encoder = deepcopy(agent.wm).cpu()
-        self.actor = deepcopy(agent.actor.actor_mean).cpu()
+        self.wm = deepcopy(agent.wm).cpu()
+        self.actor: MLP = deepcopy(agent.actor.actor_mean).cpu()
         self.odom_free = agent.odom_free
-        state_dim, perception_dim = agent.state_dim, agent.obs_dim[1]
+        state_dim, perception_dim = agent.obs_dim[0], agent.obs_dim[1]
         self.named_inputs = [
             ("state", torch.zeros(1, state_dim)),
             ("perception", torch.zeros(1, perception_dim[0], perception_dim[1])),
@@ -401,7 +386,7 @@ class GRIDWMExporter(nn.Module):
             ("Rz", torch.zeros(1, 3, 3)),
             ("min_action", torch.zeros(1, 3)),
             ("max_action", torch.zeros(1, 3)),
-            ("hidden_in", torch.zeros(1, self.wm_encoder.deter_dim)),
+            ("hidden_in", torch.zeros(1, self.wm.deter_dim)),
         ]
         self.output_names = [
             "action",
@@ -420,36 +405,23 @@ class GRIDWMExporter(nn.Module):
         return torch.cat(inputs, dim=-1)
     
     def forward(self, state, perception, orientation, Rz, min_action, max_action, hidden):
-        latent = self.wm_encoder.encode(perception, state, hidden)
+        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+        latent = self.wm.encode(perception, state, hidden)
         actor_input = torch.cat([latent, hidden, self.make_state_input(state)], dim=-1)
         raw_action = self.actor.forward_export(actor_input).tanh()
-        hidden = self.wm_encoder.recurrent(latent, hidden, raw_action)
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
+        hidden = self.wm.recurrent(latent, hidden, action)
         return action, quat_xyzw, acc_norm, hidden
 
     def post_process(self, raw_action, min_action, max_action, orientation, Rz):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
         if self.action_frame == "local":
-            return self.post_process_local(raw_action, min_action, max_action, orientation, Rz)
+            post_process_fn = PolicyExporter.post_process_local
         elif self.action_frame == "world":
-            return self.post_process_world(raw_action, min_action, max_action, orientation, Rz)
+            post_process_fn = PolicyExporter.post_process_world
         else:
             raise ValueError(f"Unknown action frame: {self.action_frame}")
-    
-    def post_process_local(self, raw_action, min_action, max_action, orientation, Rz):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
-        action = (raw_action.tanh() * 0.5 + 0.5) * (max_action - min_action) + min_action
-        acc_cmd = torch.matmul(Rz, action.unsqueeze(-1)).squeeze(-1)
-        quat_xyzw = point_mass_quat(acc_cmd, orientation)
-        acc_norm = acc_cmd.norm(p=2, dim=-1)
-        return acc_cmd, quat_xyzw, acc_norm
-    
-    def post_process_world(self, raw_action, min_action, max_action, orientation, Rz):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
-        action = (raw_action.tanh() * 0.5 + 0.5) * (max_action - min_action) + min_action
-        quat_xyzw = point_mass_quat(action, orientation)
-        acc_norm = action.norm(p=2, dim=-1)
-        return action, quat_xyzw, acc_norm
+        return post_process_fn(raw_action, min_action, max_action, orientation, Rz, True)
     
     def export(
         self,
@@ -470,10 +442,10 @@ class GRIDWMExporter(nn.Module):
         shapes = [tuple(input.shape) for input in inputs]
         traced_script_module = torch.jit.script(self, optimize=True, example_inputs=shapes)
         if verbose:
-            print(traced_script_module.code)
+            Logger.info("Code of scripted module: \n" + traced_script_module.code)
         export_path = os.path.join(path, "exported_actor.pt2")
         traced_script_module.save(export_path)
-        print(f"The checkpoint is compiled and exported to {export_path}.")
+        Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
     
     def export_onnx(self, path: str):
         export_path = os.path.join(path, "exported_actor.onnx")
@@ -485,4 +457,4 @@ class GRIDWMExporter(nn.Module):
             input_names=names,
             output_names=self.output_names
         )
-        print(f"The checkpoint is compiled and exported to {export_path}.")
+        Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
