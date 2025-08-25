@@ -74,7 +74,7 @@ def train_worldmodel(
 ):
     with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=training_hyper.use_amp):
         for _ in range(training_hyper.worldmodel_update_freq):
-            sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid = \
+            sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid, sample_vis = \
                 replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
             total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss = \
                 world_model.compute_loss(
@@ -83,7 +83,8 @@ def train_worldmodel(
                     sample_action,
                     sample_reward,
                     sample_termination,
-                    sample_grid
+                    sample_grid,
+                    sample_vis
                 )
     
     if scaler is not None:
@@ -138,7 +139,7 @@ class World_Agent:
         self.training_hyper = training_hyper
         
         if use_grid:
-            grid_dim = math.prod(env.ocp_map.grid_size)
+            grid_dim = env.n_grid_points
             buffercfg.use_grid = True
             buffercfg.grid_dim = grid_dim
             statemodelcfg.use_grid = True
@@ -185,9 +186,9 @@ class World_Agent:
             if not isinstance(obs, torch.Tensor):
                 state, perception = obs['state'], obs['perception'].unsqueeze(1)
                 if 'grid' in obs.keys():
-                    grid = obs['grid']
+                    grid, vis = obs['grid'], obs['visible_map']
                 else:
-                    grid = None
+                    grid, vis = None, None
             else:
                 state, perception = obs, None
             if self.world_agent_cfg.common.use_symlog:
@@ -200,7 +201,7 @@ class World_Agent:
                 action = torch.randn(self.n_envs,3,device=state.device)
             next_obs, (loss, rewards), terminated, env_info = env.step(env.rescale_action(action))
             rewards = rewards*10.
-            self.replaybuffer.append(state, action, rewards, terminated, perception, grid)
+            self.replaybuffer.append(state, action, rewards, terminated, perception, grid, vis)
             
             if terminated.any():
                 zeros = torch.zeros_like(self.hidden)
@@ -223,6 +224,10 @@ class World_Agent:
             policy_info["video"] = logger_video
 
         return obs, policy_info, env_info, 0.0, 0.0
+
+    def finetune(self):
+        agent_info = train_agents(self.agent, self.world_model_env, self.world_agent_cfg)
+        return agent_info
 
     def save(self, path):
         if not os.path.exists(path):

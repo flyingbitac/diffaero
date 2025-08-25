@@ -197,6 +197,7 @@ class DepthStateModel(nn.Module):
         self.mse_loss = MSELoss()
         self.symlogtwohotloss = SymLogTwoHotLoss(cfg.num_classes,-20,20)
         self.endloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(cfg.end_loss_pos_weight))
+        self.gridloss = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(cfg.end_loss_pos_weight))
 
         self.seq_model = nn.GRUCell(cfg.hidden_dim,cfg.hidden_dim)
         if not cfg.only_state:
@@ -236,6 +237,12 @@ class DepthStateModel(nn.Module):
 
         self.reward_predictor = RewardDecoder(cfg.num_classes,cfg.hidden_dim,cfg.latent_dim)
         self.end_predictor = EndDecoder(cfg.hidden_dim,cfg.latent_dim)
+        
+    
+    def grid_sum_loss(self, logits:Tensor, grid:Tensor, visible:Tensor):
+        visible, grid = visible[:, 1:], grid[:, 1:]
+        loss = self.gridloss(logits[:, 1:][visible], grid[visible].float())
+        return loss
 
     def straight_with_gradient(self,logits:Tensor):
         probs = F.softmax(logits,dim=-1)
@@ -339,6 +346,7 @@ class DepthStateModel(nn.Module):
         rewards: Tensor,
         terminations: Tensor,
         grids: Optional[Tensor] = None,
+        visib: Optional[Tensor] = None,
     ):
         b, l, d = states.shape
 
@@ -383,7 +391,7 @@ class DepthStateModel(nn.Module):
         end_loss = self.endloss(end_logits,terminations)
         if hasattr(self, 'grid_decoder'):
             grid_logits = torch.stack(grid_logits, dim=1)
-            grid_loss = self.endloss(grid_logits[:, :-1],grids[:, 1:].float())
+            grid_loss = self.grid_sum_loss(grid_logits, grids, visib)   
         else:
             grid_loss = torch.zeros(())
 

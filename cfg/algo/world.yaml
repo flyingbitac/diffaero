@@ -19,6 +19,7 @@ world_state_env:
   batch_size: 1024
   batch_length: 4
   use_perception: False
+  use_extern: False
 
 replaybuffer:
   _target_: algo.dreamerv3.wmenv.buffercfg

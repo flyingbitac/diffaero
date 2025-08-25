@@ -22,6 +22,7 @@ class DepthStateEnvConfig:
     batch_size: int
     batch_length: int
     use_perception: bool = False
+    use_extern: bool = False
 
 class DepthStateEnv:
     def __init__(
@@ -34,13 +35,17 @@ class DepthStateEnv:
         self.replaybuffer = replaybuffer
         self.cfg = cfg
         self.hidden = None
+        self.use_extern = cfg.use_extern
 
     @torch.no_grad()
     @timeit
     def make_generator_init(self,):
         batch_size = self.cfg.batch_size
         batch_length = self.cfg.batch_length
-        states, actions, _ , _, perceptions, _ = self.replaybuffer.sample(batch_size, batch_length)
+        if self.use_extern:
+            states, actions, perceptions = self.replaybuffer.sample_extern(batch_size, batch_length)
+        else:
+            states, actions, _ , _, perceptions, _, _ = self.replaybuffer.sample(batch_size, batch_length)
         hidden = None
             
         for i in range(batch_length):
