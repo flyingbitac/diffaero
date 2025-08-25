@@ -38,7 +38,7 @@ class ObstacleAvoidance(BaseEnv):
             state_dim = 10
         if self.last_action_in_obs:
             state_dim += self.action_dim
-        self.obs_dim = (state_dim, (H, W))
+        self.obs_dim: Tuple[int, Tuple[int, int]] = (state_dim, (H, W))
         self.state_dim = 13 + H * W + self.n_obstacles * 3
         self.sensor_tensor = torch.zeros((cfg.n_envs, H, W), device=device)
         

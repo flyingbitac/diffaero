@@ -10,9 +10,9 @@ import torch.nn.functional as F
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 import taichi as ti
-from tqdm import tqdm
 
 from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
+from diffaero.utils.math import mvp
 from diffaero.utils.render import torch2ti
 from diffaero.utils.runner import timeit
 from diffaero.utils.logger import Logger
@@ -23,10 +23,13 @@ class YOPONet(nn.Module):
         H_out: int,
         W_out: int,
         feature_dim: int,
+        head_hidden_dim: int,
+        out_dim: int = 10
     ):
         super().__init__()
         self.H_out = H_out
         self.W_out = W_out
+        self.out_dim = out_dim
         self.net = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=5, stride=1, padding=2),
             nn.ELU(),
@@ -39,11 +42,11 @@ class YOPONet(nn.Module):
             nn.AdaptiveAvgPool2d((H_out, W_out))
         )
         self.head = nn.Sequential(
-            nn.Conv2d(feature_dim+9, 128, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(feature_dim+9, head_hidden_dim, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
-            nn.Conv2d(128, 128, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(head_hidden_dim, head_hidden_dim, kernel_size=1, stride=1, padding=0),
             nn.ELU(),
-            nn.Conv2d(128, 10, kernel_size=1, stride=1, padding=0)
+            nn.Conv2d(head_hidden_dim, out_dim, kernel_size=1, stride=1, padding=0)
         )
     
     def forward(
@@ -52,7 +55,7 @@ class YOPONet(nn.Module):
         depth_image: Tensor,
         obs_b: Tensor # []
     ):
-        N, C, HW = obs_b.size(0), 10, self.H_out * self.W_out
+        N, C, HW = obs_b.size(0), self.out_dim, self.H_out * self.W_out
         feat = self.net(depth_image)
         obs_p = torch.matmul(rotmat_b2p.unsqueeze(0), obs_b.unsqueeze(1))
         obs_p = obs_p.reshape(N, self.H_out, self.W_out, 9).permute(0, 3, 1, 2)
@@ -152,17 +155,17 @@ class YOPO:
         cfg: DictConfig,
         device: torch.device
     ):
-        self.tmax: float = cfg.tmax
+        self.tmax: Tensor = torch.tensor(cfg.tmax, device=device)
         self.n_points_per_sec: int = cfg.n_points_per_sec
-        self.n_points: int = int(self.n_points_per_sec * self.tmax)
-        self.t_vec = torch.linspace(0, self.tmax, self.n_points, device=device)
+        self.n_points: int = int(self.n_points_per_sec * cfg.tmax)
+        self.t_vec = torch.linspace(0, cfg.tmax, self.n_points, device=device)
         self.min_pitch: float = cfg.min_pitch * torch.pi / 180.
         self.max_pitch: float = cfg.max_pitch * torch.pi / 180.
         self.min_yaw: float = cfg.min_yaw * torch.pi / 180.
         self.max_yaw: float = cfg.max_yaw * torch.pi / 180.
         self.n_pitch: int = cfg.n_pitch
         self.n_yaw: int = cfg.n_yaw
-        self.feature_dim: int = cfg.feature_dim
+        self.n_optim_steps: int = cfg.n_optim_steps
         self.r_base: float = cfg.r
         self.dr_range: float = self.r_base
         self.dpitch_range: float = cfg.dpitch_range * torch.pi / 180.
@@ -195,18 +198,20 @@ class YOPO:
         self.net = YOPONet(
             H_out=self.n_pitch,
             W_out=self.n_yaw,
-            feature_dim=self.feature_dim).to(device)
+            feature_dim=cfg.feature_dim,
+            head_hidden_dim=cfg.head_hidden_dim,
+            out_dim=10
+        ).to(device)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
     
     @timeit
-    def inference(self, p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image):
+    def inference(self, p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor]
-        rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
         rotmat_w2b = rotmat_b2w.transpose(-2, -1)
-        target_vel_b = torch.matmul(rotmat_w2b, target_vel_w.unsqueeze(-1)).squeeze(-1)
+        target_vel_b = mvp(rotmat_w2b, target_vel_w)
         p_curr_b = torch.zeros_like(p_w)
-        v_curr_b = torch.matmul(rotmat_w2b, v_w.unsqueeze(-1)).squeeze(-1)
-        a_curr_b = torch.matmul(rotmat_w2b, a_w.unsqueeze(-1)).squeeze(-1) - self.G
+        v_curr_b = mvp(rotmat_w2b, v_w)
+        a_curr_b = mvp(rotmat_w2b, a_w) - self.G
         
         obs = torch.stack([target_vel_b, v_curr_b, a_curr_b], dim=-1)
         net_output: Tensor = self.net(self.rotmat_b2p, depth_image, obs)
@@ -221,7 +226,7 @@ class YOPO:
             rotmat_p2b=self.rotmat_p2b
         )
         coef_xyz = solve_coef( # [N, HW, 6, 3]
-            torch.tensor(self.tmax, device=self.device),
+            self.tmax,
             p_curr_b.unsqueeze(1).expand_as(p_end_b),
             v_curr_b.unsqueeze(1).expand_as(v_end_b),
             a_curr_b.unsqueeze(1).expand_as(a_end_b),
@@ -231,13 +236,13 @@ class YOPO:
         )
         return score, coef_xyz
     
-    def act(self, obs: Tuple[Tensor], test: bool = False, env: Optional[ObstacleAvoidanceYOPO] = None):
-        p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image = obs
-        rotmat_b2w = T.quaternion_to_matrix(quat_xyzw.roll(1, dims=-1))
+    def act(self, obs: Tuple[Tensor, ...], test: bool = False, env: Optional[ObstacleAvoidanceYOPO] = None):
+        p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image = obs
+        rotmat_w2b = rotmat_b2w.transpose(-2, -1)
         N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
         
-        score, coef_xyz = self.inference(p_w, quat_xyzw, v_w, a_w, target_vel_w, depth_image)
-        
+        score, coef_xyz = self.inference(p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image)
+
         best_idx = score.argmin(dim=-1)
         if not test:
             random_idx = torch.randint(0, HW, (N, ), device=self.device)
@@ -250,14 +255,14 @@ class YOPO:
         
         if env is not None and self.optimized_inference:
             losses = []
-            for _ in range(10):
+            for _ in range(self.n_optim_steps):
                 coef_best = coef_best.detach().requires_grad_(True)
                 # pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, len(self.t_vec)-1, -1)
                 
                 p_t_b, v_t_b, a_t_b = get_traj_points(self.t_vec[1:], coef_best)
-                p_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), p_t_b.unsqueeze(-1)).squeeze(-1) + p_w.unsqueeze(1)
-                v_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), v_t_b.unsqueeze(-1)).squeeze(-1)
-                a_t_w = torch.matmul(rotmat_b2w.unsqueeze(1), a_t_b.unsqueeze(-1)).squeeze(-1) + self.G.unsqueeze(1)
+                p_t_w = mvp(rotmat_w2b, p_t_b) + p_w.unsqueeze(1)
+                v_t_w = mvp(rotmat_w2b, v_t_b)
+                a_t_w = mvp(rotmat_w2b, a_t_b) + self.G.unsqueeze(1)
                 # pva_w = self.dynamics_step(env, pva_w, a_t_w)
                 # loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
                 loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
@@ -265,7 +270,7 @@ class YOPO:
                 losses.append(loss.mean().item())
                 coef_best = coef_best - 1 * coef_best.grad
                 
-            tqdm.write(f"Losses: {losses[0]-losses[-1]:.4f}")
+            Logger.debug(f"Losses: {losses[0]-losses[-1]:.4f}")
         
         p_next_b, v_next_b, a_next_b = get_traj_point(self.t_next, coef_best) # [N, 3]
         a_next_w = torch.matmul(rotmat_b2w, a_next_b.unsqueeze(-1)).squeeze(-1)

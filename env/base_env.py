@@ -19,7 +19,7 @@ class BaseEnv(ABC):
         self.dynamic_type: str = self.dynamics.type
         self.imu = IMU(cfg.imu, dynamics=self.dynamics)
         self.action_dim = self.dynamics.action_dim
-        self.obs_dim: int
+        self.obs_dim: Union[int, Tuple[int, Tuple[int, int]]]
         self.obs_frame: str = cfg.obs_frame
         self.state_dim: int
         self.n_agents: int = cfg.n_agents

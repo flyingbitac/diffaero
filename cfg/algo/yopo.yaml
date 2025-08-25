@@ -18,8 +18,11 @@ dyaw_range: 30
 dv_range: 2
 da_range: 2
 
+# network architecture
 feature_dim: 16
+head_hidden_dim: 128
 
+# training hparams
 lr: 0.003
 gamma: 0.99
 n_epochs: 4
@@ -28,6 +31,7 @@ grad_norm:
 l_rollout: 1 # do not modify
 
 optimized_inference: False
+n_optim_steps: 10
 real_dynamics_rollout: True
 update_best_traj_only: True
 t_next: 0.5
