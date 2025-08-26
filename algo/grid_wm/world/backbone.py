@@ -22,6 +22,14 @@ from diffaero.utils.nn import mlp
 from diffaero.utils.runner import timeit
 from diffaero.utils.logger import Logger
 
+@torch.jit.script
+def one_hot_sample(probs:torch.Tensor):
+    B, K, C = probs.shape
+    flatten_probs = probs.view(-1,C)
+    sample_indices = torch.multinomial(flatten_probs,1).squeeze()
+    one_hot_samples = F.one_hot(sample_indices, C)
+    return one_hot_samples.view(B, K, C)
+
 class RSSM(nn.Module):
     def __init__(
         self,
@@ -41,7 +49,7 @@ class RSSM(nn.Module):
         self.stoch = stoch
         self.classes = classes
     
-    def straight_through_gradient(self, x:torch.Tensor):
+    def straight_through_gradient(self, x: Tensor, test: bool = False):
         if x.ndim == 2:
             B, _ = x.shape
             x = x.reshape(B, self.stoch, self.classes)
@@ -49,25 +57,28 @@ class RSSM(nn.Module):
             B, T, _ = x.shape
             x = x.reshape(B, T, self.stoch, self.classes)
         logits = get_unimix_logits(x)
-        probs= F.softmax(logits, dim=-1)
-        onehot: Tensor = torch.distributions.OneHotCategorical(probs = probs).sample()
+        probs = F.softmax(logits, dim=-1)
+        if test:
+            onehot = F.one_hot(probs.argmax(dim=-1), self.classes).float()
+        else:
+            onehot = one_hot_sample(probs)
         straight_sample = onehot - probs.detach() + probs
         straight_sample = straight_sample.reshape(*straight_sample.shape[:-2], -1)
         return straight_sample, probs
     
-    def _post(self, token:torch.Tensor, deter:torch.Tensor):
+    def _post(self, token: Tensor, deter: Tensor, test: bool = False):
         x = torch.cat([token, deter], dim=-1)
         post_logits = self.post_proj(x)
-        post_sample, post_probs = self.straight_through_gradient(post_logits)
+        post_sample, post_probs = self.straight_through_gradient(post_logits, test)
         return post_sample, post_probs
-    
-    def _prior(self, deter:torch.Tensor, stoch:torch.Tensor, action:torch.Tensor):
+       
+    def _prior(self, deter: Tensor, stoch: Tensor, action: Tensor):
         deter = self.recurrent(stoch, deter, action)
         prior_logits = self.prior_proj(deter)
         prior_sample, prior_probs = self.straight_through_gradient(prior_logits)
         return prior_sample, prior_probs, deter
     
-    def recurrent(self, stoch:torch.Tensor, deter:torch.Tensor, action:torch.Tensor):
+    def recurrent(self, stoch: Tensor, deter:Tensor, action: Tensor):
         return self.seq_model(deter, stoch, action)
     
     @staticmethod
@@ -131,13 +142,13 @@ class WorldModelTesttime(nn.Module):
         # sequence model
         self.rssm = RSSM.build(token_dim=self.fmap_final_shape + self.state_embed_dim, rssm_cfg=rssm_cfg)
     
-    def encode(self, obs, state, deter):
-        # type: (Tensor, Tensor, Tensor) -> Tensor
+    def encode(self, obs, state, deter, test=False):
+        # type: (Tensor, Tensor, Tensor, bool) -> Tensor
         tokens = [self.image_encoder(obs)]
         if self.encode_state:
             tokens.append(self.state_encoder(state))
         tokens = torch.cat(tokens, dim=-1)
-        post_sample, _ = self.rssm._post(tokens, deter)
+        post_sample, _ = self.rssm._post(tokens, deter, test)
         return post_sample
     
     @torch.no_grad()
@@ -357,7 +368,7 @@ class WorldModel(WorldModelTesttime):
         state_dicts = torch.load(os.path.join(path, "world_model.pth"))
         self.rssm.load_state_dict(state_dicts["rssm"])
         self.image_encoder.load_state_dict(state_dicts["image_encoder"])
-        self.image_decoder.load_state_dict(state_dicts["image_decoder"])
+        self.image_decoder.load_state_dict(state_dicts["image_deocder"])
         self.termination_decoder.load_state_dict(state_dicts["termination_decoder"])
         if self.encode_state:
             self.state_encoder.load_state_dict(state_dicts["state_encoder"])

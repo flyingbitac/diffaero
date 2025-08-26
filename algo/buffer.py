@@ -299,7 +299,7 @@ class RolloutBufferGRID:
         return self.expand_obs(self.obs[ind]), self.actions[ind], self.terminated[ind], self.rewards[ind]
     
     def sample4critic(self, batch_size):
-        # type: (int) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+        # type: (int) -> Tuple[Tensor, ...]
         ind = torch.randint(0, self.size, size=(batch_size,), device=self.device)
         return tuple(map(lambda x: x[ind].transpose(0, 1).contiguous().clone().float(), 
             [self.states, self.next_values, self.rewards, self.dones, self.terminated]))

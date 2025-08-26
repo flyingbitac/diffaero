@@ -1,14 +1,12 @@
 from typing import Union, Optional
 from collections import defaultdict
+from pathlib import Path
 import os
-from copy import deepcopy
 
 import torch
 import torchvision
 import numpy as np
 from line_profiler import LineProfiler
-import hydra
-from tqdm import tqdm
 import cv2
 import imageio
 from omegaconf import DictConfig
@@ -280,7 +278,8 @@ class TestRunner:
     
     def close(self):
         if any(dict(self.cfg.export).values()):
-            ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
+            # ckpt_path = os.path.join(self.logger.logdir, "checkpoints")
+            ckpt_path = Path(self.cfg.checkpoint).resolve()
             if not os.path.exists(ckpt_path):
                 os.makedirs(ckpt_path)
             self.agent.export(

@@ -6,11 +6,12 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 from omegaconf import DictConfig
+import onnxruntime as ort
+import numpy as np
 
 from diffaero.network.agents import StochasticActor, DeterministicActor
 from diffaero.network.networks import MLP, CNN, RNN, RCNN
 from diffaero.dynamics.pointmass import point_mass_quat
-from diffaero.utils.math import axis_rotmat
 from diffaero.utils.logger import Logger
 
 class PolicyExporter(nn.Module):
@@ -59,8 +60,7 @@ class PolicyExporter(nn.Module):
         self.obs_frame: str
         self.action_frame: str
     
-    @staticmethod
-    def post_process_local(raw_action, min_action, max_action, orientation, Rz, is_stochastic):
+    def post_process_local(self, raw_action, min_action, max_action, orientation, Rz, is_stochastic):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor, bool) -> Tuple[Tensor, Tensor, Tensor]
         raw_action = raw_action.tanh() if is_stochastic else raw_action
         action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
@@ -69,8 +69,7 @@ class PolicyExporter(nn.Module):
         acc_norm = acc_cmd.norm(p=2, dim=-1)
         return acc_cmd, quat_xyzw, acc_norm
     
-    @staticmethod
-    def post_process_world(raw_action, min_action, max_action, orientation, Rz, is_stochastic):
+    def post_process_world(self, raw_action, min_action, max_action, orientation, Rz, is_stochastic):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor, bool) -> Tuple[Tensor, Tensor, Tensor]
         raw_action = raw_action.tanh() if is_stochastic else raw_action
         action = (raw_action * 0.5 + 0.5) * (max_action - min_action) + min_action
@@ -133,14 +132,27 @@ class PolicyExporter(nn.Module):
         traced_script_module.save(export_path)
         Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
     
+    @torch.no_grad()
     def export_onnx(self, path: str):
         export_path = os.path.join(path, "exported_actor.onnx")
-        names, inputs = zip(*self.named_inputs)
+        names, test_inputs = zip(*self.named_inputs)
+        print(names)
         torch.onnx.export(
             model=self,
-            args=inputs,
+            args=test_inputs,
             f=export_path,
             input_names=names,
             output_names=self.output_names
         )
         Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
+        
+        self.eval()
+        ort_session = ort.InferenceSession(export_path)
+        test_inputs = [torch.randn_like(input, device="cpu") for input in test_inputs]
+        ort_inputs = {name: input.numpy() for name, input in zip(names, test_inputs)}
+        ort_outs: Tuple[np.ndarray, ...] = ort_session.run(None, ort_inputs) # type: ignore
+        torch_outs: Tuple[Tensor, ...] = self(*test_inputs)
+        # compare ONNX Runtime and PyTorch results
+        for i in range(len(ort_outs)):
+            np.testing.assert_allclose(ort_outs[i], torch_outs[i].cpu().numpy(), rtol=1e-03, atol=1e-05, verbose=True)
+        Logger.info(f"The onnx model at {export_path} is verified!")

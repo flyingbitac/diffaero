@@ -56,7 +56,7 @@ class GRIDWMTesttime:
         with torch.no_grad():
             if not hasattr(self, "deter"):
                 self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=self.device)
-            latent = self.wm.encode(obs['perception'], obs['state'], self.deter)
+            latent = self.wm.encode(obs['perception'], obs['state'], self.deter, test=test)
             actor_input = torch.cat([latent, self.deter, self.make_state_input(obs)], dim=-1)
         action, sample, logprob, entropy = self.actor(actor_input, test=test)
         self.deter = self.wm.recurrent(latent, self.deter, action)
@@ -354,6 +354,7 @@ class GRIDWM(GRIDWMTesttime):
                 grid_cfg=env.cfg.grid,
                 device=device)
         else:
+            Logger.info("GRIDWMTestTime building")
             return GRIDWMTesttime(
                 cfg=cfg,
                 obs_dim=env.obs_dim,
@@ -372,30 +373,24 @@ class GRIDWM(GRIDWMTesttime):
         testtime.export(path, export_cfg, verbose)
 
 
-class GRIDWMExporter(nn.Module):
+class GRIDWMExporter(PolicyExporter):
     def __init__(self, agent: GRIDWMTesttime):
-        super().__init__()
+        super().__init__(agent.actor)
         self.wm = deepcopy(agent.wm).cpu()
-        self.actor: MLP = deepcopy(agent.actor.actor_mean).cpu()
         self.odom_free = agent.odom_free
-        state_dim, perception_dim = agent.obs_dim[0], agent.obs_dim[1]
+        del self.forward
+        self.input_dim = agent.obs_dim
         self.named_inputs = [
-            ("state", torch.zeros(1, state_dim)),
-            ("perception", torch.zeros(1, perception_dim[0], perception_dim[1])),
+            ("state", torch.zeros(1, self.input_dim[0])),
+            ("perception", torch.zeros(1, self.input_dim[1][0], self.input_dim[1][1])),
             ("orientation", torch.zeros(1, 3)),
             ("Rz", torch.zeros(1, 3, 3)),
             ("min_action", torch.zeros(1, 3)),
             ("max_action", torch.zeros(1, 3)),
-            ("hidden_in", torch.zeros(1, self.wm.deter_dim)),
+            ("hidden_in", torch.zeros(1, self.wm.deter_dim))
         ]
-        self.output_names = [
-            "action",
-            "quat_xyzw_cmd",
-            "acc_norm",
-            "hidden_out"
-        ]
-        self.obs_frame: str
-        self.action_frame: str
+        for name, input in self.named_inputs:
+            print(name, input.shape)
     
     def make_state_input(self, state: Tensor) -> Tensor:
         target_vel, odom_info = state[..., :3], state[..., 3:]
@@ -404,57 +399,15 @@ class GRIDWMExporter(nn.Module):
             inputs.append(odom_info)
         return torch.cat(inputs, dim=-1)
     
-    def forward(self, state, perception, orientation, Rz, min_action, max_action, hidden):
+    def forward(self, state, perception, orientation, Rz, min_action, max_action, hidden_in):
         # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
-        latent = self.wm.encode(perception, state, hidden)
-        actor_input = torch.cat([latent, hidden, self.make_state_input(state)], dim=-1)
-        raw_action = self.actor.forward_export(actor_input).tanh()
+        latent = self.wm.encode(perception, state, hidden_in, test=True)
+        actor_input = torch.cat([latent, hidden_in, self.make_state_input(state)], dim=-1)
+        raw_action = self.actor.forward_export(actor_input)
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
-        hidden = self.wm.recurrent(latent, hidden, action)
-        return action, quat_xyzw, acc_norm, hidden
-
-    def post_process(self, raw_action, min_action, max_action, orientation, Rz):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor]
-        if self.action_frame == "local":
-            post_process_fn = PolicyExporter.post_process_local
-        elif self.action_frame == "world":
-            post_process_fn = PolicyExporter.post_process_world
-        else:
-            raise ValueError(f"Unknown action frame: {self.action_frame}")
-        return post_process_fn(raw_action, min_action, max_action, orientation, Rz, True)
-    
-    def export(
-        self,
-        path: str,
-        export_cfg: DictConfig,
-        verbose=False,
-    ):
-        self.obs_frame = export_cfg.obs_frame
-        self.action_frame = export_cfg.action_frame
-        if export_cfg.jit:
-            self.export_jit(path, verbose) # NOTE: failed because torch.jit dose not support einops
-        if export_cfg.onnx:
-            self.export_onnx(path)
+        hidden_out = self.wm.recurrent(latent, hidden_in, action)
+        return action, quat_xyzw, acc_norm, hidden_out
     
     @torch.no_grad()
     def export_jit(self, path: str, verbose=False):
-        names, inputs = zip(*self.named_inputs)
-        shapes = [tuple(input.shape) for input in inputs]
-        traced_script_module = torch.jit.script(self, optimize=True, example_inputs=shapes)
-        if verbose:
-            Logger.info("Code of scripted module: \n" + traced_script_module.code)
-        export_path = os.path.join(path, "exported_actor.pt2")
-        traced_script_module.save(export_path)
-        Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
-    
-    def export_onnx(self, path: str):
-        export_path = os.path.join(path, "exported_actor.onnx")
-        names, inputs = zip(*self.named_inputs)
-        torch.onnx.export(
-            model=self,
-            args=inputs,
-            f=export_path,
-            input_names=names,
-            output_names=self.output_names
-        )
-        Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
+        return
