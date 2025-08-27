@@ -17,18 +17,15 @@ from .module import (
     StateDecoder,
     GridDecoder
 )
-from .function import *
+from .function import (
+    get_unimix_logits,
+    one_hot_sample,
+    SymLogTwoHotLoss,
+    CategoricalLossWithFreeBits
+)
 from diffaero.utils.nn import mlp
 from diffaero.utils.runner import timeit
 from diffaero.utils.logger import Logger
-
-@torch.jit.script
-def one_hot_sample(probs:torch.Tensor):
-    B, K, C = probs.shape
-    flatten_probs = probs.view(-1,C)
-    sample_indices = torch.multinomial(flatten_probs,1).squeeze()
-    one_hot_samples = F.one_hot(sample_indices, C)
-    return one_hot_samples.view(B, K, C)
 
 class RSSM(nn.Module):
     def __init__(
@@ -50,20 +47,12 @@ class RSSM(nn.Module):
         self.classes = classes
     
     def straight_through_gradient(self, x: Tensor, test: bool = False):
-        if x.ndim == 2:
-            B, _ = x.shape
-            x = x.reshape(B, self.stoch, self.classes)
-        else:
-            B, T, _ = x.shape
-            x = x.reshape(B, T, self.stoch, self.classes)
-        logits = get_unimix_logits(x)
+        x_chunked = torch.stack(x.chunk(self.stoch, dim=-1), dim=-2)
+        logits = get_unimix_logits(x_chunked)
         probs = F.softmax(logits, dim=-1)
-        if test:
-            onehot = F.one_hot(probs.argmax(dim=-1), self.classes).float()
-        else:
-            onehot = one_hot_sample(probs)
+        onehot = one_hot_sample(probs, test=test)
         straight_sample = onehot - probs.detach() + probs
-        straight_sample = straight_sample.reshape(*straight_sample.shape[:-2], -1)
+        straight_sample = straight_sample.reshape_as(x)
         return straight_sample, probs
     
     def _post(self, token: Tensor, deter: Tensor, test: bool = False):

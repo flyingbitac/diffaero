@@ -1,13 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 from einops import reduce
 
 @torch.no_grad()
+@torch.jit.script
 def symlog(x:torch.Tensor):
     return torch.sign(x) * torch.log1p(torch.abs(x))
 
 @torch.no_grad()
+@torch.jit.script
 def symexp(x:torch.Tensor):
     return torch.sign(x) * torch.expm1(torch.abs(x))
 
@@ -15,6 +18,17 @@ def mse(pred:torch.Tensor, target:torch.Tensor):
     mse_loss = (pred - target) ** 2
     mse_loss = reduce(mse_loss, 'b l ... -> b l', 'sum')
     return mse_loss.mean()
+
+@torch.jit.script
+def one_hot_sample(probs: Tensor, test: bool = False) -> Tensor:
+    if not test:
+        B, K, C = probs.shape
+        flatten_probs = probs.view(-1,C)
+        sample_indices = torch.multinomial(flatten_probs,1).squeeze()
+        one_hot_samples = F.one_hot(sample_indices, C)
+        return one_hot_samples.view(B, K, C)
+    else:
+        return F.one_hot(probs.argmax(dim=-1), probs.size(-1)).float()
 
 class SymLogTwoHotLoss(nn.Module):
     def __init__(self, num_classes, lower_bound, upper_bound):

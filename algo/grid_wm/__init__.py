@@ -53,9 +53,9 @@ class GRIDWMTesttime:
     @timeit
     def act(self, obs, test=False):
         # type: (TensorDict, bool) -> Tuple[Tensor, Dict[str, Tensor]]
+        if not hasattr(self, "deter"):
+            self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=self.device)
         with torch.no_grad():
-            if not hasattr(self, "deter"):
-                self.deter = torch.zeros(obs['state'].shape[0], self.wm.deter_dim, device=self.device)
             latent = self.wm.encode(obs['perception'], obs['state'], self.deter, test=test)
             actor_input = torch.cat([latent, self.deter, self.make_state_input(obs)], dim=-1)
         action, sample, logprob, entropy = self.actor(actor_input, test=test)
@@ -376,9 +376,9 @@ class GRIDWM(GRIDWMTesttime):
 class GRIDWMExporter(PolicyExporter):
     def __init__(self, agent: GRIDWMTesttime):
         super().__init__(agent.actor)
+        del self.forward
         self.wm = deepcopy(agent.wm).cpu()
         self.odom_free = agent.odom_free
-        del self.forward
         self.input_dim = agent.obs_dim
         self.named_inputs = [
             ("state", torch.zeros(1, self.input_dim[0])),
@@ -389,8 +389,8 @@ class GRIDWMExporter(PolicyExporter):
             ("max_action", torch.zeros(1, 3)),
             ("hidden_in", torch.zeros(1, self.wm.deter_dim))
         ]
-        for name, input in self.named_inputs:
-            print(name, input.shape)
+        self.device = agent.device
+        self.action_frame = "local"
     
     def make_state_input(self, state: Tensor) -> Tensor:
         target_vel, odom_info = state[..., :3], state[..., 3:]
@@ -404,10 +404,6 @@ class GRIDWMExporter(PolicyExporter):
         latent = self.wm.encode(perception, state, hidden_in, test=True)
         actor_input = torch.cat([latent, hidden_in, self.make_state_input(state)], dim=-1)
         raw_action = self.actor.forward_export(actor_input)
+        hidden_out = self.wm.recurrent(latent, hidden_in, raw_action.tanh())
         action, quat_xyzw, acc_norm = self.post_process(raw_action, min_action, max_action, orientation, Rz)
-        hidden_out = self.wm.recurrent(latent, hidden_in, action)
         return action, quat_xyzw, acc_norm, hidden_out
-    
-    @torch.no_grad()
-    def export_jit(self, path: str, verbose=False):
-        return
