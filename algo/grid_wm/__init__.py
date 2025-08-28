@@ -203,6 +203,9 @@ class GRIDWM(GRIDWMTesttime):
             predictions["occupancy_pred"] = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
         
         if "image_pred" in predictions.keys():
+            video_gt = predictions["image_gt"][:4].expand(-1, -1, 3, -1, -1)
+            video_pred = predictions["image_pred"][:4].expand(-1, -1, 3, -1, -1)
+            predictions["video"] = torch.concat([video_gt, video_pred], dim=-1).clamp(0., 1.)
             predictions["image_gt"] = predictions["image_gt"][env_idx, time_idx]
             predictions["image_pred"] = predictions["image_pred"][env_idx, time_idx]
         
@@ -320,11 +323,13 @@ class GRIDWM(GRIDWMTesttime):
                 occupancy = np.concatenate([occupancy_gt, occupancy_pred], axis=1).transpose(2, 0, 1)
                 logger.log_image("recon/occupancy", occupancy)
             if "image_pred" in predictions.keys() and "image_gt" in predictions.keys():
-                preprocess = lambda x: x.clamp(0., 1.).permute(1, 2, 0).expand(-1, -1, 3).cpu().numpy()
+                preprocess = lambda x: x.clamp(0., 1.).expand(3, -1, -1).cpu().numpy()
                 img_gt = preprocess(predictions["image_gt"])
                 img_pred = preprocess(predictions["image_pred"])
-                img = np.concatenate([img_gt, img_pred], axis=1).transpose(2, 0, 1)
+                img = np.concatenate([img_gt, img_pred], axis=-1)
                 logger.log_image("recon/image", img)
+            if "video" in predictions.keys():
+                logger.log_video("recon/video", predictions["video"].cpu().numpy(), fps=10)
 
         return obs, policy_info, env_info, losses, grad_norms
 
