@@ -24,9 +24,9 @@ ground_plane: True
 loss_weights:
   pointmass:
     vel: 2
-    z: 0.5
+    z: 1.
     oa: 5.
-    jerk: 0.005
+    jerk: 0.01
     pos: 5.
     collision: 0.
   quadrotor:
