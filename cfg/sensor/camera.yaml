@@ -8,3 +8,24 @@ max_dist: 5.0
 
 onboard_position: [0.2, 0., 0.05]
 onboard_attitude: [0., 0., 0., 1.] # xyzw quaternion
+
+# pose randomization
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+pitch_angle_deg:
+  default: 0
+  enabled: True
+  min: -5
+  max: 5
+
+yaw_angle_deg:
+  default: 0
+  enabled: True
+  min: -3
+  max: 3
+
+roll_angle_deg:
+  default: 0
+  enabled: True
+  min: -3
+  max: 3

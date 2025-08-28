@@ -17,6 +17,7 @@ from diffaero.utils.math import (
     euler_to_quaternion
 )
 from diffaero.utils.assets import ObstacleManager
+from diffaero.utils.randomizer import build_randomizer
 from diffaero.utils.logger import Logger
 
 @torch.jit.script
@@ -120,7 +121,7 @@ def raydist3d_ground_plane(
     return raydist
 
 @torch.jit.script
-def ray_directions_world2body(
+def ray_directions_body2world(
     ray_directions: Tensor,
     quat_xyzw: Tensor,
     H: int,
@@ -128,7 +129,7 @@ def ray_directions_world2body(
 ) -> Tensor: # [n_envs, n_rays, 3]
     quat_wxyz = quat_xyzw.roll(1, dims=-1) # [n_envs, 4]
     quat_wxyz = quat_wxyz.unsqueeze(1).expand(-1, H*W, -1) # [n_envs, n_rays, 4]
-    return quaternion_apply(quat_wxyz, ray_directions.view(1, -1, 3)) # [n_envs, n_rays, 3]
+    return quaternion_apply(quat_wxyz, ray_directions.view(quat_wxyz.size(0), H*W, 3)) # [n_envs, n_rays, 3]
 
 @torch.jit.script
 def get_ray_dist(
@@ -144,13 +145,14 @@ def get_ray_dist(
     lwh_cubes: Tensor,        # [n_envs, n_cubes, 3]
     rpy_cubes: Tensor,        # [n_envs, n_cubes, 3]
     start: Tensor,            # [n_envs, n_rays, 3]
-    ray_directions_b: Tensor, # [H, W, 3]
+    ray_directions_b: Tensor, # [n_envs, n_rays, 3]
     quat_xyzw: Tensor,        # [n_envs, 4]
     max_dist: float,
+    H: int,
+    W: int,
     z_ground_plane: Optional[Tensor] = None, # [n_envs]
 ) -> Tuple[Tensor, Tensor]: # [n_envs, H, W], [n_envs, n_rays, 3]
-    H, W = ray_directions_b.shape[:2]
-    ray_directions_w = ray_directions_world2body(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
+    ray_directions_w = ray_directions_body2world(ray_directions_b, quat_xyzw, H, W) # [n_envs, n_rays, 3]
     
     n_spheres = p_spheres.shape[1]
     if n_spheres > 0:
@@ -180,27 +182,41 @@ def get_ray_dist(
     depth = 1. - raydist.reshape(-1, H, W) / max_dist # [n_envs, H, W]
     return depth, contact_points # [n_envs, H, W], [n_envs, n_rays, 3]
 
-@torch.jit.script
-def get_contact_point(
-    depth: Tensor, # [n_envs, H, W]
-    ray_directions_w: Tensor, # [n_envs, n_rays, 3]
-    start: Tensor, # [n_envs, n_rays, 3]
-    max_dist: float,
-    H: int,
-    W: int
-):
-    raydist = (1. - depth.reshape(-1, H*W, 1)) * max_dist
-    return ray_directions_w * raydist + start # [n_envs, n_rays, 3]
-
 
 class RayCastingSensorBase:
     def __init__(self, cfg: DictConfig, device: torch.device):
         self.H: int
         self.W: int
+        self.n_envs: int = cfg.n_envs
+        self.n_agents: int = cfg.n_agents
         self.max_dist: float = cfg.max_dist
         self.device = device
         self.ray_directions: Tensor # [H, W, 3]
+        
+        self.roll_angle = build_randomizer(cfg.roll_angle_deg, [self.n_envs, self.n_agents], device=device)
+        self.pitch_angle = build_randomizer(cfg.pitch_angle_deg, [self.n_envs, self.n_agents], device=device)
+        self.yaw_angle = build_randomizer(cfg.yaw_angle_deg, [self.n_envs, self.n_agents], device=device)
+        if self.n_agents == 1:
+            self.roll_angle.value.squeeze_(1)
+            self.pitch_angle.value.squeeze_(1)
+            self.yaw_angle.value.squeeze_(1)
     
+    @property
+    def sensor_pose_rpy(self) -> Tensor:
+        return torch.stack([self.roll_angle.value, self.pitch_angle.value, self.yaw_angle.value], dim=-1) * torch.pi / 180
+    
+    @property
+    def sensor_quat_xyzw(self) -> Tensor:
+        return euler_to_quaternion(*self.sensor_pose_rpy.unbind(dim=-1))
+    
+    def sensor2body(self, vec_s: Tensor):
+        quat = self.sensor_quat_xyzw.unsqueeze(1).expand(-1, self.H*self.W, -1) # [n_envs, n_rays, 4]
+        return quat_rotate(quat, vec_s.reshape(self.n_envs, self.H*self.W, 3)) # [n_envs, n_rays, 3]
+    
+    def body2sensor(self, vec_b: Tensor):
+        quat = self.sensor_quat_xyzw.unsqueeze(1).expand(-1, self.H*self.W, -1) # [n_envs, n_rays, 4]
+        return quat_rotate_inverse(quat, vec_b.reshape(self.n_envs, self.H*self.W, 3)) # [n_envs, n_rays, 3]
+
     def __call__(
         self,
         obstacle_manager: ObstacleManager,
@@ -223,32 +239,27 @@ class RayCastingSensorBase:
         cube_env_ids, cube_ids = env_ids[~sphere_mask], obstacle_ids[~sphere_mask] - obstacle_manager.n_spheres
         
         return get_ray_dist(
-            sphere_ray_dists,
-            sphere_env_ids, sphere_ids,
-            obstacle_manager.p_spheres, # [n_envs, n_spheres, 3]
-            obstacle_manager.r_spheres, # [n_envs, n_spheres]
+            sphere_ray_dists=sphere_ray_dists,
+            sphere_env_ids=sphere_env_ids,
+            sphere_ids=sphere_ids,
+            p_spheres=obstacle_manager.p_spheres, # [n_envs, n_spheres, 3]
+            r_spheres=obstacle_manager.r_spheres, # [n_envs, n_spheres]
             
-            cube_ray_dists,
-            cube_env_ids, cube_ids,
-            obstacle_manager.p_cubes, # [n_envs, n_cubes, 3]
-            obstacle_manager.lwh_cubes, # [n_envs, n_cubes, 3]
-            obstacle_manager.rpy_cubes, # [n_envs, n_cubes, 3]
+            cube_ray_dists=cube_ray_dists,
+            cube_env_ids=cube_env_ids,
+            cube_ids=cube_ids,
+            p_cubes=obstacle_manager.p_cubes, # [n_envs, n_cubes, 3]
+            lwh_cubes=obstacle_manager.lwh_cubes, # [n_envs, n_cubes, 3]
+            rpy_cubes=obstacle_manager.rpy_cubes, # [n_envs, n_cubes, 3]
             
-            ray_starts,
-            self.ray_directions, # [H, W, 3]
-            quat_xyzw,
-            self.max_dist,
+            start=ray_starts,
+            ray_directions_b=self.sensor2body(self.ray_directions), # [n_envs, n_rays, 3]
+            quat_xyzw=quat_xyzw,
+            max_dist=self.max_dist,
+            H=self.H,
+            W=self.W,
             z_ground_plane=z_ground_plane
         )
-    
-    def get_contact_point(
-        self,
-        depth: Tensor, # [n_envs, H, W]
-        start: Tensor, # [n_envs, n_rays, 3]
-        quat_xyzw: Tensor # [n_envs, 4]
-    ) -> Tensor: # [n_envs, n_rays, 3]
-        ray_directions_w = ray_directions_world2body(self.ray_directions, quat_xyzw, self.H, self.W) # [n_envs, n_rays, 3]
-        return get_contact_point(depth, ray_directions_w, start, self.max_dist, self.H, self.W)
 
 
 class Camera(RayCastingSensorBase):
@@ -263,7 +274,8 @@ class Camera(RayCastingSensorBase):
         self.device = device
         self.ray_directions = F.normalize(self._get_ray_directions_plane(), dim=-1) # [H, W, 3]
         # self.ray_directions = F.normalize(self._get_ray_directions_sphere(), dim=-1) # [H, W, 3]
-        
+        self.ray_directions = self.ray_directions.unsqueeze(0).expand(self.n_envs, -1, -1, -1)
+
     def _get_ray_directions_sphere(self):
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
         
@@ -300,6 +312,7 @@ class LiDAR(RayCastingSensorBase):
         self.dep_angle_rad: float = cfg.depression_angle * torch.pi / 180
         self.ele_angle_rad: float = cfg.elevation_angle * torch.pi / 180
         self.ray_directions = F.normalize(self._get_ray_directions(), dim=-1) # [H, W, 3]
+        self.ray_directions = self.ray_directions.unsqueeze(0).expand(self.n_envs, -1, -1, -1)
     
     def _get_ray_directions(self):
         forward = torch.tensor([[[1., 0., 0.]]], device=self.device).expand(self.H, self.W, -1) # [H, W, 3]
