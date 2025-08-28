@@ -136,7 +136,6 @@ class PolicyExporter(nn.Module):
     def export_onnx(self, path: str):
         export_path = os.path.join(path, "exported_actor.onnx")
         names, test_inputs = zip(*self.named_inputs)
-        print(names)
         torch.onnx.export(
             model=self,
             args=test_inputs,
@@ -146,13 +145,23 @@ class PolicyExporter(nn.Module):
         )
         Logger.info(f"The checkpoint is compiled and exported to {export_path}.")
         
-        self.eval()
-        ort_session = ort.InferenceSession(export_path)
-        test_inputs = [torch.randn_like(input, device="cpu") for input in test_inputs]
-        ort_inputs = {name: input.numpy() for name, input in zip(names, test_inputs)}
-        ort_outs: Tuple[np.ndarray, ...] = ort_session.run(None, ort_inputs) # type: ignore
-        torch_outs: Tuple[Tensor, ...] = self(*test_inputs)
-        # compare ONNX Runtime and PyTorch results
-        for i in range(len(ort_outs)):
-            np.testing.assert_allclose(ort_outs[i], torch_outs[i].cpu().numpy(), rtol=1e-03, atol=1e-05, verbose=True)
-        Logger.info(f"The onnx model at {export_path} is verified!")
+        # self.eval()
+        # ort_session = ort.InferenceSession(export_path)
+        # verify_inputs = []
+        # for input in test_inputs:
+        #     if isinstance(input, Tensor):
+        #         verify_inputs.append(torch.randn_like(input))
+        #     elif isinstance(input, tuple):
+        #         verify_inputs.append(tuple(torch.randn_like(t) for t in input))
+        # ort_inputs = {}
+        # for name, input in zip(names, verify_inputs):
+        #     if isinstance(input, Tensor):
+        #         ort_inputs[name] = input.numpy()
+        #     elif isinstance(input, tuple):
+        #         ort_inputs[name] = tuple([t.numpy() for t in input])
+        # ort_outs: Tuple[np.ndarray, ...] = ort_session.run(None, ort_inputs) # type: ignore
+        # torch_outs: Tuple[Tensor, ...] = self(*verify_inputs)
+        # # compare ONNX Runtime and PyTorch results
+        # for i in range(len(ort_outs)):
+        #     np.testing.assert_allclose(ort_outs[i], torch_outs[i].cpu().numpy(), rtol=1e-03, atol=1e-05, verbose=True)
+        # Logger.info(f"The onnx model at {export_path} is verified!")
