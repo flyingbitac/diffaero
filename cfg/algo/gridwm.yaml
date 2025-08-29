@@ -9,7 +9,7 @@ agent:
   actor:
     name: mlp
     hidden_dim: [256, 128]
-    lr: 0.001
+    lr: 0.003
     max_grad_norm: 1.
   critic:
     name: mlp
@@ -76,16 +76,16 @@ wm:
 
   train:
     lr: 3e-4
-    grad_norm: 100.
-    grid_pos_weight: 12
-    term_pos_weight: 60
+    grad_norm: 10.
+    grid_pos_weight: 10
+    term_pos_weight: 100
 
     # weight of loss funcs
     rec_img_weight: 1.
     rec_state_weight: 1.
     free_bits: 1.
-    dyn_weight: 0.5
-    rep_weight: 0.1
+    dyn_weight: 0.01
+    rep_weight: 0.002
     rew_weight: 1.
     ter_weight: 1.
     grid_weight: 1.

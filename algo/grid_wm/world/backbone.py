@@ -342,6 +342,7 @@ class WorldModel(WorldModelTesttime):
         if self.recon_grid:
             predictions["occupancy_pred"] = grid_logits > 0
             predictions["occupancy_gt"] = gt_grids
+            predictions["visible_map"] = visible_map
         predictions["image_pred"] = rec_img
         predictions["image_gt"] = img.reshape_as(rec_img)
         

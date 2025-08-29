@@ -191,24 +191,6 @@ class GRIDWM(GRIDWMTesttime):
                 gt_grids=ground_truth_grid,
                 visible_map=visible_map
             )
-        
-        # select the worst prediction and return to the logger for visualization
-        if "occupancy_pred" in predictions.keys():
-            visible_grid_gt_for_plot = predictions["occupancy_gt"] & visible_map
-            visible_grid_pred_for_plot = predictions["occupancy_pred"] & visible_map
-            n_missed_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
-            env_idx, time_idx = torch.where(n_missed_predictions == n_missed_predictions.max())
-            env_idx, time_idx = env_idx[0], time_idx[0]
-            predictions["occupancy_gt"] = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
-            predictions["occupancy_pred"] = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
-        
-        if "image_pred" in predictions.keys():
-            video_gt = predictions["image_gt"][:4].expand(-1, -1, 3, -1, -1)
-            video_pred = predictions["image_pred"][:4].expand(-1, -1, 3, -1, -1)
-            predictions["video"] = torch.concat([video_gt, video_pred], dim=-1).clamp(0., 1.)
-            predictions["image_gt"] = predictions["image_gt"][env_idx, time_idx]
-            predictions["image_pred"] = predictions["image_pred"][env_idx, time_idx]
-        
         return total_loss, grad_norms, predictions
     
     @torch.no_grad()
@@ -318,18 +300,31 @@ class GRIDWM(GRIDWMTesttime):
         logger.log_scalar("value", value.mean().item())
         if logger.n % 100 == 0:
             if "occupancy_pred" in predictions.keys() and "occupancy_gt" in predictions.keys():
+                # select the worst prediction and return to the logger for visualization
+                visible_grid_gt_for_plot = predictions["occupancy_gt"] & predictions["visible_map"]
+                visible_grid_pred_for_plot = predictions["occupancy_pred"] & predictions["visible_map"]
+                n_missed_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
+                env_idx, time_idx = torch.where(n_missed_predictions == n_missed_predictions.max())
+                env_idx, time_idx = env_idx[0], time_idx[0]
+                
+                occupancy_gt = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
+                occupancy_pred = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
                 occupancy_gt = env.visualize_grid(predictions["occupancy_gt"])
                 occupancy_pred = env.visualize_grid(predictions["occupancy_pred"])
                 occupancy = np.concatenate([occupancy_gt, occupancy_pred], axis=1).transpose(2, 0, 1)
                 logger.log_image("recon/occupancy", occupancy)
+            
             if "image_pred" in predictions.keys() and "image_gt" in predictions.keys():
                 preprocess = lambda x: x.clamp(0., 1.).expand(3, -1, -1).cpu().numpy()
-                img_gt = preprocess(predictions["image_gt"])
-                img_pred = preprocess(predictions["image_pred"])
+                img_gt = preprocess(predictions["image_gt"][env_idx, time_idx])
+                img_pred = preprocess(predictions["image_pred"][env_idx, time_idx])
                 img = np.concatenate([img_gt, img_pred], axis=-1)
                 logger.log_image("recon/image", img)
-            if "video" in predictions.keys():
-                logger.log_video("recon/video", predictions["video"].cpu().numpy(), fps=10)
+                
+                video_gt = predictions["image_gt"][:4].expand(-1, -1, 3, -1, -1)
+                video_pred = predictions["image_pred"][:4].expand(-1, -1, 3, -1, -1)
+                video = torch.concat([video_gt, video_pred], dim=-1).clamp(0., 1.)
+                logger.log_video("recon/video", video.cpu().numpy(), fps=10)
 
         return obs, policy_info, env_info, losses, grad_norms
 
