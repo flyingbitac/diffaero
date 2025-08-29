@@ -19,7 +19,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     
     @timeit
     def step(self, action):
-        # type: (Tensor) -> Tuple[Tuple[Tensor, ...], Tensor, Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+        # type: (Tensor) -> Tuple[Tuple[Tensor, ...], Tuple[Tensor, None], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
@@ -44,7 +44,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.get_observations(), loss, terminated, extra
+        return self.get_observations(), (loss, None), terminated, extra
     
     @timeit
     def loss_fn(
@@ -54,35 +54,34 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         _a: Tensor  # [n_envs, T, 3]
     ) -> Tuple[Tensor, Dict[str, float], Tensor]:
         p, v, a = _p.detach(), _v.detach(), _a.detach()
-        target_relpos = self.target_pos.unsqueeze(1) - p
-        target_dist = target_relpos.norm(dim=-1)
+        target_relpos = self.target_pos.unsqueeze(1) - p # [n_envs, T, 3]
+        target_dist = target_relpos.norm(dim=-1) # [n_envs, T]
         target_vel = target_relpos / torch.max(target_dist / self.max_vel.unsqueeze(-1), torch.ones_like(target_dist)).unsqueeze(-1)
         inflation = 0.2
         # calculate the nearest points on the obstacles to the drone
-        dist2obstacles, nearest_points2obstacles = self.obstacle_manager.nearest_distance_to_obstacles(p)
-        self.obstacle_nearest_points.copy_(nearest_points2obstacles.squeeze(1)) # [n_envs, n_obstacles, 3]
-        obstacle_reldirection = F.normalize(nearest_points2obstacles.squeeze(1) - p, dim=-1) # [n_envs, n_obstacles, 3]
-        
-        dist2surface_inflated = (dist2obstacles.squeeze(1) - (self.r_drone + inflation)).clamp(min=0)
-        dangerous_factor = dist2surface_inflated.neg().exp()
+        dist2obstacles, nearest_points2obstacles = self.obstacle_manager.nearest_distance_to_obstacles(p) # [n_envs, T, n_obstacles(, 3)]
+        obstacle_reldirection = F.normalize(nearest_points2obstacles - p.unsqueeze(-2), dim=-1) # [n_envs, T, n_obstacles, 3]
+
+        dist2surface_inflated = (dist2obstacles - (self.r_drone + inflation)).clamp(min=0) # [n_envs, T, n_obstacles]
+        dangerous_factor = dist2surface_inflated.neg().exp() # [n_envs, T, n_obstacles]
         # calculate the obstacle avoidance loss
-        approaching_vel = torch.sum(obstacle_reldirection * _v, dim=-1) # [n_envs, n_obstacles]
-        approaching = approaching_vel > 0
-        avoiding_vel = torch.norm(_v - approaching_vel.detach().unsqueeze(-1) * obstacle_reldirection, dim=-1) # [n_envs, n_obstacles]
-        approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dangerous_factor).max(dim=-1) # [n_envs]
-        avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dangerous_factor # [n_envs, n_obstacles]
-        avoiding_reward = avoiding_reward[torch.arange(self.n_envs, device=self.device), most_dangerous] # [n_envs]
-        oa_loss = approaching_penalty - 0.5 * avoiding_reward
+        approaching_vel = torch.sum(obstacle_reldirection * _v.unsqueeze(-2), dim=-1) # [n_envs, T, n_obstacles]
+        approaching = approaching_vel > 0 # [n_envs, T, n_obstacles]
+        avoiding_vel = torch.norm(_v.unsqueeze(-2) - approaching_vel.detach().unsqueeze(-1) * obstacle_reldirection, dim=-1) # [n_envs, T, n_obstacles]
+        approaching_penalty, most_dangerous = (torch.where(approaching, approaching_vel, 0.) * dangerous_factor).max(dim=-1) # [n_envs, T]
+        avoiding_reward = torch.where(approaching, avoiding_vel, 0.) * dangerous_factor # [n_envs, T, n_obstacles]
+        avoiding_reward = torch.gather(input=avoiding_reward, dim=-1, index=most_dangerous.unsqueeze(-1)).squeeze(-1) # [n_envs, T]
+        oa_loss = approaching_penalty - 0.5 * avoiding_reward # [n_envs, T]
         
-        collision = (dist2obstacles.squeeze(1) - self.r_drone).lt(0.)
+        collision = (dist2obstacles - self.r_drone).lt(0.).any(dim=-1) # [n_envs, T]
         collision_loss = collision.float()
         
         arrive_loss = 1 - target_dist.lt(0.5).float()
         pos_loss = 1 - target_dist.neg().exp()
         
-        vel_diff = torch.norm(_v - target_vel, dim=-1)
-        vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-        z_diff = _p[..., 2] - self.target_pos[:, None, 2]
+        vel_diff = torch.norm(_v - target_vel, dim=-1) # [n_envs, T]
+        vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none") # [n_envs, T]
+        z_diff = _p[..., 2] - self.target_pos[:, None, 2] # [n_envs, T]
         z_loss = 1 - z_diff.abs().neg().exp()
 
         total_loss = (
