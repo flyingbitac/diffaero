@@ -12,7 +12,6 @@ from omegaconf import DictConfig
 import taichi as ti
 
 from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
-from diffaero.dynamics.pointmass import continuous_point_mass_dynamics_world
 from diffaero.utils.math import mvp, rk4
 from diffaero.utils.render import torch2ti
 from diffaero.utils.runner import timeit
@@ -77,7 +76,7 @@ def rpy2xyz(rpy: Tensor) -> Tensor:
 def post_process(
     output: Tensor, # [N, HW, 10]
     rpy_base: Tensor, # [n_pitch*n_yaw, 3]
-    drpy_range: Tensor, # [4,]
+    drpy_range: Tensor, # [3,]
     dv_range: float,
     da_range: float,
     rotmat_p2b: Tensor, # [n_pitch*n_yaw, 3, 3]
@@ -129,24 +128,24 @@ def solve_coef(
 @torch.jit.script
 def get_traj_point(
     t: Tensor,
-    coef_xyz: Tensor # [..., 6, 3]
+    coef_xyz: Tensor # [N, HW, 6, 3]
 ):
     coef_mat = get_coef_matrix(t)[3:, :] # [3, 6]
-    pva = torch.matmul(coef_mat, coef_xyz) # [..., 3(pva), 3(xyz)]
-    p, v, a = pva.unbind(dim=-2) # [..., 3(xyz)]
+    pva = torch.matmul(coef_mat, coef_xyz) # [N, HW, 3(pva), 3(xyz)]
+    p, v, a = pva.unbind(dim=-2) # [N, HW, 3(xyz)]
     return p, v, a
 
 @torch.jit.script
 def get_traj_points(
     t_vec: Tensor, # [T]
-    coef_xyz: Tensor # [..., 6, 3]
+    coef_xyz: Tensor # [N, HW, 6, 3]
 ):
-    coef_mat = get_coef_matrices(t_vec)[..., 3:, :] # [T, 3, 6]
-    pva = torch.matmul(coef_mat.unsqueeze(0), coef_xyz.unsqueeze(1)) # [..., T, 3(pva), 3(xyz)]
+    coef_mat = get_coef_matrices(t_vec)[None, None, :, 3:, :] # [1, 1, T, 3, 6]
+    pva = torch.matmul(coef_mat, coef_xyz.unsqueeze(2)) # [N, HW, T, 3(pva), 3(xyz)]
     p, v, a = pva.unbind(dim=-2) # [..., T, 3(xyz)]
     return p, v, a
 
-@torch.jit.script
+# @torch.jit.script
 def discrete_point_mass_dynamics_world(
     X: Tensor,
     U: Tensor,
@@ -182,7 +181,6 @@ class YOPO:
         self.max_yaw: float = cfg.max_yaw * torch.pi / 180.
         self.n_pitch: int = cfg.n_pitch # H
         self.n_yaw: int = cfg.n_yaw     # W
-        self.n_optim_steps: int = cfg.n_optim_steps
         self.r_base: float = cfg.r
         self.dr_range: float = self.r_base
         self.dpitch_range: float = cfg.dpitch_range * torch.pi / 180.
@@ -194,9 +192,6 @@ class YOPO:
         self.gamma: float = cfg.gamma
         self.expl_prob: float = cfg.expl_prob
         self.grad_norm: Optional[float] = cfg.grad_norm
-        self.optimized_inference: bool = cfg.optimized_inference
-        self.real_dynamics_rollout: bool = cfg.real_dynamics_rollout
-        self.update_best_traj_only: bool = cfg.update_best_traj_only
         self.t_next = torch.tensor(cfg.t_next, device=device) if cfg.t_next is not None else self.t_vec[1]
         self.device = device
         
@@ -220,6 +215,7 @@ class YOPO:
             head_hidden_dim=cfg.head_hidden_dim,
             out_dim=10
         ).to(device)
+        self.net = torch.compile(self.net)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
     
     def body2primitive(self, vec_b: Tensor):
@@ -278,33 +274,10 @@ class YOPO:
             patch_index = best_idx
         patch_index = patch_index.reshape(N, 1, 1, 1).expand(-1, -1, 6, 3)
         coef_best = torch.gather(coef_xyz, 1, patch_index).squeeze(1) # [N, 6, 3]
-        
-        # if env is not None and self.optimized_inference:
-        #     losses = []
-        #     for _ in range(self.n_optim_steps):
-        #         coef_best = coef_best.detach().requires_grad_(True)
-        #         # pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, len(self.t_vec)-1, -1)
-                
-        #         p_t_b, v_t_b, a_t_b = get_traj_points(self.t_vec[1:], coef_best)
-        #         p_t_w = mvp(rotmat_b2w, p_t_b) + p_w.unsqueeze(1)
-        #         v_t_w = mvp(rotmat_b2w, v_t_b)
-        #         a_t_w = mvp(rotmat_b2w, a_t_b) + self.G.unsqueeze(1)
-        #         # pva_w = self.dynamics_step(env, pva_w, a_t_w)
-        #         # loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
-        #         loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
-        #         loss.mean().backward()
-        #         losses.append(loss.mean().item())
-        #         coef_best = coef_best - 1 * coef_best.grad
-                
-        #     Logger.debug(f"Losses: {losses[0]-losses[-1]:.4f}")
-        
+
         p_next_b, v_next_b, a_next_b = get_traj_point(self.t_next, coef_best) # [N, 3]
         a_next_w = mvp(rotmat_b2w, a_next_b) + self.G
         return a_next_w, {"coef_best": coef_best}
-
-    def dynamics_step(self, env: ObstacleAvoidanceYOPO, pva: Tensor, a_next: Tensor):
-        pva_next = env.dynamics.solver(env.dynamics.dynamics, pva, a_next, dt=1./self.n_points_per_sec, M=4)
-        return pva_next
 
     @timeit
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: Tuple[Tensor, ...], on_step_cb=None):
@@ -316,35 +289,21 @@ class YOPO:
             # traverse the trajectory and cumulate the loss
             score, coef_xyz = self.inference(p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image) # [N, HW, 6, 3]
             
-            if self.update_best_traj_only:
-                best_idx = score.argmin(dim=-1).reshape(N, 1, 1, 1).expand(-1, -1, 6, 3)
-                coef_xyz = torch.gather(coef_xyz, 1, best_idx)
-                cumulative_loss = torch.zeros(N, 1, device=self.device)
-                survive = torch.ones(N, 1, device=self.device, dtype=torch.bool)
-                survive_steps = torch.ones(N, 1, device=self.device)
-                pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2)
-            else:
-                cumulative_loss = torch.zeros(N, HW, device=self.device)
-                survive = torch.ones(N, HW, device=self.device, dtype=torch.bool)
-                survive_steps = torch.ones(N, HW, device=self.device)
-                pva_w = torch.cat([p_w, v_w, a_w], dim=-1).unsqueeze(-2).expand(-1, HW, -1)
+            T = self.n_points - 1
+            traj_loss = torch.zeros(N, HW, T, device=self.device)
+            survive = torch.ones(N, HW, T, device=self.device, dtype=torch.bool)
+
+            p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.t_vec[1:], coef_xyz) # [N, HW, T, 3]
+            p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T, 3)) + p_w.unsqueeze(1)
+            v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T, 3))
+            a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T, 3)) + self.G.unsqueeze(1)
+            traj_loss, _, dead = env.loss_fn(p_traj_w, v_traj_w, a_traj_w)
+            traj_loss, dead = traj_loss.reshape(N, HW, T), dead.reshape(N, HW, T).float().cumsum(dim=2)
+            survive = (dead == 0.).float()
+            traj_loss = torch.sum(traj_loss * survive, dim=-1) / survive.sum(dim=-1).clamp(min=1.)
+            score_loss = F.mse_loss(score, traj_loss.detach())
             
-            for i, t in enumerate(self.t_vec[1:]):
-                p_t_b, v_t_b, a_t_b = get_traj_point(t, coef_xyz) # [N, HW, 3]
-                p_t_w = mvp(rotmat_b2w.unsqueeze(1), p_t_b) + p_w.unsqueeze(1)
-                v_t_w = mvp(rotmat_b2w.unsqueeze(1), v_t_b)
-                a_t_w = mvp(rotmat_b2w.unsqueeze(1), a_t_b) + self.G.unsqueeze(1)
-                if self.real_dynamics_rollout:
-                    pva_w = self.dynamics_step(env, pva_w, a_t_w)
-                    loss, _, dead = env.loss_fn(*pva_w.chunk(3, dim=-1))
-                else:
-                    loss, _, dead = env.loss_fn(p_t_w, v_t_w, a_t_w)
-                survive = survive & ~dead
-                survive_steps += survive.float()
-                cumulative_loss = cumulative_loss + loss * survive.float() * (self.gamma ** i)
-            traj_loss = torch.mean(cumulative_loss / survive_steps)
-            score_loss = F.mse_loss(score, cumulative_loss.detach())
-            total_loss = traj_loss + 0.01 * score_loss
+            total_loss = traj_loss.mean() + 0.01 * score_loss
             self.optimizer.zero_grad()
             total_loss.backward()
             self.optimizer.step()
@@ -383,7 +342,7 @@ class YOPO:
                     env_info=env_info)
         
         losses = {
-            "traj_loss": traj_loss.item(),
+            "traj_loss": traj_loss.mean().item(),
             "score_loss": score_loss.item(),
             "total_loss": total_loss.item()}
         grad_norms = {"actor_grad_norm": grad_norm}

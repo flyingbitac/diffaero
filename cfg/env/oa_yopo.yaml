@@ -4,16 +4,16 @@ sensor: ${sensor}
 dynamics: ${dynamics}
 dt: 0.0333
 length:
-  default: 25
-  enabled: False
-  min: 25
-  max: 25
+  default: 20
+  enabled: True
+  min: 10
+  max: 30
 height_scale: 0.25
 n_envs: ${n_envs}
 n_agents: ${n_agents}
 obs_frame: "world" # "world" or "local"
 max_time: 30
-wait_before_truncate: 5.
+wait_before_truncate: 0.5
 max_target_vel: 10.
 min_target_vel: 5.
 last_action_in_obs: ~
