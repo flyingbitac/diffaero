@@ -53,19 +53,19 @@ class RSSM(nn.Module):
         onehot = one_hot_sample(probs, test=test)
         straight_sample = onehot - probs.detach() + probs
         straight_sample = straight_sample.reshape_as(x)
-        return straight_sample, probs
+        return straight_sample, logits
     
     def _post(self, token: Tensor, deter: Tensor, test: bool = False):
         x = torch.cat([token, deter], dim=-1)
         post_logits = self.post_proj(x)
-        post_sample, post_probs = self.straight_through_gradient(post_logits, test)
-        return post_sample, post_probs
+        post_sample, post_logits = self.straight_through_gradient(post_logits, test)
+        return post_sample, post_logits
        
     def _prior(self, deter: Tensor, stoch: Tensor, action: Tensor):
         deter = self.recurrent(stoch, deter, action)
         prior_logits = self.prior_proj(deter)
-        prior_sample, prior_probs = self.straight_through_gradient(prior_logits)
-        return prior_sample, prior_probs, deter
+        prior_sample, prior_logits = self.straight_through_gradient(prior_logits)
+        return prior_sample, prior_logits, deter
     
     def recurrent(self, stoch: Tensor, deter:Tensor, action: Tensor):
         return self.seq_model(deter, stoch, action)
@@ -217,9 +217,9 @@ class WorldModel(WorldModelTesttime):
     
     def forward(self, tokens, deter, actions):
         # type: (Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
-        post_samples, post_prob = self.rssm._post(tokens, deter)
-        prior_samples, prior_prob, deter = self.rssm._prior(deter, post_samples, actions)
-        return post_samples, post_prob, prior_samples, prior_prob, deter
+        post_samples, post_logits = self.rssm._post(tokens, deter)
+        prior_samples, prior_logits, deter = self.rssm._prior(deter, post_samples, actions)
+        return post_samples, post_logits, prior_samples, prior_logits, deter
 
     @timeit    
     def update(
@@ -238,35 +238,39 @@ class WorldModel(WorldModelTesttime):
             tokens.append(self.state_encoder(state))
         tokens = torch.cat(tokens, dim=-1)  
         
-        post_probs_list, prior_probs_list, feat_list = [], [], []
+        post_logits_list, prior_logits_list, post_feat_list = [], [], []
         for i in range(self.l_rollout):
-            post_samples, post_prob, prior_samples, prior_prob, deter = self(tokens[:, i], deter, actions[:, i])
-            post_probs_list.append(post_prob)
-            prior_probs_list.append(prior_prob)
-            feat_list.append(torch.cat([deter, prior_samples], dim=-1))
+        #   z_i                       \hat{z_{i+1}}               h_{i+1}           x_i           h_i    a_i
+            post_samples, post_logit, prior_samples, prior_logit, deter_next = self(tokens[:, i], deter, actions[:, i])
+            post_logits_list.append(post_logit)
+            prior_logits_list.append(prior_logit)
+            post_feat_list.append(torch.cat([deter, post_samples], dim=-1)) # h_i, z_i
+            deter = deter_next
         
-        post_probs = torch.stack(post_probs_list, dim=1)
-        prior_probs = torch.stack(prior_probs_list, dim=1)
-        feats = torch.stack(feat_list, dim=1)
+        post_logits = torch.stack(post_logits_list, dim=1)[:, 1:]
+        prior_logits = torch.stack(prior_logits_list, dim=1)[:, :-1]
+        post_feats = torch.stack(post_feat_list, dim=1) # h_i, z_i
         
+        rewards, terminated = rewards[:, :-1], terminated[:, :-1]
+
         if self.recon_reward:
-            reward_logits = self.reward_decoder(feats)
+            reward_logits = self.reward_decoder(post_feats[:, 1:]) # \hat{r_{i+1}} = reward_decoder(h_{i+1}, \hat{z_{i+1}})
             rew_loss = self.symlogtwohot(reward_logits, rewards)
         else:
             rew_loss = torch.tensor(0)
         
         if self.recon_image:
-            rec_img, rec_img_loss = self.image_decoder.compute_loss(feats, img)
+            rec_img, rec_img_loss = self.image_decoder.compute_loss(post_feats, img)
         else:
-            rec_img, rec_img_loss = self.image_decoder.compute_loss(feats.detach(), img)
+            rec_img, rec_img_loss = self.image_decoder.compute_loss(post_feats.detach(), img)
         
         if self.recon_state:
-            rec_state_loss = self.state_decoder.compute_loss(feats, state)
+            rec_state_loss = self.state_decoder.compute_loss(post_feats, state) # type: ignore
         else:
             rec_state_loss = torch.tensor(0)
         
         if self.recon_grid:
-            grid_logits = self.grid_decoder(feats)
+            grid_logits = self.grid_decoder(post_feats)
             visible_grid_logits = grid_logits[visible_map]
             visible_gt_grid = gt_grids[visible_map]
             target = visible_gt_grid.float() * (1 - self.soft_label) + self.soft_label
@@ -278,9 +282,10 @@ class WorldModel(WorldModelTesttime):
         else:
             grid_loss, grid_acc, grid_precision = torch.tensor(0), torch.tensor(0), torch.tensor(0)
         
-        dyn_loss = self.kl_loss.kl_loss(post_probs.detach(), prior_probs)
-        rep_loss = self.kl_loss.kl_loss(post_probs, prior_probs.detach())
-        ter_logits = self.termination_decoder(feats).squeeze(-1)
+        dyn_loss = self.kl_loss(post_logits.detach(), prior_logits)
+        rep_loss = self.kl_loss(post_logits, prior_logits.detach())
+        
+        ter_logits = self.termination_decoder(post_feats[:, 1:]).squeeze(-1)
         term_loss = self.term_loss(ter_logits, terminated.float())
         term_pred = ter_logits > 0
         term_acc = (term_pred == terminated).float().mean()
@@ -298,6 +303,15 @@ class WorldModel(WorldModelTesttime):
         
         self.optim.zero_grad()
         total_loss.backward()
+        if Logger.logging.level == 10:
+            for n, m in self.named_children():
+                if len(list(m.parameters())) != 0:
+                    grads = [p.grad for p in m.parameters() if p.grad is not None]
+                    Logger.debug(n, "\t", nn.utils.get_total_norm(grads).item())
+            for n, m in self.rssm.named_children():
+                if len(list(m.parameters())) != 0:
+                    grads = [p.grad for p in m.parameters() if p.grad is not None]
+                    Logger.debug(n, "\t", nn.utils.get_total_norm(grads).item())
         grad_norm = torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm)
         self.optim.step()
         
@@ -328,6 +342,7 @@ class WorldModel(WorldModelTesttime):
         if self.recon_grid:
             predictions["occupancy_pred"] = grid_logits > 0
             predictions["occupancy_gt"] = gt_grids
+            predictions["visible_map"] = visible_map
         predictions["image_pred"] = rec_img
         predictions["image_gt"] = img.reshape_as(rec_img)
         

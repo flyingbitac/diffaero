@@ -25,7 +25,7 @@ setup(
         'pytorch3d@git+https://github.com/facebookresearch/pytorch3d.git@stable#egg=pytorch3d',
         'open3d',
         'numpy',
-        'moviepy',
+        'moviepy==1.0.3',
         'imageio',
         'imageio-ffmpeg',
         'matplotlib',

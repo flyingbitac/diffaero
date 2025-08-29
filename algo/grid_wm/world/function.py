@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torch import Tensor
 from einops import reduce
 
+from diffaero.utils.logger import Logger
+
 @torch.no_grad()
 @torch.jit.script
 def symlog(x:torch.Tensor):
@@ -82,15 +84,17 @@ def get_unimix_logits(logits:torch.Tensor, unimix:float=0.01):
     probs = (1-unimix) * probs + unimix / probs.size(-1)
     return torch.log(probs)
 
-class CategoricalLossWithFreeBits:
-    def __init__(self, free_bits:float=1.):
+class CategoricalLossWithFreeBits(nn.Module):
+    def __init__(self, free_bits: float = 1.):
+        super().__init__()
         self.free_bits = free_bits
     
-    def kl_loss(self, post_probs:torch.Tensor, prior_probs:torch.Tensor):
-        post_dist = torch.distributions.OneHotCategorical(logits=post_probs)
-        prior_dist = torch.distributions.OneHotCategorical(logits=prior_probs)
+    def forward(self, post_logits: Tensor, prior_logits: Tensor):
+        post_dist = torch.distributions.OneHotCategorical(logits=post_logits)
+        prior_dist = torch.distributions.OneHotCategorical(logits=prior_logits)
         real_kl_loss = torch.distributions.kl_divergence(post_dist, prior_dist)
         real_kl_loss = reduce(real_kl_loss, '... D -> ...', 'sum')
         real_kl_loss = torch.mean(real_kl_loss)
+        Logger.debug("dyn_loss", real_kl_loss.max().item())
         kl_loss = torch.max(self.free_bits*torch.ones_like(real_kl_loss), real_kl_loss)
         return kl_loss
