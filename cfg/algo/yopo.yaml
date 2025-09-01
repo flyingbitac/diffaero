@@ -8,12 +8,10 @@ r: 2.5
 n_pitch: 3
 min_pitch: -30
 max_pitch: 30
-dpitch_range: 15
 
 n_yaw: 5
 min_yaw: -45
 max_yaw: 45
-dyaw_range: 30
 
 dv_range: 5
 da_range: 2
