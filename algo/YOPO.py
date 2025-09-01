@@ -83,11 +83,8 @@ def post_process(
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     d_rpy, v_p, a_p, score = output.chunk(4, dim=-1) # [N, HW, n_channels], #channels: [3, 3, 3, 1]
     rpy = rpy_base.unsqueeze(0) + torch.tanh(d_rpy) * drpy_range.expand_as(d_rpy) # [N, HW, 3]
-    # print(rpy.view(-1, 3).min(dim=0).values, rpy.view(-1, 3).max(dim=0).values)
     p_b = rpy2xyz(rpy) # [N, HW, 3]
     v_p, a_p = dv_range * torch.tanh(v_p), da_range * torch.tanh(a_p) # [N, HW, 3]
-    # v_b = torch.matmul(rotmat_p2b, v_p.unsqueeze(-1)).squeeze(-1)
-    # a_b = torch.matmul(rotmat_p2b, a_p.unsqueeze(-1)).squeeze(-1)
     v_b = mvp(rotmat_p2b.unsqueeze(0), v_p)
     a_b = mvp(rotmat_p2b.unsqueeze(0), a_p)
     return p_b, v_b, a_b, score.squeeze(-1)
@@ -137,10 +134,10 @@ def get_traj_point(
 
 @torch.jit.script
 def get_traj_points(
-    t_vec: Tensor, # [T]
+    coef_mats: Tensor, # [T, 6, 6]
     coef_xyz: Tensor # [N, HW, 6, 3]
 ):
-    coef_mat = get_coef_matrices(t_vec)[None, None, :, 3:, :] # [1, 1, T, 3, 6]
+    coef_mat = coef_mats[None, None, :, 3:, :] # [1, 1, T, 3, 6]
     pva = torch.matmul(coef_mat, coef_xyz.unsqueeze(2)) # [N, HW, T, 3(pva), 3(xyz)]
     p, v, a = pva.unbind(dim=-2) # [..., T, 3(xyz)]
     return p, v, a
@@ -171,10 +168,11 @@ class YOPO:
         device: torch.device
     ):
         self.tmax: Tensor = torch.tensor(cfg.tmax, device=device)
-        self.inv_coef_mat: Tensor = torch.inverse(get_coef_matrix(self.tmax)) # [6, 6]
+        self.inv_coef_mat_tmax: Tensor = torch.inverse(get_coef_matrix(self.tmax)) # [6, 6]
         self.n_points_per_sec: int = cfg.n_points_per_sec
         self.n_points: int = int(self.n_points_per_sec * cfg.tmax)
         self.t_vec = torch.linspace(0, cfg.tmax, self.n_points, device=device)
+        self.coef_mats: Tensor = get_coef_matrices(self.t_vec) # [n_points, 6, 6]
         self.min_pitch: float = cfg.min_pitch * torch.pi / 180.
         self.max_pitch: float = cfg.max_pitch * torch.pi / 180.
         self.min_yaw: float = cfg.min_yaw * torch.pi / 180.
@@ -225,8 +223,9 @@ class YOPO:
         return mvp(self.rotmat_p2b, vec_p)
 
     @timeit
-    def inference(self, p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image):
-        # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor]
+    def inference(self, obs):
+        # type: (Tuple[Tensor, ...]) -> Tuple[Tensor, Tensor]
+        p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image = obs
         rotmat_w2b = rotmat_b2w.transpose(-2, -1)
         target_vel_b = mvp(rotmat_w2b, target_vel_w)
         p_curr_b = torch.zeros_like(p_w)
@@ -249,7 +248,7 @@ class YOPO:
             rotmat_p2b=self.rotmat_p2b
         )
         coef_xyz = solve_coef( # [N, HW, 6, 3]
-            self.inv_coef_mat[None, None, ...], # [1, 1, 6, 6]
+            self.inv_coef_mat_tmax[None, None, ...], # [1, 1, 6, 6]
             p_curr_b.unsqueeze(1).expand_as(p_end_b), # [N, HW, 3]
             v_curr_b.unsqueeze(1).expand_as(v_end_b), # [N, HW, 3]
             a_curr_b.unsqueeze(1).expand_as(a_end_b), # [N, HW, 3]
@@ -260,11 +259,9 @@ class YOPO:
         return score, coef_xyz
     
     def act(self, obs: Tuple[Tensor, ...], test: bool = False, env: Optional[ObstacleAvoidanceYOPO] = None):
-        p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image = obs
+        rotmat_b2w = obs[1]
         N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
-        
-        score, coef_xyz = self.inference(p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image)
-
+        score, coef_xyz = self.inference(obs)
         best_idx = score.argmin(dim=-1) # [N, ]
         if not test:
             random_idx = torch.randint(0, HW, (N, ), device=self.device)
@@ -277,23 +274,28 @@ class YOPO:
 
         p_next_b, v_next_b, a_next_b = get_traj_point(self.t_next, coef_best) # [N, 3]
         a_next_w = mvp(rotmat_b2w, a_next_b) + self.G
-        return a_next_w, {"coef_best": coef_best}
+        policy_info = {
+            "traj_coef": coef_xyz,
+            "best_coef": coef_best,
+            "best_idx": best_idx
+        }
+        return a_next_w, policy_info
 
     @timeit
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: Tuple[Tensor, ...], on_step_cb=None):
         N, HW = env.n_envs, self.n_pitch * self.n_yaw
         
-        p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image = obs
+        p_w, rotmat_b2w, _, _, _, _ = obs
         
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
-            score, coef_xyz = self.inference(p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image) # [N, HW, 6, 3]
+            score, coef_xyz = self.inference(obs) # [N, HW, 6, 3]
             
             T = self.n_points - 1
             traj_loss = torch.zeros(N, HW, T, device=self.device)
             survive = torch.ones(N, HW, T, device=self.device, dtype=torch.bool)
 
-            p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.t_vec[1:], coef_xyz) # [N, HW, T, 3]
+            p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T, 3]
             p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T, 3)) + p_w.unsqueeze(1)
             v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T, 3))
             a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T, 3)) + self.G.unsqueeze(1)
@@ -314,25 +316,32 @@ class YOPO:
             grads = [p.grad for p in self.net.parameters() if p.grad is not None]
             grad_norm = torch.nn.utils.get_total_norm(grads)
         
-        # with torch.no_grad():
-        action, policy_info = self.act(obs, env=env)
-        # render the trajectory
-        if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
-            n_envs = env.renderer.n_envs
-            lines_tensor = torch.zeros(n_envs, self.n_points-1, 2, 3, device=self.device, dtype=torch.float32)
-            lines_field = ti.Vector.field(3, dtype=ti.f32, shape=(n_envs * (self.n_points-1) * 2))
-            for i, t in enumerate(self.t_vec):
-                p_t_b, v_t_b, a_t_b = get_traj_point(t, policy_info["coef_best"]) # [N, 3]
-                p_t_w = torch.matmul(rotmat_b2w, p_t_b.unsqueeze(-1)).squeeze(-1) + p_w
-                p_t_w = p_t_w[:n_envs].to(torch.float32) + env.renderer.env_origin
-                if i != self.n_points - 1:
-                    lines_tensor[:, i, 0] = p_t_w
-                if i != 0:
-                    lines_tensor[:, i-1, 1] = p_t_w
-            lines_field.from_torch(torch2ti(lines_tensor.flatten(end_dim=-2)))                
-            env.renderer.gui_scene.lines(lines_field, color=(1., 1., 1.), width=3.)
-        
         with torch.no_grad():
+            action, policy_info = self.act(obs, env=env)
+            # render the trajectory
+            if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
+                renderer_n_envs = env.renderer.n_envs
+                if not hasattr(self, "lines_tensor"):
+                    self.lines_tensor = torch.empty(renderer_n_envs, self.n_pitch*self.n_yaw, self.n_points-1, 2, 3, device=self.device) # [N, HW, T-1, 2, 3]
+                    self.lines_field = ti.Vector.field(3, dtype=ti.f32, shape=(renderer_n_envs * (self.n_pitch*self.n_yaw) * (self.n_points-1) * 2))
+                    self.color_tensor = torch.ones(renderer_n_envs, self.n_pitch*self.n_yaw, self.n_points-1, 2, 3, device=self.device) # [N, HW, T-1, 2, 3]
+                    self.color_field = ti.Vector.field(3, dtype=ti.f32, shape=(renderer_n_envs * (self.n_pitch*self.n_yaw) * (self.n_points-1) * 2))
+                
+                p_traj_b, _, _ = get_traj_points(self.coef_mats, policy_info["traj_coef"]) # [N, HW, T, 3]
+                p_traj_w = mvp(rotmat_b2w.unsqueeze(1).unsqueeze(1), p_traj_b) + p_w.unsqueeze(1).unsqueeze(1) # [N, HW, T, 3]
+                p_traj_render = p_traj_w[:renderer_n_envs].to(torch.float32) + env.renderer.env_origin.unsqueeze(1).unsqueeze(1) # [N, HW, T, 3]
+                self.lines_tensor[..., 0, :] = p_traj_render[..., :-1, :]
+                self.lines_tensor[..., 1, :] = p_traj_render[..., 1:, :]
+                self.lines_field.from_torch(torch2ti(self.lines_tensor.flatten(end_dim=-2)))
+                
+                best_idx = policy_info["best_idx"][:renderer_n_envs] # [N, ]
+                env_idx = torch.arange(renderer_n_envs, device=self.device)
+                self.color_tensor.fill_(1.)
+                self.color_tensor[env_idx, best_idx] = torch.tensor([0., 1., 0.], device=self.device).view(1, 1, 1, 3)
+                self.color_field.from_torch(self.color_tensor.flatten(end_dim=-2))
+                
+                env.renderer.gui_scene.lines(self.lines_field, per_vertex_color=self.color_field, width=3.)
+        
             next_obs, (loss, _), terminated, env_info = env.step(action)
             if on_step_cb is not None:
                 on_step_cb(

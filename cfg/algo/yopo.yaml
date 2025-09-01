@@ -1,7 +1,7 @@
 name: yopo
 
 tmax: 2
-n_points_per_sec: 15
+n_points_per_sec: 5
 
 r: 2.5
 
@@ -15,7 +15,7 @@ min_yaw: -45
 max_yaw: 45
 dyaw_range: 30
 
-dv_range: 2
+dv_range: 5
 da_range: 2
 
 # network architecture
@@ -23,7 +23,7 @@ feature_dim: 16
 head_hidden_dim: 128
 
 # training hparams
-lr: 0.003
+lr: 0.01
 gamma: 0.99
 n_epochs: 4
 expl_prob: 0.

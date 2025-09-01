@@ -14,7 +14,7 @@ n_agents: ${n_agents}
 obs_frame: "world" # "world" or "local"
 max_time: 30
 wait_before_truncate: 0.5
-max_target_vel: 10.
+max_target_vel: 5.
 min_target_vel: 5.
 last_action_in_obs: ~
 r_drone: 0.2
@@ -23,11 +23,11 @@ ground_plane: True
 
 loss_weights:
   pointmass:
-    vel: 1.
-    z: 0.5
-    oa: 4.
-    pos: 2.
-    collision: 20.
+    vel: 0.65
+    z: 2
+    oa: 3.8
+    pos: 0.8
+    collision: 100.
 
 reward_weights: ~
 
