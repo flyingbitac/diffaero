@@ -783,7 +783,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
         if self.enable_rendering:
             self.sphere_mesh_dict["vertices"].from_torch(torch2ti(sphere_vertices_tensor.flatten(end_dim=-2)))
         self.sphere_mesh_dict_one_env["vertices"].from_torch(torch2ti(sphere_vertices_tensor[idx].flatten(end_dim=-2)))
-
+    
     def _update_obstacles(self):
         if self.obstacle_manager.n_cubes > 0:
             self._update_cubes()
@@ -791,7 +791,7 @@ class ObstacleAvoidanceRenderer(BaseRenderer):
             self._update_spheres()
     
     def _render_obstacles(self):
-        if self.gui_states["tracking_view"]:
+        if self.gui_states["render_one_env"]:
             if self.obstacle_manager.n_cubes > 0:
                 self.gui_scene.mesh(**self.cube_mesh_dict_one_env)
             if self.obstacle_manager.n_spheres > 0:
