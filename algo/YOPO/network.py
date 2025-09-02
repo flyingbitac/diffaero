@@ -14,7 +14,7 @@ class YOPONet(nn.Module):
         W_out: int,
         feature_dim: int,
         head_hidden_dim: int,
-        out_dim: int = 10
+        out_dim: int
     ):
         super().__init__()
         self.H_out = H_out
@@ -23,10 +23,10 @@ class YOPONet(nn.Module):
         self.net = nn.Sequential(
             nn.Conv2d(1, 16, kernel_size=5, stride=1, padding=2),
             nn.ELU(),
-            # nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
-            # nn.ELU(),
-            # nn.Conv2d(32, 16, kernel_size=1, stride=1, padding=0),
-            # nn.ELU(),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.ELU(),
+            nn.Conv2d(32, 16, kernel_size=1, stride=1, padding=0),
+            nn.ELU(),
             nn.Conv2d(16, feature_dim, kernel_size=3, stride=2, padding=1),
             nn.ELU(),
             nn.AdaptiveAvgPool2d((H_out, W_out))

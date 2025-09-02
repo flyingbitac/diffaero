@@ -29,7 +29,14 @@ loss_weights:
     pos: 0.8
     collision: 100.
 
-reward_weights: ~
+reward_weights: 
+  constant: 5.
+  pointmass:
+    vel: 0.65
+    z: 2
+    oa: 3.8
+    pos: 0.8
+    collision: 100.
 
 enable_grid: False
 defaults:

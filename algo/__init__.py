@@ -10,7 +10,7 @@ from diffaero.algo.MASHAC import MASHAC
 from diffaero.algo.dreamerv3 import World_Agent
 from diffaero.algo.GRID import GRID
 from diffaero.algo.grid_wm import GRIDWM
-from diffaero.algo.YOPO import YOPO
+from diffaero.algo.YOPO import YOPO, YOPOT
 
 AGENT_ALIAS = {
     "ppo": PPO,
@@ -28,6 +28,7 @@ AGENT_ALIAS = {
     "grid": GRID,
     "grid_wm": GRIDWM,
     "yopo": YOPO,
+    "yopot": YOPOT,
 }
 
 def build_agent(cfg: DictConfig, env, device: torch.device):

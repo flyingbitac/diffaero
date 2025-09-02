@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Callable
 import os
 import sys
 sys.path.append('..')
@@ -77,7 +77,7 @@ class YOPO:
             head_hidden_dim=cfg.head_hidden_dim,
             out_dim=10
         ).to(device)
-        self.net = torch.compile(self.net)
+        # self.net = torch.compile(self.net)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
     
     def body2primitive(self, vec_b: Tensor):
@@ -126,7 +126,7 @@ class YOPO:
         rotmat_b2w = obs[1]
         N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
         score, coef_xyz = self.inference(obs)
-        best_idx = score.argmin(dim=-1) # [N, ]
+        best_idx = score.argmax(dim=-1) # [N, ]
         if not test:
             random_idx = torch.randint(0, HW, (N, ), device=self.device)
             use_random = torch.rand(N, device=self.device) < self.expl_prob
@@ -172,7 +172,7 @@ class YOPO:
 
     @timeit
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: Tuple[Tensor, ...], on_step_cb=None):
-        N, HW = env.n_envs, self.n_pitch * self.n_yaw
+        N, HW, T = env.n_envs, self.n_pitch * self.n_yaw, self.n_points - 1
         
         p_w, rotmat_b2w, _, _, _, _ = obs
         
@@ -180,21 +180,17 @@ class YOPO:
             # traverse the trajectory and cumulate the loss
             score, coef_xyz = self.inference(obs) # [N, HW, 6, 3]
             
-            T = self.n_points - 1
-            traj_loss = torch.zeros(N, HW, T, device=self.device)
-            survive = torch.ones(N, HW, T, device=self.device, dtype=torch.bool)
-            
             p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T, 3]
             p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T, 3)) + p_w.unsqueeze(1)
             v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T, 3))
             a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T, 3)) + self.G.unsqueeze(1)
-            traj_loss, _, dead, _ = env.loss_fn(p_traj_w, v_traj_w, a_traj_w)
-            traj_loss, dead = traj_loss.reshape(N, HW, T), dead.reshape(N, HW, T).float().cumsum(dim=2)
+            _, traj_reward, _, dead, _ = env.loss_and_reward(p_traj_w, v_traj_w, a_traj_w)
+            traj_reward, dead = traj_reward.reshape(N, HW, T), dead.reshape(N, HW, T).float().cumsum(dim=2)
             survive = (dead == 0.).float()
-            traj_loss = torch.sum(traj_loss * survive, dim=-1) / survive.sum(dim=-1).clamp(min=1.)
-            score_loss = F.mse_loss(score, traj_loss.detach())
+            traj_reward_avg = torch.sum(traj_reward * survive, dim=-1) / survive.sum(dim=-1).clamp(min=1.)
+            score_loss = F.mse_loss(score, traj_reward_avg.detach())
             
-            total_loss = traj_loss.mean() + 0.01 * score_loss
+            total_loss = -traj_reward_avg.mean() + 0.01 * score_loss
             self.optimizer.zero_grad()
             total_loss.backward()
             self.optimizer.step()
@@ -208,7 +204,7 @@ class YOPO:
         with torch.no_grad():
             action, policy_info = self.act(obs, env=env)
             self.render_trajectories(env, policy_info, p_w, rotmat_b2w)
-            next_obs, (loss, _), terminated, env_info = env.step(action)
+            next_obs, (_, reward), terminated, env_info = env.step(action)
             if on_step_cb is not None:
                 on_step_cb(
                     obs=obs,
@@ -217,7 +213,7 @@ class YOPO:
                     env_info=env_info)
         
         losses = {
-            "traj_loss": traj_loss.mean().item(),
+            "traj_reward": traj_reward.mean().item(),
             "score_loss": score_loss.item(),
             "total_loss": total_loss.item()}
         grad_norms = {"actor_grad_norm": grad_norm}

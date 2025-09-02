@@ -40,7 +40,8 @@ def post_process(
 @torch.jit.script
 def get_coef_matrix(t: Tensor) -> Tensor:
     device = t.device
-    t = float(t.item()) # type: ignore # I hate this too
+    # I hate this too
+    t = float(t.item()) # type: ignore
     coef_mat = torch.tensor([
         [1., 0.,   0.,     0.,      0.,      0.],
         [0., 1.,   0.,     0.,      0.,      0.],

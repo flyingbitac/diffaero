@@ -72,3 +72,14 @@ def mlp(
     if output_act is not None:
         mlp.append(output_act)
     return nn.Sequential(*mlp)
+
+def clip_grad_norm(
+    m: nn.Module,
+    max_grad_norm: Optional[float] = None
+) -> float:
+    if max_grad_norm is not None:
+        grad_norm = torch.nn.utils.clip_grad_norm_(m.parameters(), max_norm=max_grad_norm)
+    else:
+        grads = [p.grad for p in m.parameters() if p.grad is not None]
+        grad_norm = torch.nn.utils.get_total_norm(grads)
+    return grad_norm.item()
