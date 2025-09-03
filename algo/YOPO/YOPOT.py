@@ -107,7 +107,7 @@ class YOPOT(YOPO):
         # Logger.debug(survive[0, 0], terminal_value[0, 0].item())
         assert terminal_value.requires_grad and states.requires_grad
         traj_value = torch.sum(traj_reward_discounted, dim=-1) + terminal_value
-        traj_value = traj_value / T_1
+        traj_value = traj_value / survive.float().sum(dim=-1).clamp(min=1.)
         score_loss = F.mse_loss(score, traj_value.detach())
         total_loss = -traj_value.mean() + 0.01 * score_loss
         self.optimizer.zero_grad()

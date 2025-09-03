@@ -3,7 +3,8 @@ name: yopo
 tmax: 2
 n_points_per_sec: 5
 
-r: 2.5
+r_max: 5
+r_min: 2
 
 n_pitch: 3
 min_pitch: -30

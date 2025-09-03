@@ -5,7 +5,7 @@ sys.path.append('..')
 import torch
 from torch import Tensor
 
-from diffaero.utils.math import mvp
+from diffaero.utils.math import mvp, tanh_unsquash
 from diffaero.utils.logger import Logger
 
 @torch.jit.script
@@ -24,13 +24,14 @@ def rpy2xyz(rpy: Tensor) -> Tensor:
 def post_process(
     output: Tensor, # [N, HW, 10]
     rpy_base: Tensor, # [n_pitch*n_yaw, 3]
-    drpy_range: Tensor, # [3,]
+    drpy_min: Tensor, # [3, ]
+    drpy_max: Tensor, # [3, ]
     dv_range: float,
     da_range: float,
     rotmat_p2b: Tensor, # [n_pitch*n_yaw, 3, 3]
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     d_rpy, v_p, a_p, score = output.chunk(4, dim=-1) # [N, HW, n_channels], #channels: [3, 3, 3, 1]
-    rpy = rpy_base.unsqueeze(0) + torch.tanh(d_rpy) * drpy_range.expand_as(d_rpy) # [N, HW, 3]
+    rpy = rpy_base.unsqueeze(0) + tanh_unsquash(d_rpy, drpy_min, drpy_max) # [N, HW, 3]
     p_b = rpy2xyz(rpy) # [N, HW, 3]
     v_p, a_p = dv_range * torch.tanh(v_p), da_range * torch.tanh(a_p) # [N, HW, 3]
     v_b = mvp(rotmat_p2b.unsqueeze(0), v_p)

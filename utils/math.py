@@ -228,3 +228,8 @@ def mvp(mat: Tensor, vec: Tensor) -> Tensor:
     if mat.dim() < 2 or vec.dim() < 1:
         raise ValueError("Input dimensions are not compatible for matrix-vector multiplication.")
     return torch.matmul(mat, vec.unsqueeze(-1)).squeeze(-1)
+
+@torch.jit.script
+def tanh_unsquash(x: Tensor, min: Tensor, max: Tensor):
+    min, max = min.expand_as(x), max.expand_as(x)
+    return min + (x.tanh().add(1.).mul(0.5) * (max - min))

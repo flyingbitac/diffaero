@@ -43,11 +43,10 @@ class YOPO:
         self.max_yaw: float = cfg.max_yaw * torch.pi / 180.
         self.n_pitch: int = cfg.n_pitch # H
         self.n_yaw: int = cfg.n_yaw     # W
-        self.r_base: float = cfg.r
-        self.dr_range: float = self.r_base
         self.dpitch_range = (self.max_pitch - self.min_pitch) / (2 * (self.n_pitch - 1))
         self.dyaw_range = (self.max_yaw - self.min_yaw) / (2 * (self.n_yaw - 1))
-        self.drpy_range = torch.tensor([self.dr_range, self.dpitch_range, self.dyaw_range], device=device)
+        self.drpy_min = torch.tensor([cfg.r_min, self.dpitch_range, self.dyaw_range], device=device)
+        self.drpy_max = torch.tensor([cfg.r_max, self.dpitch_range, self.dyaw_range], device=device)
         self.dv_range: float = cfg.dv_range
         self.da_range: float = cfg.da_range
         self.G = torch.tensor([[0., 0., 9.81]], device=device)
@@ -63,7 +62,7 @@ class YOPO:
         pitches, yaws = torch.meshgrid(pitches, yaws, indexing="ij")
         rolls = torch.zeros_like(pitches)
         self.euler_angles = torch.stack([yaws, pitches, rolls], dim=-1).reshape(-1, 3) # [n_pitch*n_yaw, 3]
-        self.rpy_base = torch.stack([torch.full_like(yaws, self.r_base), pitches, yaws], dim=-1).reshape(-1, 3) # [n_pitch*n_yaw, 3]
+        self.rpy_base = torch.stack([torch.zeros_like(pitches), pitches, yaws], dim=-1).reshape(-1, 3) # [n_pitch*n_yaw, 3]
 
         # convert coordinates from primitive frame to body frame
         self.rotmat_p2b = T.euler_angles_to_matrix(self.euler_angles, convention="ZYX")
@@ -106,7 +105,8 @@ class YOPO:
         p_end_b, v_end_b, a_end_b, score = post_process( # [N, HW, (3, 3, 3)], [N, HW]
             output=net_output,
             rpy_base=self.rpy_base,
-            drpy_range=self.drpy_range,
+            drpy_min=self.drpy_min,
+            drpy_max=self.drpy_max,
             dv_range=self.dv_range,
             da_range=self.da_range,
             rotmat_p2b=self.rotmat_p2b
