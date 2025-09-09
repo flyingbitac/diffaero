@@ -67,7 +67,7 @@ class PositionControl(BaseEnv):
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        loss, reward, loss_components = self.reward_fn(action)
+        loss, reward, loss_components = self.loss_and_reward(action)
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
@@ -110,7 +110,7 @@ class PositionControl(BaseEnv):
         return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
     
     @timeit
-    def reward_fn(self, action):
+    def loss_and_reward(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
         if self.dynamic_type == "pointmass":
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
