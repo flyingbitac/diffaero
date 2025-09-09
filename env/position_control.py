@@ -1,8 +1,9 @@
 from typing import Tuple, Dict, Union
-import math
+import os
 
 from omegaconf import DictConfig
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from pytorch3d import transforms as T
@@ -66,7 +67,7 @@ class PositionControl(BaseEnv):
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        loss, reward, loss_components = self.loss_and_reward(action)
+        loss, reward, loss_components = self.reward_fn(action)
         extra = {
             "truncated": truncated,
             "l": self.progress.clone(),
@@ -109,7 +110,7 @@ class PositionControl(BaseEnv):
         return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
     
     @timeit
-    def loss_and_reward(self, action):
+    def reward_fn(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
         if self.dynamic_type == "pointmass":
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
@@ -195,10 +196,60 @@ class PositionControl(BaseEnv):
         self.last_action[env_idx] = 0.
         self.max_vel[env_idx] = torch.rand(
             n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
+    
     def terminated(self) -> Tensor:
         p_range = self.L.value.unsqueeze(-1)
         out_of_bound = torch.any(self.p < -p_range, dim=-1) | torch.any(self.p > p_range, dim=-1)
         return out_of_bound
+
+    def export_obs_fn(self, path):
+        class ObsFn(nn.Module):
+            def __init__(self, obs_in_local_frame: bool):
+                super().__init__()
+                # this boolean becomes a constant attribute in the scripted module
+                self.obs_in_local_frame = obs_in_local_frame
+
+            def forward(
+                self,
+                target_vel_w: Tensor,
+                v_w: Tensor,
+                quat_xyzw: Tensor,
+                Rz: Tensor,
+                R: Tensor
+            ) -> Tensor:
+                if self.obs_in_local_frame:
+                    v_l = mvp(Rz.permute(0, 2, 1), v_w)
+                    target_vel_l = mvp(Rz.permute(0, 2, 1), target_vel_w)
+                    uz = R[:, :, 2]
+                    return torch.cat([target_vel_l, uz, v_l], dim=-1)
+                else:
+                    return torch.cat([target_vel_w, quat_xyzw, v_w], dim=-1)
+
+        example_input = {
+            "target_vel_w": torch.randn(1, 3),
+            "v_w": torch.randn(1, 3),
+            "quat_xyzw": torch.randn(1, 4),
+            "Rz": torch.randn(1, 3, 3),
+            "R": torch.randn(1, 3, 3),
+        }
+
+        model = ObsFn(obs_in_local_frame=self.obs_frame=="local")
+        torch.onnx.export(
+            model=model,
+            args=(
+                example_input["target_vel_w"],
+                example_input["v_w"],
+                example_input["quat_xyzw"],
+                example_input["Rz"],
+                example_input["R"],
+            ),
+            input_names=("target_vel_w", "v_w", "quat_xyzw", "Rz", "R"),
+            f=os.path.join(path, "obs_fn.onnx"),
+            output_names=("obs",)
+        )
+        # import onnxruntime as ort
+        # ort_session = ort.InferenceSession(os.path.join(path, "obs_fn.onnx"))
+        # print({input.name: input.shape for input in ort_session.get_inputs()})
 
 
 class Sim2RealPositionControl(PositionControl):

@@ -173,6 +173,8 @@ class TrainRunner:
                 export_cfg=self.cfg.export,
                 verbose=True
             )
+            if hasattr(self.env.env, "export_obs_fn"):
+                self.env.export_obs_fn(path=ckpt_path)
         if self.env.renderer is not None:
             self.env.renderer.close()
 
@@ -224,7 +226,7 @@ class TestRunner:
             t1 = self.logger.pbar._time()
             self.env.detach()
             action, policy_info = self.agent.act(obs, test=True)
-            if self.cfg.algo.name != "yopo":
+            if self.cfg.algo.name != "yopo" and self.cfg.algo.name != "yopot":
                 action = self.env.rescale_action(action)
             obs, loss, terminated, env_info = self.env.step(action)
             if self.cfg.algo.name != 'world' and hasattr(self.agent, "reset"):
@@ -287,6 +289,8 @@ class TestRunner:
                 export_cfg=self.cfg.export,
                 verbose=True
             )
+            if hasattr(self.env.env, "export_obs_fn"):
+                self.env.export_obs_fn(path=ckpt_path)
         if self.env.renderer is not None:
             self.env.renderer.close()
         

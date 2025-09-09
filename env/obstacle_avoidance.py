@@ -1,7 +1,9 @@
 from typing import Tuple, Dict, Union, List
+import os
 
 from omegaconf import DictConfig
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from tensordict import TensorDict
@@ -11,6 +13,7 @@ from diffaero.utils.sensor import build_sensor
 from diffaero.utils.render import ObstacleAvoidanceRenderer
 from diffaero.utils.assets import ObstacleManager
 from diffaero.utils.runner import timeit
+from diffaero.utils.math import mvp
 from diffaero.utils.logger import Logger
 
 class ObstacleAvoidance(BaseEnv):
@@ -340,3 +343,49 @@ class ObstacleAvoidance(BaseEnv):
         range = torch.stack([x_range, y_range, z_range], dim=-1)
         out_of_bound = torch.any(self.p < -range, dim=-1) | torch.any(self.p > range, dim=-1)
         return (self.progress >= self.max_steps) | out_of_bound
+
+    def export_obs_fn(self, path):
+        class ObsFn(nn.Module):
+            def __init__(self, obs_in_local_frame: bool):
+                super().__init__()
+                # this boolean becomes a constant attribute in the scripted module
+                self.obs_in_local_frame = obs_in_local_frame
+
+            def forward(
+                self,
+                target_vel_w: Tensor,
+                v_w: Tensor,
+                quat_xyzw: Tensor,
+                Rz: Tensor,
+                R: Tensor
+            ) -> Tensor:
+                if self.obs_in_local_frame:
+                    v_l = mvp(Rz.permute(0, 2, 1), v_w)
+                    target_vel_l = mvp(Rz.permute(0, 2, 1), target_vel_w)
+                    uz = R[:, :, 2]
+                    return torch.cat([target_vel_l, uz, v_l], dim=-1)
+                else:
+                    return torch.cat([target_vel_w, quat_xyzw, v_w], dim=-1)
+
+        example_input = {
+            "target_vel_w": torch.randn(1, 3),
+            "v_w": torch.randn(1, 3),
+            "quat_xyzw": torch.randn(1, 4),
+            "Rz": torch.randn(1, 3, 3),
+            "R": torch.randn(1, 3, 3),
+        }
+
+        model = ObsFn(obs_in_local_frame=self.obs_frame=="local")
+        torch.onnx.export(
+            model=model,
+            args=(
+                example_input["target_vel_w"],
+                example_input["v_w"],
+                example_input["quat_xyzw"],
+                example_input["Rz"],
+                example_input["R"],
+            ),
+            input_names=("target_vel_w", "v_w", "quat_xyzw", "Rz", "R"),
+            f=os.path.join(path, "obs_fn.onnx"),
+            output_names=("obs",)
+        )

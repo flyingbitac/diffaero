@@ -209,7 +209,7 @@ class MultiAgentPositionControl(BaseEnvMultiAgent):
     @timeit
     def loss_and_reward(self, action):
         # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
-        if isinstance(self.dynamics, PointMassModelBase):
+        if self.dynamic_type == "pointmass":
 
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
