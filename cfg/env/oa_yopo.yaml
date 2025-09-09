@@ -21,22 +21,22 @@ r_drone: 0.2
 n_obstacles: 30
 ground_plane: True
 
-loss_weights:
-  pointmass:
-    vel: 0.65
-    z: 2
-    oa: 3.8
-    pos: 0.8
-    collision: 100.
+loss_weights: ~
 
 reward_weights: 
   constant: 5.
-  pointmass:
+  differentiable:
     vel: 0.9
     z: 2
     oa: 3.8
     pos: 0.8
     collision: 10.
+  goal:
+    vel: 0.
+    z: 0.
+    oa: 0.
+    pos: 5
+    collision: 20.
 
 enable_grid: False
 defaults:

@@ -4,8 +4,10 @@ import sys
 sys.path.append('..')
 
 import torch
+import torch.nn as nn
 from torch import Tensor
 import torch.nn.functional as F
+from tensordict import TensorDict
 from pytorch3d import transforms as T
 from omegaconf import DictConfig
 import taichi as ti
@@ -20,17 +22,21 @@ from .functions import (
 )
 from .network import YOPONet
 from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
-from diffaero.utils.math import mvp, rk4
+from diffaero.dynamics.pointmass import point_mass_quat
+from diffaero.utils.math import mvp, rk4, quat_rotate
 from diffaero.utils.render import torch2ti
 from diffaero.utils.runner import timeit
 from diffaero.utils.logger import Logger
 
-class YOPO:
+class YOPO(nn.Module):
     def __init__(
         self,
         cfg: DictConfig,
+        img_h: int,
+        img_w: int,
         device: torch.device
     ):
+        super().__init__()
         self.tmax: Tensor = torch.tensor(cfg.tmax, device=device)
         self.inv_coef_mat_tmax: Tensor = torch.inverse(get_coef_matrix(self.tmax)) # [6, 6]
         self.n_points_per_sec: int = cfg.n_points_per_sec
@@ -55,6 +61,8 @@ class YOPO:
         self.grad_norm: Optional[float] = cfg.grad_norm
         self.t_next = torch.tensor(cfg.t_next, device=device) if cfg.t_next is not None else self.t_vec[1]
         self.device = device
+        self.img_h = img_h
+        self.img_w = img_w
         
         pitches = torch.linspace(self.min_pitch, self.max_pitch, self.n_pitch, device=device)
         yaws = torch.linspace(self.max_yaw, self.min_yaw, self.n_yaw, device=device)
@@ -86,14 +94,10 @@ class YOPO:
         return mvp(self.rotmat_p2b, vec_p)
 
     @timeit
-    def inference(self, obs):
-        # type: (Tuple[Tensor, ...]) -> Tuple[Tensor, Tensor]
-        p_w, rotmat_b2w, v_w, a_w, target_vel_w, depth_image = obs
-        rotmat_w2b = rotmat_b2w.transpose(-2, -1)
-        target_vel_b = mvp(rotmat_w2b, target_vel_w)
-        p_curr_b = torch.zeros_like(p_w)
-        v_curr_b = mvp(rotmat_w2b, v_w)
-        a_curr_b = mvp(rotmat_w2b, a_w)
+    def inference(self, obs: TensorDict) -> Tuple[Tensor, Tensor]:
+        depth_image = obs["perception"]
+        target_vel_b, v_curr_b, a_curr_b = obs["state"][..., :3], obs["state"][..., 3:6], obs["state"][..., 6:9]
+        p_curr_b = torch.zeros_like(v_curr_b)
         
         rotmat_b2p = self.rotmat_b2p.unsqueeze(0)
         target_vel_p = mvp(rotmat_b2p, target_vel_b.unsqueeze(1)) # [N, HW, 3]
@@ -122,9 +126,12 @@ class YOPO:
         )
         return score, coef_xyz
     
-    def act(self, obs: Tuple[Tensor, ...], test: bool = False, env: Optional[ObstacleAvoidanceYOPO] = None):
-        rotmat_b2w = obs[1]
-        N, HW = rotmat_b2w.size(0), self.n_pitch * self.n_yaw
+    def act(self, obs: TensorDict, test: bool = False):
+        self.eval()
+        quat_xyzw = obs["state"][..., 9:13]
+        if test:
+            obs["state"][..., 6:9] = 0.
+        N, HW = quat_xyzw.size(0), self.n_pitch * self.n_yaw
         score, coef_xyz = self.inference(obs)
         best_idx = score.argmax(dim=-1) # [N, ]
         if not test:
@@ -137,7 +144,7 @@ class YOPO:
         coef_best = torch.gather(coef_xyz, 1, patch_index).squeeze(1) # [N, 6, 3]
 
         p_next_b, v_next_b, a_next_b = get_traj_point(self.t_next, coef_best) # [N, 3]
-        a_next_w = mvp(rotmat_b2w, a_next_b) + self.G
+        a_next_w = quat_rotate(quat_xyzw, a_next_b) + self.G
         policy_info = {
             "traj_coef": coef_xyz,
             "best_coef": coef_best,
@@ -171,11 +178,11 @@ class YOPO:
             env.renderer.gui_scene.lines(self.lines_field, per_vertex_color=self.color_field, width=3.)
 
     @timeit
-    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: Tuple[Tensor, ...], on_step_cb=None):
+    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: TensorDict, on_step_cb=None):
         N, HW, T = env.n_envs, self.n_pitch * self.n_yaw, self.n_points - 1
+        p_w, rotmat_b2w = env.p, env.dynamics.R
         
-        p_w, rotmat_b2w, _, _, _, _ = obs
-        
+        self.train()
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
             score, coef_xyz = self.inference(obs) # [N, HW, 6, 3]
@@ -184,7 +191,7 @@ class YOPO:
             p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T, 3)) + p_w.unsqueeze(1)
             v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T, 3))
             a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T, 3)) + self.G.unsqueeze(1)
-            _, traj_reward, _, dead, _ = env.loss_and_reward(p_traj_w, v_traj_w, a_traj_w)
+            _, traj_reward, _, dead, _ = env.reward_fn(p_traj_w, v_traj_w, a_traj_w)
             traj_reward, dead = traj_reward.reshape(N, HW, T), dead.reshape(N, HW, T).float().cumsum(dim=2)
             survive = (dead == 0.).float()
             traj_reward_avg = torch.sum(traj_reward * survive, dim=-1) / survive.sum(dim=-1).clamp(min=1.)
@@ -202,9 +209,9 @@ class YOPO:
             grad_norm = torch.nn.utils.get_total_norm(grads)
         
         with torch.no_grad():
-            action, policy_info = self.act(obs, env=env)
+            action, policy_info = self.act(obs)
             self.render_trajectories(env, policy_info, p_w, rotmat_b2w)
-            next_obs, (_, reward), terminated, env_info = env.step(action)
+            next_obs, (_, _), terminated, env_info = env.step(action)
             if on_step_cb is not None:
                 on_step_cb(
                     obs=obs,
@@ -230,7 +237,53 @@ class YOPO:
     
     @staticmethod
     def build(cfg: DictConfig, env: ObstacleAvoidanceYOPO, device: torch.device):
-        return YOPO(cfg, device)
+        return YOPO(
+            cfg=cfg,
+            img_h=env.sensor.H,
+            img_w=env.sensor.W,
+            device=device
+        )
+    
+    def forward(self, state: Tensor, perception: Tensor, orientation: Tensor):
+        target_vel_b, v_curr_b, a_curr_b, quat_xyzw = state[:, :3], state[:, 3:6], state[:, 6:9], state[:, 9:13]
+        
+        rotmat_b2p = self.rotmat_b2p.unsqueeze(0)
+        target_vel_p = mvp(rotmat_b2p, target_vel_b.unsqueeze(1)) # [1, HW, 3]
+        p_curr_b = torch.zeros_like(v_curr_b)
+        v_curr_p = mvp(rotmat_b2p, v_curr_b.unsqueeze(1)) # [1, HW, 3]
+        a_curr_p = mvp(rotmat_b2p, a_curr_b.unsqueeze(1)) # [1, HW, 3]
+        state_input = torch.cat([target_vel_p, v_curr_p, a_curr_p], dim=-1) # [1, HW, 9]
+
+        net_output: Tensor = self.net(perception.unsqueeze(1), state_input) # [1, HW, 10]
+        p_end_b, v_end_b, a_end_b, score = post_process( # [1, HW, (3, 3, 3)], [N, HW]
+            output=net_output,
+            rpy_base=self.rpy_base,
+            drpy_min=self.drpy_min,
+            drpy_max=self.drpy_max,
+            dv_range=self.dv_range,
+            da_range=self.da_range,
+            rotmat_p2b=self.rotmat_p2b
+        )
+        coef_xyz = solve_coef( # [1, HW, 6, 3]
+            self.inv_coef_mat_tmax[None, None, ...], # [1, 1, 6, 6]
+            p_curr_b.unsqueeze(1).expand_as(p_end_b), # [1, HW, 3]
+            v_curr_b.unsqueeze(1).expand_as(v_end_b), # [1, HW, 3]
+            a_curr_b.unsqueeze(1).expand_as(a_end_b), # [1, HW, 3]
+            p_end_b, # [1, HW, 3]
+            v_end_b, # [1, HW, 3]
+            a_end_b  # [1, HW, 3]
+        )
+        
+        best_idx = score.argmax(dim=-1) # [1, ]
+        best_idx = best_idx.reshape(-1, 1, 1, 1).expand(-1, -1, 6, 3)
+        coef_best = torch.gather(coef_xyz, 1, best_idx).squeeze(1) # [1, 6, 3]
+
+        p_next_b, v_next_b, a_next_b = get_traj_point(self.t_next, coef_best) # [1, 3]
+        a_next_w = quat_rotate(quat_xyzw, a_next_b) + self.G
+        
+        quat_xyzw = point_mass_quat(a_next_w, orientation)
+        acc_norm = a_next_w.norm(p=2, dim=-1)
+        return a_next_w, quat_xyzw, acc_norm
 
     def export(
         self,
@@ -238,4 +291,19 @@ class YOPO:
         export_cfg: DictConfig,
         verbose: bool = False,
     ):
-        pass
+        example_input = {
+            "state": torch.randn(1, 13, device=self.device),
+            "perception": torch.randn(1, self.img_h, self.img_w, device=self.device),
+            "orientation": torch.randn(1, 3, device=self.device)
+        }
+        if export_cfg.onnx:
+            export_path = os.path.join(path, "exported_actor.onnx")
+            names, test_inputs = zip(*example_input.items())
+            torch.onnx.export(
+                model=self,
+                args=test_inputs,
+                f=export_path,
+                input_names=names,
+                output_names=["action", "quat_xyzw_cmd", "acc_norm"]
+            )
+            Logger.info(f"The checkpoint is compiled and exported to {export_path}.")

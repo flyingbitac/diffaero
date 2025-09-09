@@ -1,7 +1,9 @@
 from typing import Tuple, Dict, Union, List
+import os
 
 from omegaconf import DictConfig
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from tensordict import TensorDict
@@ -9,15 +11,25 @@ from tensordict import TensorDict
 from diffaero.env.obstacle_avoidance import ObstacleAvoidance
 from diffaero.dynamics.pointmass import point_mass_quat
 from diffaero.utils.runner import timeit
+from diffaero.utils.math import mvp
 from diffaero.utils.logger import Logger
 
 class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     def __init__(self, cfg: DictConfig, device: torch.device):
         super().__init__(cfg, device)
+        self.obs_dim = (13, (self.sensor.H, self.sensor.W))
         self.state_dim = 13 + self.n_obstacles * 3
     
     def get_observations(self):
-        return self.p, self.dynamics.R, self.v, self.a, self.target_vel, self.sensor_tensor.unsqueeze(1)
+        obs = torch.cat([
+            self.world2body(self.target_vel),
+            self.world2body(self.v),
+            self.world2body(self.a),
+            self.q
+        ], dim=-1)
+        obs = TensorDict({
+            "state": obs, "perception": self.sensor_tensor.clone().unsqueeze(1)}, batch_size=self.n_envs)
+        return obs
     
     @timeit
     def get_state(
@@ -39,11 +51,11 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
     
     @timeit
     def step(self, action):
-        # type: (Tensor) -> Tuple[Tuple[Tensor, ...], Tuple[None, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
+        # type: (Tensor) -> Tuple[TensorDict, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Tensor]]]
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
-        loss, reward, loss_components, _, nearest_points2obstacles = self.loss_and_reward(self.p.unsqueeze(1), self.v.unsqueeze(1), self.a.unsqueeze(1))
+        goal_reward, differentiable_reward, loss_components, _, nearest_points2obstacles = self.reward_fn(self.p.unsqueeze(1), self.v.unsqueeze(1), self.a.unsqueeze(1))
         self.obstacle_nearest_points.copy_(nearest_points2obstacles.squeeze(1)) # [n_envs, n_obstacles, 3]
         self.update_sensor_data()
         extra = {
@@ -65,10 +77,10 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.get_observations(), (None, reward), terminated, extra
+        return self.get_observations(), (goal_reward, differentiable_reward), terminated, extra
     
     @timeit
-    def loss_and_reward(
+    def reward_fn(
         self,
         _p: Tensor, # [n_envs, T, 3]
         _v: Tensor, # [n_envs, T, 3]
@@ -104,20 +116,21 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none") # [n_envs, T]
         z_diff = _p[..., 2] - self.target_pos[:, None, 2] # [n_envs, T]
         z_loss = 1 - z_diff.abs().neg().exp()
-        total_loss = (
-            self.loss_weights.pointmass.vel * vel_loss +
-            self.loss_weights.pointmass.z * z_loss +
-            self.loss_weights.pointmass.oa * oa_loss +
-            self.loss_weights.pointmass.pos * pos_loss +
-            self.loss_weights.pointmass.collision * collision_loss
-        )
-        total_reward = (
+        goal_reward = (
             self.reward_weights.constant - 
-            self.reward_weights.pointmass.vel * vel_loss -
-            self.reward_weights.pointmass.z * z_loss -
-            self.reward_weights.pointmass.oa * oa_loss -
-            self.reward_weights.pointmass.pos * pos_loss -
-            self.reward_weights.pointmass.collision * collision_loss
+            self.reward_weights.goal.vel * vel_loss -
+            self.reward_weights.goal.z * z_loss -
+            self.reward_weights.goal.oa * oa_loss -
+            self.reward_weights.goal.pos * pos_loss -
+            self.reward_weights.goal.collision * collision_loss
+        ).detach()
+        differentiable_reward = (
+            self.reward_weights.constant - 
+            self.reward_weights.differentiable.vel * vel_loss -
+            self.reward_weights.differentiable.z * z_loss -
+            self.reward_weights.differentiable.oa * oa_loss -
+            self.reward_weights.differentiable.pos * pos_loss -
+            self.reward_weights.differentiable.collision * collision_loss
         )
         loss_components = {
             "vel_loss": vel_loss.mean().item(),
@@ -126,7 +139,50 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             "arrive_loss": arrive_loss.mean().item(),
             "collision_loss": collision_loss.mean().item(),
             "oa_loss": oa_loss.mean().item(),
-            "total_loss": total_loss.mean().item(),
-            "total_reward": total_reward.mean().item(),
-            }
-        return total_loss, total_reward, loss_components, collision, nearest_points2obstacles
+            "goal_reward": goal_reward.mean().item(),
+            "total_loss": -differentiable_reward.mean().item(),
+            "differentiable_reward": differentiable_reward.mean().item(),
+            "goal_reward": goal_reward.mean().item(),
+        }
+        return goal_reward, differentiable_reward, loss_components, collision, nearest_points2obstacles
+
+    def export_obs_fn(self, path):
+        class ObsFn(nn.Module):
+            def __init__(self):
+                super().__init__()
+            
+            def forward(
+                self,
+                target_vel_w: Tensor,
+                v_w: Tensor,
+                quat_xyzw: Tensor,
+                Rz: Tensor,
+                R: Tensor
+            ) -> Tensor:
+                rotmat_w2b = R.permute(0, 2, 1)
+                target_vel_b = mvp(rotmat_w2b, target_vel_w)
+                v_b = mvp(rotmat_w2b, v_w)
+                a_b = torch.zeros_like(v_b)
+                return torch.cat([target_vel_b, v_b, a_b, quat_xyzw], dim=-1)
+
+        example_input = {
+            "target_vel_w": torch.randn(1, 3),
+            "v_w": torch.randn(1, 3),
+            "quat_xyzw": torch.randn(1, 4),
+            "Rz": torch.randn(1, 3, 3),
+            "R": torch.randn(1, 3, 3),
+        }
+
+        torch.onnx.export(
+            model=ObsFn(),
+            args=(
+                example_input["target_vel_w"],
+                example_input["v_w"],
+                example_input["quat_xyzw"],
+                example_input["Rz"],
+                example_input["R"],
+            ),
+            input_names=("target_vel_w", "v_w", "quat_xyzw", "Rz", "R"),
+            f=os.path.join(path, "obs_fn.onnx"),
+            output_names=("obs",)
+        )
