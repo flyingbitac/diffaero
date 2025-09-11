@@ -7,7 +7,7 @@ from torch import Tensor
 import torch.nn as nn
 from tensordict import TensorDict
 
-from diffaero.network import build_network
+from .networks import build_network
 
 class AgentBase(nn.Module):
     def __init__(

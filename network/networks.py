@@ -5,6 +5,8 @@ from omegaconf import DictConfig
 import torch
 from torch import Tensor
 import torch.nn as nn
+from torchvision.models.resnet import conv3x3, conv1x1
+
 from diffaero.utils.nn import mlp
 
 def obs_action_concat(state: Union[Tensor, Tuple[Tensor, Tensor]], action: Optional[Tensor] = None) -> Tensor:
@@ -24,6 +26,7 @@ class BaseNetwork(nn.Module):
         self.input_dim = input_dim
         self.rnn_n_layers = rnn_n_layers
         self.rnn_hidden_dim = rnn_hidden_dim
+        self.hidden_state: Optional[Tensor] = None
     
     def reset(self, indices: Tensor) -> None:
         pass
@@ -60,30 +63,56 @@ class MLP(BaseNetwork):
     ) -> Tensor:
         return self.forward(obs=obs, action=action)
 
+class BasicBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        stride: int = 1,
+    ) -> None:
+        super().__init__()
+        self.conv1 = conv3x3(in_channels, out_channels, stride)
+        self.act = nn.ELU()
+        self.conv2 = conv3x3(out_channels, out_channels)
+        if stride > 1 or in_channels != out_channels:
+            self.skip_conn = conv1x1(in_channels, out_channels, stride)
+        else:
+            self.skip_conn = nn.Identity()
+
+    def forward(self, x: Tensor) -> Tensor:
+        identity = x
+        out = self.conv1(x)
+        out = self.act(out)
+        out = self.conv2(out)
+        identity = self.skip_conn(x)
+        out += identity
+        out = self.act(out)
+        return out
 
 class CNNBackbone(nn.Sequential):
-    def __init__(self, input_dim: Tuple[int, Tuple[int, int]]):
+    def __init__(self, cnn_layers: List[Tuple[int, int, int]], input_dim: Tuple[int, Tuple[int, int]]):
         D, (H, W) = input_dim
-        layers = [
-            nn.Conv2d(1, 8, kernel_size=5, stride=1, padding=2),
-            nn.ELU(),
-            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
-            nn.ELU(),
-            nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0),
-            nn.ELU(),
-            nn.Conv2d(8, 8, kernel_size=3, stride=2, padding=1),
-            nn.Flatten(start_dim=-3)
-        ]
-        ds_rate = 4
+        layers: List[nn.Module] = []
+        ds_rate = 1
+        assert len(cnn_layers) > 0, "CNNBackbone must have at least one layer."
+        for layer in cnn_layers:
+            in_channels, out_channels, stride = layer
+            ds_rate *= stride
+            layers.append(BasicBlock(in_channels, out_channels, stride=stride))
+        layers.append(nn.Flatten(start_dim=-3))
+        
         if any([H % ds_rate != 0, W % ds_rate != 0]):
             hpad = ceil(H / ds_rate) * ds_rate - H
             wpad = ceil(W / ds_rate) * ds_rate - W
             top, left = hpad // 2, wpad // 2
             bottom, right = hpad - top, wpad - left
             layers.insert(0, nn.ZeroPad2d((left, right, top, bottom)))
-        hout, wout = ceil(H / ds_rate), ceil(W / ds_rate)
+        
+        h_out, w_out = ceil(H / ds_rate), ceil(W / ds_rate)
         super().__init__(*layers)
-        self.out_dim = D + 8 * hout * wout
+        self.out_dim = D + out_channels * h_out * w_out
+        self.h_out = h_out
+        self.w_out = w_out
 
 class CNN(BaseNetwork):
     def __init__(
@@ -94,7 +123,7 @@ class CNN(BaseNetwork):
         output_act: Optional[nn.Module] = None
     ):
         super().__init__(input_dim)
-        self.cnn = CNNBackbone(input_dim)
+        self.cnn = CNNBackbone(cfg.cnn_layers, input_dim)
         self.head = mlp(self.cnn.out_dim, cfg.hidden_dim, output_dim, output_act=output_act)
     
     def forward(
@@ -144,7 +173,6 @@ class RNN(BaseNetwork):
             dtype=torch.float
         )
         self.head = mlp(self.rnn_hidden_dim, cfg.hidden_dim, output_dim, output_act=output_act)
-        self.hidden_state: Optional[Tensor] = None
     
     def forward(
         self,
@@ -162,9 +190,9 @@ class RNN(BaseNetwork):
             else:
                 hidden = self.hidden_state
         
-        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
+        rnn_out, hidden_out = self.gru(rnn_input.unsqueeze(1), hidden)
         if use_own_hidden:
-            self.hidden_state = hidden
+            self.hidden_state = hidden_out
         return self.head(rnn_out.squeeze(1))
     
     def forward_export(
@@ -178,10 +206,12 @@ class RNN(BaseNetwork):
         return self.head(rnn_out.squeeze(1)), hidden
 
     def reset(self, indices: Tensor):
-        self.hidden_state[:, indices, :] = 0
+        if self.hidden_state is not None:
+            self.hidden_state[:, indices, :] = 0
     
     def detach(self):
-        self.hidden_state.detach_()
+        if self.hidden_state is not None:
+            self.hidden_state.detach_()
 
 
 class RCNN(BaseNetwork):
@@ -193,7 +223,7 @@ class RCNN(BaseNetwork):
         output_act: Optional[nn.Module] = None
     ):
         super().__init__(input_dim, cfg.rnn_n_layers, cfg.rnn_hidden_dim)
-        self.cnn = CNNBackbone(input_dim)
+        self.cnn = CNNBackbone(cfg.cnn_layers, input_dim)
         self.gru = torch.nn.GRU(
             input_size=self.cnn.out_dim,
             hidden_size=self.rnn_hidden_dim,
@@ -205,7 +235,6 @@ class RCNN(BaseNetwork):
             dtype=torch.float
         )
         self.head = mlp(self.rnn_hidden_dim, cfg.hidden_dim, output_dim, output_act=output_act)
-        self.hidden_state: Tensor = None
     
     def forward(
         self,
@@ -227,9 +256,9 @@ class RCNN(BaseNetwork):
             else:
                 hidden = self.hidden_state
         
-        rnn_out, hidden = self.gru(rnn_input.unsqueeze(1), hidden)
+        rnn_out, hidden_out = self.gru(rnn_input.unsqueeze(1), hidden)
         if use_own_hidden:
-            self.hidden_state = hidden
+            self.hidden_state = hidden_out
         return self.head(rnn_out.squeeze(1))
     
     def forward_export(
@@ -246,7 +275,25 @@ class RCNN(BaseNetwork):
         return self.head(rnn_out.squeeze(1)), hidden
 
     def reset(self, indices: Tensor):
-        self.hidden_state[:, indices, :] = 0
+        if self.hidden_state is not None:
+            self.hidden_state[:, indices, :] = 0
     
     def detach(self):
-        self.hidden_state.detach_()
+        if self.hidden_state is not None:
+            self.hidden_state.detach_()
+
+
+BACKBONE_ALIAS: Dict[str, Union[type[MLP], type[CNN], type[RNN], type[RCNN]]] = {
+    "mlp": MLP,
+    "cnn": CNN,
+    "rnn": RNN,
+    "rcnn": RCNN
+}
+
+def build_network(
+    cfg: DictConfig,
+    input_dim: Union[int, Tuple[int, Tuple[int, int]]],
+    output_dim: int,
+    output_act: Optional[nn.Module] = None
+) -> Union[MLP, CNN, RNN, RCNN]:
+    return BACKBONE_ALIAS[cfg.name](cfg, input_dim, output_dim, output_act)
