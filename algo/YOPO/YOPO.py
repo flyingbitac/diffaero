@@ -1,4 +1,5 @@
 from typing import Tuple, Optional, Dict, Callable
+from abc import ABC, abstractmethod
 import os
 import sys
 sys.path.append('..')
@@ -13,7 +14,7 @@ from omegaconf import DictConfig
 import taichi as ti
 
 from .functions import (
-    post_process,
+    chunk_and_unsquash,
     get_coef_matrix,
     get_coef_matrices,
     solve_coef,
@@ -28,7 +29,7 @@ from diffaero.utils.render import torch2ti
 from diffaero.utils.runner import timeit
 from diffaero.utils.logger import Logger
 
-class YOPO(nn.Module):
+class YOPOBase(nn.Module, ABC):
     def __init__(
         self,
         cfg: DictConfig,
@@ -76,37 +77,20 @@ class YOPO(nn.Module):
         self.rotmat_p2b = T.euler_angles_to_matrix(self.euler_angles, convention="ZYX")
         # convert coordinates from body frame to primitive frame
         self.rotmat_b2p = self.rotmat_p2b.transpose(-2, -1)
-        
-        self.net = YOPONet(
-            H_out=self.n_pitch,
-            W_out=self.n_yaw,
-            feature_dim=cfg.feature_dim,
-            head_hidden_dim=cfg.head_hidden_dim,
-            out_dim=10
-        ).to(device)
-        # self.net = torch.compile(self.net)
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
     
     def body2primitive(self, vec_b: Tensor):
         return mvp(self.rotmat_b2p, vec_b)
 
     def primitive2body(self, vec_p: Tensor):
         return mvp(self.rotmat_p2b, vec_p)
-
-    @timeit
-    def inference(self, obs: TensorDict) -> Tuple[Tensor, Tensor]:
-        depth_image = obs["perception"]
-        target_vel_b, v_curr_b, a_curr_b = obs["state"][..., :3], obs["state"][..., 3:6], obs["state"][..., 6:9]
-        p_curr_b = torch.zeros_like(v_curr_b)
-        
-        rotmat_b2p = self.rotmat_b2p.unsqueeze(0)
-        target_vel_p = mvp(rotmat_b2p, target_vel_b.unsqueeze(1)) # [N, HW, 3]
-        v_curr_p = mvp(rotmat_b2p, v_curr_b.unsqueeze(1)) # [N, HW, 3]
-        a_curr_p = mvp(rotmat_b2p, a_curr_b.unsqueeze(1)) # [N, HW, 3]
-        state_input = torch.cat([target_vel_p, v_curr_p, a_curr_p], dim=-1) # [N, HW, 9]
-
-        net_output: Tensor = self.net(depth_image, state_input) # [N, HW, 10]
-        p_end_b, v_end_b, a_end_b, score = post_process( # [N, HW, (3, 3, 3)], [N, HW]
+    
+    def post_process(
+        self,
+        net_output: Tensor,
+        v_curr_b: Tensor,
+        a_curr_b: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        p_end_b, v_end_b, a_end_b, score = chunk_and_unsquash(
             output=net_output,
             rpy_base=self.rpy_base,
             drpy_min=self.drpy_min,
@@ -115,6 +99,7 @@ class YOPO(nn.Module):
             da_range=self.da_range,
             rotmat_p2b=self.rotmat_p2b
         )
+        p_curr_b = torch.zeros_like(v_curr_b)
         coef_xyz = solve_coef( # [N, HW, 6, 3]
             self.inv_coef_mat_tmax[None, None, ...], # [1, 1, 6, 6]
             p_curr_b.unsqueeze(1).expand_as(p_end_b), # [N, HW, 3]
@@ -124,15 +109,63 @@ class YOPO(nn.Module):
             v_end_b, # [N, HW, 3]
             a_end_b  # [N, HW, 3]
         )
-        return score, coef_xyz
+        return coef_xyz, score
     
-    def act(self, obs: TensorDict, test: bool = False):
+    def make_state_input(self, obs: TensorDict) -> Tensor:
+        target_vel_b, v_curr_b, a_curr_b = obs["state"][..., :3], obs["state"][..., 3:6], obs["state"][..., 6:9]
+        rotmat_b2p = self.rotmat_b2p.unsqueeze(0)
+        target_vel_p = mvp(rotmat_b2p, target_vel_b.unsqueeze(1)) # [N, HW, 3]
+        v_curr_p = mvp(rotmat_b2p, v_curr_b.unsqueeze(1)) # [N, HW, 3]
+        a_curr_p = mvp(rotmat_b2p, a_curr_b.unsqueeze(1)) # [N, HW, 3]
+        state_input = torch.cat([target_vel_p, v_curr_p, a_curr_p], dim=-1) # [N, HW, 9]
+        return state_input
+
+    @abstractmethod
+    def inference(self, obs: TensorDict) -> Tuple[Tensor, Tensor]:
+        pass
+    
+    @abstractmethod
+    def act(self, obs: TensorDict, test: bool = False) -> Tuple[Tensor, Dict[str, Tensor]]:
+        pass
+    
+    @abstractmethod
+    def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: TensorDict, on_step_cb=None):
+        pass
+
+class YOPO(YOPOBase):
+    def __init__(
+        self,
+        cfg: DictConfig,
+        img_h: int,
+        img_w: int,
+        device: torch.device
+    ):
+        super().__init__(cfg, img_h, img_w, device)
+        kwargs = {
+            "img_h": self.img_h,
+            "img_w": self.img_w,
+            "h_out": self.n_pitch,
+            "w_out": self.n_yaw,
+            "head_hidden_dim": cfg.head_hidden_dim,
+            "out_dim": 10
+        }
+        self.net = YOPONet(layers=cfg.network, **kwargs).to(device)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
+
+    @timeit
+    def inference(self, obs: TensorDict) -> Tuple[Tensor, Tensor]:
+        depth_image = obs["perception"]
+        net_output: Tensor = self.net(depth_image, self.make_state_input(obs)) # [N, HW, 10]
+        coef_xyz, score = self.post_process(net_output, v_curr_b=obs["state"][..., 3:6], a_curr_b=obs["state"][..., 6:9])
+        return coef_xyz, score
+    
+    def act(self, obs: TensorDict, test: bool = False) -> Tuple[Tensor, Dict[str, Tensor]]:
         self.eval()
         quat_xyzw = obs["state"][..., 9:13]
         if test:
             obs["state"][..., 6:9] = 0.
         N, HW = quat_xyzw.size(0), self.n_pitch * self.n_yaw
-        score, coef_xyz = self.inference(obs)
+        coef_xyz, score = self.inference(obs)
         best_idx = score.argmax(dim=-1) # [N, ]
         if not test:
             random_idx = torch.randint(0, HW, (N, ), device=self.device)
@@ -185,7 +218,7 @@ class YOPO(nn.Module):
         self.train()
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
-            score, coef_xyz = self.inference(obs) # [N, HW, 6, 3]
+            coef_xyz, score = self.inference(obs) # [N, HW, 6, 3]
             
             p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T, 3]
             p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T, 3)) + p_w.unsqueeze(1)
@@ -249,30 +282,12 @@ class YOPO(nn.Module):
         
         rotmat_b2p = self.rotmat_b2p.unsqueeze(0)
         target_vel_p = mvp(rotmat_b2p, target_vel_b.unsqueeze(1)) # [1, HW, 3]
-        p_curr_b = torch.zeros_like(v_curr_b)
         v_curr_p = mvp(rotmat_b2p, v_curr_b.unsqueeze(1)) # [1, HW, 3]
         a_curr_p = mvp(rotmat_b2p, a_curr_b.unsqueeze(1)) # [1, HW, 3]
         state_input = torch.cat([target_vel_p, v_curr_p, a_curr_p], dim=-1) # [1, HW, 9]
 
-        net_output: Tensor = self.net(perception.unsqueeze(1), state_input) # [1, HW, 10]
-        p_end_b, v_end_b, a_end_b, score = post_process( # [1, HW, (3, 3, 3)], [N, HW]
-            output=net_output,
-            rpy_base=self.rpy_base,
-            drpy_min=self.drpy_min,
-            drpy_max=self.drpy_max,
-            dv_range=self.dv_range,
-            da_range=self.da_range,
-            rotmat_p2b=self.rotmat_p2b
-        )
-        coef_xyz = solve_coef( # [1, HW, 6, 3]
-            self.inv_coef_mat_tmax[None, None, ...], # [1, 1, 6, 6]
-            p_curr_b.unsqueeze(1).expand_as(p_end_b), # [1, HW, 3]
-            v_curr_b.unsqueeze(1).expand_as(v_end_b), # [1, HW, 3]
-            a_curr_b.unsqueeze(1).expand_as(a_end_b), # [1, HW, 3]
-            p_end_b, # [1, HW, 3]
-            v_end_b, # [1, HW, 3]
-            a_end_b  # [1, HW, 3]
-        )
+        net_output = self.net(perception, state_input) # [1, HW, 10]
+        coef_xyz, score = self.post_process(net_output, v_curr_b=v_curr_b, a_curr_b=a_curr_b)
         
         best_idx = score.argmax(dim=-1) # [1, ]
         best_idx = best_idx.reshape(-1, 1, 1, 1).expand(-1, -1, 6, 3)

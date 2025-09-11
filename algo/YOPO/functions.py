@@ -21,7 +21,7 @@ def rpy2xyz(rpy: Tensor) -> Tensor:
     ], dim=-1)
 
 @torch.jit.script
-def post_process(
+def chunk_and_unsquash(
     output: Tensor, # [N, HW, 10]
     rpy_base: Tensor, # [n_pitch*n_yaw, 3]
     drpy_min: Tensor, # [3, ]

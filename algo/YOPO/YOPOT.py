@@ -127,7 +127,7 @@ class YOPOT(YOPO):
         
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
-            score, coef_xyz = self.inference(obs) # [N, HW, 6, 3]
+            coef_xyz, score = self.inference(obs) # [N, HW, 6, 3]
             
             p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T-1, 3]
             p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T_1, 3)) + p_w.unsqueeze(1)

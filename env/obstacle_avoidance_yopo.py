@@ -28,7 +28,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
             self.q
         ], dim=-1)
         obs = TensorDict({
-            "state": obs, "perception": self.sensor_tensor.clone().unsqueeze(1)}, batch_size=self.n_envs)
+            "state": obs, "perception": self.sensor_tensor.clone()}, batch_size=self.n_envs)
         return obs
     
     @timeit
