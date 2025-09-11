@@ -95,14 +95,15 @@ class WorldModelTesttime(nn.Module):
         super().__init__()
         state_enc_cfg = cfg.encoder.state
         self.recon_state: bool = cfg.decoder.state.enable
-        self.recon_grid: bool = cfg.decoder.grid.enable
+        self.recon_occupancy: bool = cfg.decoder.occupancy.enable
+        self.recon_visibility: bool = cfg.decoder.visibility.enable
         self.rssm_feature_dim: int = cfg.rssm.deter + cfg.rssm.stoch * cfg.rssm.classes
         rssm_cfg = cfg.rssm
         self.deter_dim = rssm_cfg.deter
         self.latent_dim = rssm_cfg.stoch * rssm_cfg.classes
         
         # image encoder
-        self.image_encoder = ImageEncoder(obs_dim[1])
+        self.image_encoder = ImageEncoder(cfg.encoder.image, obs_dim[1])
         self.fmap_final_shape = self.image_encoder.final_shape
         # state encoder
         self.encode_state: bool = not cfg.odom_free
@@ -118,15 +119,24 @@ class WorldModelTesttime(nn.Module):
             self.state_decoder = StateDecoder(obs_dim[0], rssm_cfg)
         else:
             self.state_decoder = nn.Identity()
-        # grid decoder
-        if grid_cfg is not None:
-            if self.recon_grid:
-                if cfg.decoder.grid.use_mlp:
-                    self.grid_decoder = self._build_mlp(rssm_cfg, output_dim=math.prod(grid_cfg.n_points))
-                else:
-                    self.grid_decoder = GridDecoder(rssm_cfg, grid_cfg)
+        
+        # occupancy decoder
+        if grid_cfg is not None and self.recon_occupancy:
+            if cfg.decoder.occupancy.use_mlp:
+                self.occupancy_decoder = self._build_mlp(rssm_cfg, output_dim=math.prod(grid_cfg.n_points))
+            else:
+                self.occupancy_decoder = GridDecoder(rssm_cfg, grid_cfg)
         else:
-            self.grid_decoder = nn.Identity()
+            self.occupancy_decoder = nn.Identity()
+        
+        # visibility decoder
+        if grid_cfg is not None and self.recon_visibility:
+            if cfg.decoder.visibility.use_mlp:
+                self.visibility_decoder = self._build_mlp(rssm_cfg, output_dim=math.prod(grid_cfg.n_points))
+            else:
+                self.visibility_decoder = GridDecoder(rssm_cfg, grid_cfg)
+        else:
+            self.visibility_decoder = nn.Identity()
         
         # sequence model
         self.rssm = RSSM.build(token_dim=self.fmap_final_shape + self.state_embed_dim, rssm_cfg=rssm_cfg)
@@ -155,6 +165,12 @@ class WorldModelTesttime(nn.Module):
         }
         if self.encode_state:
             state_dicts["state_encoder"] = self.state_encoder.state_dict()
+        if self.recon_state:
+            state_dicts["state_decoder"] = self.state_decoder.state_dict()
+        if self.recon_occupancy:
+            state_dicts["occupancy_decoder"] = self.occupancy_decoder.state_dict()
+        if self.recon_visibility:
+            state_dicts["visibility_decoder"] = self.visibility_decoder.state_dict()
         torch.save(state_dicts, os.path.join(path, "world_model.pth"))
         
     def load(self, path: str):
@@ -163,6 +179,12 @@ class WorldModelTesttime(nn.Module):
         self.image_encoder.load_state_dict(state_dicts["image_encoder"])
         if self.encode_state:
             self.state_encoder.load_state_dict(state_dicts["state_encoder"])
+        if self.recon_state:
+            self.state_decoder.load_state_dict(state_dicts["state_decoder"])
+        if self.recon_occupancy:
+            self.occupancy_decoder.load_state_dict(state_dicts["occupancy_decoder"])
+        if self.recon_visibility:
+            self.visibility_decoder.load_state_dict(state_dicts["visibility_decoder"])
 
 
 class WorldModel(WorldModelTesttime):
@@ -212,7 +234,8 @@ class WorldModel(WorldModelTesttime):
         self.rep_weight: float = cfg.train.rep_weight
         self.rew_weight: float = cfg.train.rew_weight
         self.ter_weight: float = cfg.train.ter_weight
-        self.grid_weight: float = cfg.train.grid_weight
+        self.occupancy_weight: float = cfg.train.occupancy_weight
+        self.visibility_weight: float = cfg.train.visibility_weight
         self.soft_label: float = cfg.train.soft_label
     
     def forward(self, tokens, deter, actions):
@@ -224,13 +247,13 @@ class WorldModel(WorldModelTesttime):
     @timeit    
     def update(
         self,
-        img: Tensor,        # [B T H W]
-        state: Tensor,      # [B T S]
-        actions: Tensor,    # [B T D]
-        rewards: Tensor,    # [B T]
-        terminated: Tensor, # [B T]
-        gt_grids: Tensor,   # [B T N_grids]
-        visible_map: Tensor # [B T N_grids]
+        img: Tensor,          # [B T H W]
+        state: Tensor,        # [B T S]
+        actions: Tensor,      # [B T D]
+        rewards: Tensor,      # [B T]
+        terminated: Tensor,   # [B T]
+        gt_occupancy: Tensor, # [B T N_grids]
+        visible_map: Tensor   # [B T N_grids]
     ) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, Tensor]]:
         deter = torch.zeros(img.size(0), self.deter_dim, device=img.device)
         tokens = [self.image_encoder(img)]
@@ -269,19 +292,31 @@ class WorldModel(WorldModelTesttime):
         else:
             rec_state_loss = torch.tensor(0)
         
-        if self.recon_grid:
-            grid_logits = self.grid_decoder(post_feats)
-            visible_grid_logits = grid_logits[visible_map]
-            visible_gt_grid = gt_grids[visible_map]
-            target = visible_gt_grid.float() * (1 - self.soft_label) + self.soft_label
-            grid_loss = self.grid_loss(visible_grid_logits, target)
+        if self.recon_occupancy:
+            occupancy_logits = self.occupancy_decoder(post_feats)
+            visible_occupancy_logits = occupancy_logits[visible_map]
+            visible_gt_occupancy = gt_occupancy[visible_map]
+            target = visible_gt_occupancy.float() * (1 - self.soft_label) + self.soft_label
+            occupancy_loss = self.grid_loss(visible_occupancy_logits, target)
             
-            visible_pred_grid = visible_grid_logits > 0
-            grid_acc = (visible_pred_grid == visible_gt_grid).float().mean()
-            grid_precision = visible_pred_grid[visible_gt_grid].float().mean()
+            visible_pred_occupancy = visible_occupancy_logits > 0
+            occupancy_acc = (visible_pred_occupancy == visible_gt_occupancy).float().mean()
+            occupancy_precision = visible_pred_occupancy[visible_gt_occupancy].float().mean()
         else:
-            grid_loss, grid_acc, grid_precision = torch.tensor(0), torch.tensor(0), torch.tensor(0)
+            occupancy_loss, occupancy_acc, occupancy_precision = torch.tensor(0), torch.tensor(0), torch.tensor(0)
         
+        if self.recon_visibility:
+            visibility_logits = self.visibility_decoder(post_feats)
+            gt_visibility = visible_map
+            target = gt_visibility.float() * (1 - self.soft_label) + self.soft_label
+            visibility_loss = self.grid_loss(visibility_logits, target)
+
+            pred_visibility = visibility_logits > 0
+            visibility_acc = (pred_visibility == gt_visibility).float().mean()
+            visibility_precision = pred_visibility[gt_visibility].float().mean()
+        else:
+            visibility_loss, visibility_acc, visibility_precision = torch.tensor(0), torch.tensor(0), torch.tensor(0)
+
         dyn_loss = self.kl_loss(post_logits.detach(), prior_logits)
         rep_loss = self.kl_loss(post_logits, prior_logits.detach())
         
@@ -298,7 +333,8 @@ class WorldModel(WorldModelTesttime):
             self.rep_weight * rep_loss +
             self.rew_weight * rew_loss +
             self.ter_weight * term_loss +
-            self.grid_weight * grid_loss
+            self.occupancy_weight * occupancy_loss +
+            self.visibility_weight * visibility_loss
         )
         
         self.optim.zero_grad()
@@ -327,10 +363,14 @@ class WorldModel(WorldModelTesttime):
         losses['wm/image_recon'] = rec_img_loss.item()
         if self.recon_state:
             losses['wm/state_recon'] = rec_state_loss.item()
-        if self.recon_grid:
-            losses['wm/grid_recon'] = grid_loss.item()
-            losses['wm/grid_acc'] = grid_acc.item()
-            losses['wm/grid_precision'] = grid_precision.item()
+        if self.recon_occupancy:
+            losses['wm/occupancy_recon'] = occupancy_loss.item()
+            losses['wm/occupancy_acc'] = occupancy_acc.item()
+            losses['wm/occupancy_precision'] = occupancy_precision.item()
+        if self.recon_visibility:
+            losses['wm/visibility_recon'] = visibility_loss.item()
+            losses['wm/visibility_acc'] = visibility_acc.item()
+            losses['wm/visibility_precision'] = visibility_precision.item()
         if self.recon_reward:
             losses['wm/rew_loss'] = rew_loss.item()
         
@@ -339,10 +379,12 @@ class WorldModel(WorldModelTesttime):
         }
         
         predictions = {}
-        if self.recon_grid:
-            predictions["occupancy_pred"] = grid_logits > 0
-            predictions["occupancy_gt"] = gt_grids
-            predictions["visible_map"] = visible_map
+        if self.recon_occupancy:
+            predictions["occupancy_pred"] = occupancy_logits > 0
+            predictions["occupancy_gt"] = gt_occupancy
+            predictions["visibility_gt"] = visible_map
+        if self.recon_visibility:
+            predictions["visibility_pred"] = visibility_logits > 0
         predictions["image_pred"] = rec_img
         predictions["image_gt"] = img.reshape_as(rec_img)
         
@@ -361,8 +403,10 @@ class WorldModel(WorldModelTesttime):
             state_dicts["state_encoder"] = self.state_encoder.state_dict()
         if self.recon_state:
             state_dicts["state_decoder"] = self.state_decoder.state_dict()
-        if self.recon_grid:
-            state_dicts["grid_decoder"] = self.grid_decoder.state_dict()
+        if self.recon_occupancy:
+            state_dicts["occupancy_decoder"] = self.occupancy_decoder.state_dict()
+        if self.recon_visibility:
+            state_dicts["visibility_decoder"] = self.visibility_decoder.state_dict()
         if self.recon_reward:
             state_dicts["reward_decoder"] = self.reward_decoder.state_dict()
 
@@ -378,7 +422,9 @@ class WorldModel(WorldModelTesttime):
             self.state_encoder.load_state_dict(state_dicts["state_encoder"])
         if self.recon_state:
             self.state_decoder.load_state_dict(state_dicts["state_decoder"])
-        if self.recon_grid:
-            self.grid_decoder.load_state_dict(state_dicts["grid_decoder"])
+        if self.recon_occupancy:
+            self.occupancy_decoder.load_state_dict(state_dicts["occupancy_decoder"])
+        if self.recon_visibility:
+            self.visibility_decoder.load_state_dict(state_dicts["visibility_decoder"])
         if self.recon_reward:
             self.reward_decoder.load_state_dict(state_dicts["reward_decoder"])

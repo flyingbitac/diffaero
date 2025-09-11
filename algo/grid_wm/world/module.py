@@ -48,18 +48,18 @@ class MiniGru(nn.Module):
 
 
 class ImageEncoder(nn.Module):
-    def __init__(self, image_shape: Tuple[int, int]):
+    def __init__(self, layers: List[Tuple[int, int, int]], image_shape: Tuple[int, int]):
         super().__init__()
-        self.encoder = CNNBackbone([0, image_shape])
+        self.encoder = CNNBackbone(layers, (0, image_shape))
         self.final_shape = self.encoder.out_dim
     
     def forward(self, x:Tensor):
         if x.ndim == 3:
-            x = self.encoder(x.unsqueeze(1)) # 
+            x = self.encoder(x.unsqueeze(1))
         elif x.ndim == 4:
             B, L, H, W = x.shape
             x = self.encoder(x.reshape(B*L, 1, H, W))
-            x = x.reshape(B, L, -1)
+            x = x.reshape(B, L, self.final_shape)
         else:
             raise ValueError(f'Invalid input dimension {x.ndim}')
         return x

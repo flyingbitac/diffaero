@@ -16,7 +16,6 @@ import numpy as np
 from .world.backbone import WorldModel, WorldModelTesttime
 from diffaero.env.obstacle_avoidance_grid import ObstacleAvoidanceGrid
 from diffaero.algo.buffer import RolloutBufferGRID
-from diffaero.network.networks import MLP
 from diffaero.network.agents import StochasticActor, StochasticAsymmetricActorCriticV
 from diffaero.utils.runner import timeit
 from diffaero.utils.logger import Logger
@@ -29,10 +28,11 @@ class GRIDWMTesttime:
         cfg: DictConfig,
         obs_dim: Tuple[int, Tuple[int, int]],
         action_dim: int,
-        device: torch.device
+        device: torch.device,
+        grid_cfg: Optional[DictConfig] = None,
     ):
         self.obs_dim = obs_dim
-        self.wm = WorldModelTesttime(obs_dim, cfg.wm).to(device)
+        self.wm = WorldModelTesttime(obs_dim, cfg.wm, grid_cfg=grid_cfg).to(device)
         
         self.odom_free = cfg.odom_free
         self.state_dim = obs_dim[0]
@@ -106,6 +106,7 @@ class GRIDWM(GRIDWMTesttime):
         self.lmbda: float = cfg.lmbda
         self.batch_size: int = cfg.wm.train.batch_size
         self.n_epochs: int = cfg.wm.train.n_epochs
+        self.grid_cfg = grid_cfg
         self.grid_points: List[int] = grid_cfg.n_points
         self.n_grid_points = math.prod(self.grid_points)
         self.device = device
@@ -180,15 +181,15 @@ class GRIDWM(GRIDWMTesttime):
         for _ in range(self.n_epochs):
             observations, actions, terminated, rewards = self.buffer.sample4wm(self.batch_size)
             # find ground truth and visible grid
-            ground_truth_grid = observations["grid"]
-            visible_map = observations["visible_map"]
+            ground_truth_occupancy = observations["occupancy"]
+            visible_map = observations["visibility"]
             total_loss, grad_norms, predictions = self.wm.update(
                 img=observations['perception'],
                 state=observations['state'],
                 actions=actions,
                 rewards=rewards,
                 terminated=terminated,
-                gt_grids=ground_truth_grid,
+                gt_occupancy=ground_truth_occupancy,
                 visible_map=visible_map
             )
         return total_loss, grad_norms, predictions
@@ -301,19 +302,23 @@ class GRIDWM(GRIDWMTesttime):
         if logger.n % 100 == 0:
             if "occupancy_pred" in predictions.keys() and "occupancy_gt" in predictions.keys():
                 # select the worst prediction and return to the logger for visualization
-                visible_grid_gt_for_plot = predictions["occupancy_gt"] & predictions["visible_map"]
-                visible_grid_pred_for_plot = predictions["occupancy_pred"] & predictions["visible_map"]
-                n_missed_predictions = torch.sum(visible_grid_gt_for_plot != visible_grid_pred_for_plot, dim=-1) # [batch_size, l_rollout]
+                visible_occupancy_gt_for_plot = predictions["occupancy_gt"] & predictions["visibility_gt"]
+                visible_occupancy_pred_for_plot = predictions["occupancy_pred"] & predictions["visibility_gt"]
+                n_missed_predictions = torch.sum(visible_occupancy_gt_for_plot != visible_occupancy_pred_for_plot, dim=-1) # [batch_size, l_rollout]
                 env_idx, time_idx = torch.where(n_missed_predictions == n_missed_predictions.max())
                 env_idx, time_idx = env_idx[0], time_idx[0]
                 
-                occupancy_gt = visible_grid_gt_for_plot[env_idx, time_idx].reshape(*self.grid_points)
-                occupancy_pred = visible_grid_pred_for_plot[env_idx, time_idx].reshape(*self.grid_points)
-                occupancy_gt = env.visualize_grid(predictions["occupancy_gt"])
-                occupancy_pred = env.visualize_grid(predictions["occupancy_pred"])
+                occupancy_gt = env.visualize_grid(visible_occupancy_gt_for_plot[env_idx, time_idx])
+                occupancy_pred = env.visualize_grid(visible_occupancy_pred_for_plot[env_idx, time_idx])
                 occupancy = np.concatenate([occupancy_gt, occupancy_pred], axis=1).transpose(2, 0, 1)
                 logger.log_image("recon/occupancy", occupancy)
-            
+                
+                if "visibility_pred" in predictions.keys():
+                    visibility_gt = env.visualize_grid(predictions["visibility_gt"][env_idx, time_idx])
+                    visibility_pred = env.visualize_grid(predictions["visibility_pred"][env_idx, time_idx])
+                    visibility = np.concatenate([visibility_gt, visibility_pred], axis=1).transpose(2, 0, 1)
+                    logger.log_image("recon/visibility", visibility)
+
             if "image_pred" in predictions.keys() and "image_gt" in predictions.keys():
                 preprocess = lambda x: x.clamp(0., 1.).expand(3, -1, -1).cpu().numpy()
                 img_gt = preprocess(predictions["image_gt"][env_idx, time_idx])
@@ -368,7 +373,7 @@ class GRIDWM(GRIDWMTesttime):
         export_cfg: DictConfig,
         verbose=False,
     ):
-        testtime = GRIDWMTesttime(self.cfg, self.obs_dim, self.action_dim, self.device)
+        testtime = GRIDWMTesttime(self.cfg, self.obs_dim, self.action_dim, self.device, self.grid_cfg)
         testtime.load(path)
         testtime.export(path, export_cfg, verbose)
 

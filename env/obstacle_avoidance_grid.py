@@ -236,9 +236,9 @@ class ObstacleAvoidanceGrid(ObstacleAvoidance):
     @timeit
     def get_observations(self, with_grad=False):
         obs = super().get_observations(with_grad=with_grad)
-        grid, visible_map = self.get_occupancy_map(), self.get_visibility_map()
+        occupancy, visibility = self.get_occupancy_map(), self.get_visibility_map()
         grid_info = TensorDict({
-            "grid": grid, "visible_map": visible_map}, batch_size=self.n_envs)
+            "occupancy": occupancy, "visibility": visibility}, batch_size=self.n_envs)
         obs = merge_tensordicts(obs, grid_info)
         # if self.renderer is not None:
         #     grid_tobe_visualized = visible_map

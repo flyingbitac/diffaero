@@ -199,8 +199,8 @@ class RolloutBufferGRID:
         self.obs = TensorDict({
             "state":       torch.zeros((buffer_size, l_rollout, obs_dim[0]), **factory_kwargs),
             "perception":  torch.zeros((buffer_size, l_rollout, obs_dim[1][0], obs_dim[1][1]), **factory_kwargs),
-            "grid":        torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
-            "visible_map": torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
+            "occupancy":        torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
+            "visibility": torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
         }, batch_size=(buffer_size, ))
         self.states = torch.zeros((buffer_size, l_rollout, state_dim), **factory_kwargs)
         self.actions = torch.zeros((buffer_size, l_rollout, action_dim), **factory_kwargs)
@@ -225,8 +225,8 @@ class RolloutBufferGRID:
     
     @timeit
     def compress_obs(self, obs: TensorDict):
-        occupied = obs["grid"].to(torch.uint8)
-        visible = obs["visible_map"].to(torch.uint8)
+        occupied = obs["occupancy"].to(torch.uint8)
+        visible = obs["visibility"].to(torch.uint8)
         occupied_compressed = torch.zeros((occupied.shape[0], self.n_bytes, occupied.shape[2]), dtype=torch.uint8, device=occupied.device)
         visible_compressed = torch.zeros((visible.shape[0], self.n_bytes, visible.shape[2]), dtype=torch.uint8, device=visible.device)
         for i in range(self.n_bytes):
@@ -239,15 +239,15 @@ class RolloutBufferGRID:
         compressed = TensorDict({
             "state": obs["state"],
             "perception": obs["perception"],
-            "grid": occupied_compressed,
-            "visible_map": visible_compressed
+            "occupancy": occupied_compressed,
+            "visibility": visible_compressed
         }, batch_size=obs.batch_size[0])
         return compressed
 
     @timeit
     def expand_obs(self, obs: TensorDict):
-        occupied_compressed = obs["grid"]
-        visible_compressed = obs["visible_map"]
+        occupied_compressed = obs["occupancy"]
+        visible_compressed = obs["visibility"]
         occupied = torch.zeros((occupied_compressed.shape[0], self.l_rollout, occupied_compressed.shape[2]), dtype=torch.bool, device=occupied_compressed.device)
         visible = torch.zeros((visible_compressed.shape[0], self.l_rollout, visible_compressed.shape[2]), dtype=torch.bool, device=visible_compressed.device)
         for i in range(self.n_bytes):
@@ -260,8 +260,8 @@ class RolloutBufferGRID:
         expanded = TensorDict({
             "state": obs["state"],
             "perception": obs["perception"],
-            "grid": occupied,
-            "visible_map": visible
+            "occupancy": occupied,
+            "visibility": visible
         }, batch_size=(obs.batch_size[0], self.l_rollout))
         return expanded
 
@@ -306,13 +306,13 @@ class RolloutBufferGRID:
 
 if __name__ == "__main__":
     B, L = 2, 16
-    buffer = RolloutBufferGRID(L, 128, [3, [9, 16]], 10, 4, 10, torch.device("cpu"))
+    buffer = RolloutBufferGRID(L, 128, (3, (9, 16)), 10, 4, 10, torch.device("cpu"))
     obs = TensorDict({
         "state": torch.randn(B, L, 10),
         "perception": torch.randn(B, L, 9, 16),
-        "grid": torch.randint(0, 2, (B, L, 10)).bool(),
-        "visible_map": torch.randint(0, 2, (B, L, 10)).bool()
+        "occupancy": torch.randint(0, 2, (B, L, 10)).bool(),
+        "visibility": torch.randint(0, 2, (B, L, 10)).bool()
     }, batch_size=(B, L))
     obs_restored = buffer.expand_obs(buffer.compress_obs(obs))
-    assert torch.equal(obs["grid"], obs_restored["grid"])
-    assert torch.equal(obs["visible_map"], obs_restored["visible_map"])
+    assert torch.equal(obs["occupancy"], obs_restored["occupancy"])
+    assert torch.equal(obs["visibility"], obs_restored["visibility"])
