@@ -19,9 +19,7 @@
 
 ## Introduction
 
-DiffAero is a GPU-accelerated differentiable simulator for quadrotor dynamics and sensor simulation. DiffAero enables flexible and efficient single- and multi-agent flight policy learning by supporting different types of self-defined dynamical models and flight tasks, and rendering sensory data with ray casting methods, all of which implemented in [Pytorch](https://www.pytorch.org) so that they run efficiently on modern GPUs.
-
-DiffAero utilizes a modular design where different components (e.g., sensors, flight tasks, dynamics, network architecture, and learning algorithms) are decoupled from each other and can be configured independently. As a result, users can combine different components almost arbitrarily to initiate a custom-configured training process with minimal effort.
+DiffAero is a GPU-accelerated differentiable quadrotor simulator that parallelizes both physics and rendering. It achieves orders-of-magnitude performance improvements over existing platforms with little VRAM consumption. It provides a modular and extensible framework supporting four differentiable dynamics models, three sensor modalities, and three flight tasks. Its PyTorch-based interface unifies four learning formulations and three learning paradigms. This flexibility enables DiffAero to serve as a benchmark for learning algorithms and allows researchers to investigate a wide range of problems, from differentiable policy learning to multi-agent coordination. Users can combine different components almost arbitrarily to initiate a custom-configured training process with minimal effort.
 
 ## Features
 <!-- Inserted English summary table -->
@@ -58,8 +56,9 @@ We have implemented several learning algorithms, including RL algorithms and alg
 
 ### Dynamical models
 
-We have implemented three types of dynamic models for the quadrotor:
-- **Full Quadrotor Dynamics** (`dynamics=quad`): Simulates the full dynamics of the quadrotor, including the aerodynamic effects and the motor dynamics(TODO), as described in [Efficient and Robust Time-Optimal Trajectory Planning and Control for Agile Quadrotor Flight](http://arxiv.org/abs/2305.02772).
+We have implemented four types of dynamic models for the quadrotor:
+- **Full Quadrotor Dynamics** (`dynamics=quad`): Simulates the full dynamics of the quadrotor, including the aerodynamic effect, as described in [Efficient and Robust Time-Optimal Trajectory Planning and Control for Agile Quadrotor Flight](http://arxiv.org/abs/2305.02772).
+- **(TODO) Simplified Quadrotor Dynamics** (`dynamics=simple`): Simulates the attitude dynamics of the quadrotor, but without considering body rate dynamics, as described in [Learning Quadrotor Control From Visual Features  Using Differentiable Simulation](http://arxiv.org/abs/2410.15979).
 - **Discrete Point Mass Dynamics** (`dynamics=pmd`): Simulates the quadrotor as a point mass, ignoring its pose for faster simulation and smoother gradient flow, as described in [Back to Newton's Laws: Learning Vision-based Agile Flight via Differentiable Physics](http://arxiv.org/abs/2407.10648).
 - **Continuous Point Mass Dynamics** (`dynamics=pmc`): Simulates the quadrotor as a point mass, ignoring its pose, but with continuous time integration.
 
@@ -80,7 +79,6 @@ DiffAero supports two types of exteroceptive sensors:
 Clone this repo and install the python package:
 
 ```bash
-cd /path/to/your/workspace
 git clone https://github.com/zxh0916/diffaero.git
 cd diffaero && pip install -e .
 ```
@@ -102,7 +100,7 @@ Once the training is done, run the following command to test and visualize the t
 python script/test.py env=[pc,oa,racing] checkpoint=/absolute/path/to/checkpoints/directory use_training_cfg=True n_envs=64 headless=False
 ```
 
-If you want to see all configuration choices, run:
+To list all configuration choices, run:
 
 ```bash
 python script/train.py -h
@@ -137,4 +135,4 @@ python script/train.py -m env=pc,oa algo=apg_sto,shac algo.l_rollout=16,32,64 n_
 
 ## Deploy
 
-If you want to evaluate and deploy your trained policy in Gazebo or in real world, please refer to [this repository](https://github.com/zxh0916/diffaero-deploy).
+If you want to evaluate and deploy your trained policy in Gazebo or in real world, please refer to this repository (Coming soon).
