@@ -71,5 +71,4 @@ defaults:
   - randomizer: default_randomizer
   - imu: default_imu
   - obstacles: small_room
-  - grid: small
   - _self_

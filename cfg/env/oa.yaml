@@ -71,5 +71,4 @@ defaults:
   - randomizer: default_randomizer
   - imu: default_imu
   - obstacles: outdoor
-  - grid: big
   - _self_
