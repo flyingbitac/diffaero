@@ -33,8 +33,6 @@ replaybuffer:
   store_on_gpu: True
   device: "cuda:1"
   use_perception: True
-  use_grid: False
-  grid_dim: 4000
 
 state_predictor:
   state_model:
@@ -52,14 +50,11 @@ state_predictor:
     img_recon_loss_weight: 1.
     end_loss_pos_weight: 30
     enable_rec: True
-    use_grid: False
-    grid_dim: 4000
     rec_coef: 1.0
     rew_coef: 1.0
     end_coef: 1.0
     rep_coef: 0.1
     dyn_coef: 0.5
-    ocp_coef: 0.5
 
   training:
     max_grad_norm: 100.0
@@ -97,11 +92,11 @@ actor_critic:
 training:
   max_grad_norm: 1.0 
   total_steps: 500000
-  batch_size: 64     # 这里batch_size的设置已经趋近最大值了，显存占用到20G左右
+  batch_size: 64     
   batch_length: 6    
   total_episodes: 1000
   imagine_period: 10000
   use_amp: ${algo.common.use_amp}
 
 imagine:
-  imagine_length: 64 # 实际imagine的长度是imagine_length-num_steps_conditioning
+  imagine_length: 64 

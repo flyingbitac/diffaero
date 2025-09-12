@@ -30,7 +30,7 @@ def collect_imagine_trj(env: DepthStateEnv, agent: ActorCriticAgent, cfg: DictCo
         latents.append(latent)
         hiddens.append(hidden)
         action, org_sample = agent.sample(torch.cat([latent, hidden], dim=-1))
-        latent, reward, end, hidden, _ = env.step(action)
+        latent, reward, end, hidden = env.step(action)
         rewards.append(reward)
         actions.append(action)
         org_samples.append(org_sample)
@@ -74,17 +74,15 @@ def train_worldmodel(
 ):
     with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=training_hyper.use_amp):
         for _ in range(training_hyper.worldmodel_update_freq):
-            sample_state, sample_action, sample_reward, sample_termination, sample_perception, sample_grid, sample_vis = \
+            sample_state, sample_action, sample_reward, sample_termination, sample_perception = \
                 replaybuffer.sample(training_hyper.batch_size,training_hyper.batch_length)
-            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss, grid_loss = \
+            total_loss, rep_loss, dyn_loss, rec_loss, rew_loss, end_loss = \
                 world_model.compute_loss(
                     sample_state,
                     sample_perception,
                     sample_action,
                     sample_reward,
                     sample_termination,
-                    sample_grid,
-                    sample_vis
                 )
     
     if scaler is not None:
@@ -102,13 +100,12 @@ def train_worldmodel(
         'WorldModel/grad_norm':grad_norm.item(),
         'WorldModel/state_rew_loss':rew_loss.item(),
         'WorldModel/state_end_loss':end_loss.item(),
-        'WorldModel/state_grid_loss':grid_loss.item(),
     }
 
     return world_info
 
 class World_Agent:
-    def __init__(self, cfg: DictConfig, env: Union[PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid], device: torch.device):
+    def __init__(self, cfg: DictConfig, env: Union[PositionControl, ObstacleAvoidance], device: torch.device):
         self.cfg = cfg
         self.n_envs = env.n_envs
         device_idx = device.index
@@ -116,7 +113,6 @@ class World_Agent:
             state_dim = 9
         else:
             state_dim = 13
-        use_grid = True if isinstance(env, ObstacleAvoidanceGrid) else False
         world_agent_cfg = deepcopy(cfg)
         world_agent_cfg = cfg
         world_agent_cfg.replaybuffer.device = f"cuda:{device_idx}"
@@ -137,13 +133,6 @@ class World_Agent:
         worldcfg = getattr(world_agent_cfg, "world_state_env")
         training_hyper = getattr(world_agent_cfg, "state_predictor").training
         self.training_hyper = training_hyper
-        
-        if use_grid:
-            grid_dim = env.n_grid_points
-            buffercfg.use_grid = True
-            buffercfg.grid_dim = grid_dim
-            statemodelcfg.use_grid = True
-            statemodelcfg.grid_dim = grid_dim
 
         if isinstance(env, PositionControl) or isinstance(env, Racing):
             statemodelcfg.only_state = True
@@ -185,10 +174,6 @@ class World_Agent:
         with torch.no_grad():
             if not isinstance(obs, torch.Tensor):
                 state, perception = obs['state'], obs['perception'].unsqueeze(1)
-                if 'grid' in obs.keys():
-                    grid, vis = obs['grid'], obs['visible_map']
-                else:
-                    grid, vis = None, None
             else:
                 state, perception = obs, None
             if self.world_agent_cfg.common.use_symlog:
@@ -201,7 +186,7 @@ class World_Agent:
                 action = torch.randn(self.n_envs,3,device=state.device)
             next_obs, (loss, rewards), terminated, env_info = env.step(env.rescale_action(action))
             rewards = rewards*10.
-            self.replaybuffer.append(state, action, rewards, terminated, perception, grid, vis)
+            self.replaybuffer.append(state, action, rewards, terminated, perception)
             
             if terminated.any():
                 zeros = torch.zeros_like(self.hidden)

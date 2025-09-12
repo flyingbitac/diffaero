@@ -45,7 +45,7 @@ class DepthStateEnv:
         if self.use_extern:
             states, actions, perceptions = self.replaybuffer.sample_extern(batch_size, batch_length)
         else:
-            states, actions, _ , _, perceptions, _, _ = self.replaybuffer.sample(batch_size, batch_length)
+            states, actions, _ , _, perceptions = self.replaybuffer.sample(batch_size, batch_length)
         hidden = None
             
         for i in range(batch_length):
@@ -65,11 +65,11 @@ class DepthStateEnv:
     @timeit
     def step(self,action:Tensor):
         assert action.ndim==2
-        prior_sample,pred_reward,pred_end,hidden,grid = self.state_model.predict_next(latent=self.latent, act=action, hidden=self.hidden)
+        prior_sample,pred_reward,pred_end,hidden = self.state_model.predict_next(latent=self.latent, act=action, hidden=self.hidden)
         flattened_sample = prior_sample.view(*prior_sample.shape[:-2],-1)
         self.latent = flattened_sample
         self.hidden = hidden
-        return flattened_sample,pred_reward,pred_end,hidden,grid
+        return flattened_sample,pred_reward,pred_end,hidden
     
     def decode(self, latents:Tensor, hiddens:Tensor):
         _, videos = self.state_model.decode(latents, hiddens)
