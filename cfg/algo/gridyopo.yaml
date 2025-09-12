@@ -1,0 +1,119 @@
+name: gridyopo
+l_rollout: 32
+odom_free: False
+n_epochs: 4
+
+actor:
+  name: mlp
+  hidden_dim: [256, 128]
+  lr: 0.003
+  grad_norm: 10.
+
+critic:
+  name: mlp
+  hidden_dim: [256, 128]
+  lr: 0.003
+  grad_norm: 10.
+
+yopo:
+  tmax: 2
+  n_points_per_sec: 5
+
+  r_max: 5
+  r_min: 2
+
+  n_pitch: 3
+  min_pitch: -30
+  max_pitch: 30
+
+  n_yaw: 4
+  min_yaw: -45
+  max_yaw: 45
+
+  dv_range: 5
+  da_range: 2
+
+  # training hparams
+  gamma: 0.99
+  lmbda: 0.95
+  expl_prob: 0.
+
+  t_next: 
+
+wm:
+  compile: True
+  l_rollout: 32
+  odom_free: ${algo.odom_free}
+  encoder:
+    image: [ # [in_channels, out_channels, stride]
+      [1, 8, 1],
+      [8, 16, 2],
+      [16, 8, 1],
+      [8, 8, 2]
+    ]
+
+    state:
+      embedding_dim: 64
+      hidden_units: [64]
+      act: SiLU
+      norm: LayerNorm
+
+  rssm:
+    action_dim: 3
+    stoch: 32
+    classes: 32
+    deter: 256
+    hidden: 256
+    act: SiLU
+    norm: LayerNorm
+
+  decoder:
+    image:
+      enable: False
+      use_mlp: True
+      cnndecoder:
+        channels: [64, 32, 16, 3]
+        stride: 2
+        kernel_size: 4
+        act: SiLU
+        norm: BatchNorm2d
+
+      mlpdecoder:
+        hidden_units: [256, 256]
+        act: SiLU
+        norm: LayerNorm
+    
+    state:
+      enable: True
+    
+    occupancy: 
+      enable: True
+      use_mlp: True
+    
+    visibility: 
+      enable: True
+      use_mlp: True
+    
+    reward:
+      enable: False
+
+  train:
+    lr: 3e-4
+    grad_norm: 10.
+    grid_pos_weight: 10
+    term_pos_weight: 100
+
+    # weight of loss funcs
+    rec_img_weight: 1.
+    rec_state_weight: 1.
+    free_bits: 1.
+    dyn_weight: 0.01
+    rep_weight: 0.002
+    rew_weight: 1.
+    ter_weight: 1.
+    occupancy_weight: 1.
+    visibility_weight: 1.
+    soft_label: 0.
+
+    batch_size: ${n_envs}
+    buffer_size: 5e4

@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 from diffaero.env.position_control import PositionControl, Sim2RealPositionControl
 from diffaero.env.position_control_multi_agent import MultiAgentPositionControl
 from diffaero.env.obstacle_avoidance import ObstacleAvoidance
-from diffaero.env.obstacle_avoidance_grid import ObstacleAvoidanceGrid
+from diffaero.env.obstacle_avoidance_grid import ObstacleAvoidanceGrid, ObstacleAvoidanceGridYOPO
 from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
 from diffaero.env.racing import Racing
 
@@ -24,4 +24,6 @@ def build_env(cfg, device):
     env_class = ENV_ALIAS[cfg.name]
     if env_class == ObstacleAvoidance and cfg.enable_grid:
         env_class = ObstacleAvoidanceGrid
+    if env_class == ObstacleAvoidanceYOPO and cfg.enable_grid:
+        env_class = ObstacleAvoidanceGridYOPO
     return env_class(cfg, device)
