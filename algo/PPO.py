@@ -368,33 +368,3 @@ class AsymmetricPPO(PPO):
             n_envs=env.n_envs,
             l_rollout=cfg.l_rollout,
             device=device)
-
-
-class PPO_RPL(PPO):
-    def __init__(
-        self,
-        cfg: DictConfig,
-        obs_dim: int,
-        action_dim: int,
-        n_envs: int,
-        l_rollout: int,
-        device: torch.device
-    ):
-        super().__init__(cfg, obs_dim, action_dim, n_envs, l_rollout, device)
-        del self.agent, self.optim
-        self.agent = RPLActorCritic(
-            cfg.network, cfg.anchor_ckpt, obs_dim, cfg.anchor_obs_dim, action_dim, cfg.rpl_action).to(device)
-        self.optim = torch.optim.Adam([
-            {"params": self.agent.actor.parameters()},
-            {"params": self.agent.critic.parameters()},
-        ], lr=cfg.lr, eps=cfg.eps)
-        
-    @staticmethod
-    def build(cfg, env, device):
-        return PPO_RPL(
-            cfg=cfg,
-            obs_dim=env.obs_dim,
-            action_dim=env.action_dim,
-            n_envs=env.n_envs,
-            l_rollout=cfg.l_rollout,
-            device=device)
