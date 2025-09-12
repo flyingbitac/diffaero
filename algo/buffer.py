@@ -346,7 +346,7 @@ class RolloutBufferGRID:
                 continue
             buf[start1:end1, self.time] = dat[:n1]
             if n2 > 0:
-                buf[start2:end2] = dat[n1:]
+                buf[start2:end2, self.time] = dat[n1:]
         
         self.time += 1
         if self.time == self.l_rollout:
