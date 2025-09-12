@@ -66,7 +66,8 @@ class GRIDYOPO(YOPOBase):
         self.l_rollout: int = cfg.l_rollout
         self.lmbda: float = cfg.yopo.lmbda
         self.batch_size: int = cfg.wm.train.batch_size
-        self.n_epochs: int = cfg.n_epochs
+        self.yopo_n_epochs: int = cfg.yopo.n_epochs
+        self.wm_n_epochs: int = cfg.wm.train.n_epochs
         self.grid_cfg = grid_cfg
         self.grid_points: List[int] = grid_cfg.n_points
         self.n_grid_points = math.prod(self.grid_points)
@@ -178,7 +179,7 @@ class GRIDYOPO(YOPOBase):
     def update_wm(self):
         if self.buffer.size < self.batch_size:
             return {}, {}, {}
-        for _ in range(self.n_epochs):
+        for _ in range(self.wm_n_epochs):
             observations, actions, terminated, rewards = self.buffer.sample4wm(self.batch_size)
             # find ground truth and visible grid
             ground_truth_occupancy = observations["occupancy"]
@@ -251,14 +252,10 @@ class GRIDYOPO(YOPOBase):
         
         return losses, grad_norm
     
-    @timeit
-    def step_rollout(self, cfg: DictConfig, env: ObstacleAvoidanceGridYOPO, logger: Logger, obs: TensorDict, on_step_cb=None):
-        # env.prev_visible_map.fill_(False) # clear the memory that wm shouldn't have
-        N, HW, T_1, T_2 = env.n_envs, self.n_pitch * self.n_yaw, self.n_points - 1, self.n_points - 2
-        rollout_buffer_list = defaultdict(list)
-        for t in range(self.l_rollout):
-            
-            p_w, rotmat_b2w = env.p, env.dynamics.R
+    def update_yopo(self, obs: TensorDict, env: ObstacleAvoidanceGridYOPO):
+        p_w, rotmat_b2w = env.p, env.dynamics.R
+        N, HW, T_1, T_2 = obs.shape[0], self.n_pitch * self.n_yaw, self.n_points - 1, self.n_points - 2
+        for _ in range(self.yopo_n_epochs):
             coef_xyz, score, latent = self.inference(obs) # [N, HW, 6, 3]
             
             p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T-1, 3]
@@ -274,6 +271,17 @@ class GRIDYOPO(YOPOBase):
             
             critic_losses, critic_grad_norms = self.update_critic(states, goal_rewards, survive)
             actor_losses, actor_grad_norms = self.update_backbone(states, differentiable_rewards, survive, score)
+        
+        return {**critic_losses, **actor_losses}, {**critic_grad_norms, **actor_grad_norms}
+    
+    @timeit
+    def step_rollout(self, cfg: DictConfig, env: ObstacleAvoidanceGridYOPO, logger: Logger, obs: TensorDict, on_step_cb=None):
+        # env.prev_visible_map.fill_(False) # clear the memory that wm shouldn't have
+        p_w, rotmat_b2w = env.p, env.dynamics.R
+        rollout_buffer_list = defaultdict(list)
+        for t in range(self.l_rollout):
+            
+            yopo_losses, yopo_grad_norms = self.update_yopo(obs, env)
             
             with torch.no_grad():
                 action, policy_info = self.act(obs)
@@ -293,6 +301,7 @@ class GRIDYOPO(YOPOBase):
                     action=action,
                     policy_info=policy_info,
                     env_info=env_info)
+        
         self.buffer.add(
             obs=tensordict.stack(rollout_buffer_list["obs"], dim=1),
             action=torch.stack(rollout_buffer_list["action"], dim=1),
@@ -300,10 +309,9 @@ class GRIDYOPO(YOPOBase):
             next_done=torch.stack(rollout_buffer_list["next_done"], dim=1),
             next_terminated=torch.stack(rollout_buffer_list["next_terminated"], dim=1)
         )
-        for _ in range(self.n_epochs):
-            wm_losses, wm_grad_norm, predictions = self.update_wm()
-        losses = {**wm_losses, **actor_losses, **critic_losses}
-        grad_norms = {**wm_grad_norm, **actor_grad_norms, **critic_grad_norms}
+        wm_losses, wm_grad_norm, predictions = self.update_wm()
+        losses = {**wm_losses, **yopo_losses}
+        grad_norms = {**wm_grad_norm, **yopo_grad_norms}
         
         self.log_predictions(logger, env, predictions)
         
@@ -311,25 +319,9 @@ class GRIDYOPO(YOPOBase):
 
     @timeit
     def step_once(self, cfg: DictConfig, env: ObstacleAvoidanceGridYOPO, logger: Logger, obs: TensorDict, on_step_cb=None):
-        N, HW, T_1, T_2 = env.n_envs, self.n_pitch * self.n_yaw, self.n_points - 1, self.n_points - 2
         p_w, rotmat_b2w = env.p, env.dynamics.R
-        
-        for _ in range(self.n_epochs):
-            coef_xyz, score, latent = self.inference(obs) # [N, HW, 6, 3]
-            
-            p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T-1, 3]
-            p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T_1, 3)) + p_w.unsqueeze(1)
-            v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T_1, 3))
-            a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T_1, 3)) + self.G.unsqueeze(1)
-            
-            states = env.get_state(p_traj_w, v_traj_w, a_traj_w).reshape(N, HW, T_1, -1) # [N, HW, T-1, state_dim]
-            goal_rewards, differentiable_rewards, _, dead, _ = env.reward_fn(p_traj_w, v_traj_w, a_traj_w) # [N, HW*(T-1)]
-            goal_rewards = goal_rewards.reshape(N, HW, T_1) # [N, HW, T-1]
-            differentiable_rewards = differentiable_rewards.reshape(N, HW, T_1) # [N, HW, T-1]
-            survive = dead.reshape(N, HW, T_1).int().cumsum(dim=2).eq(0) # [N, HW, T-1]
-            
-            critic_losses, critic_grad_norms = self.update_critic(states, goal_rewards, survive)
-            actor_losses, actor_grad_norms = self.update_backbone(states, differentiable_rewards, survive, score)
+
+        yopo_losses, yopo_grad_norms = self.update_yopo(obs, env)
         
         with torch.no_grad():
             action, policy_info = self.act(obs)
@@ -350,12 +342,9 @@ class GRIDYOPO(YOPOBase):
             next_done=env_info["reset"],
             next_terminated=terminated
         )
-        
-        for _ in range(self.n_epochs):
-            wm_losses, wm_grad_norm, predictions = self.update_wm()
-        
-        losses = {**wm_losses, **actor_losses, **critic_losses}
-        grad_norms = {**wm_grad_norm, **actor_grad_norms, **critic_grad_norms}
+        wm_losses, wm_grad_norm, predictions = self.update_wm()
+        losses = {**wm_losses, **yopo_losses}
+        grad_norms = {**wm_grad_norm, **yopo_grad_norms}
         
         self.log_predictions(logger, env, predictions)
         
@@ -424,3 +413,11 @@ class GRIDYOPO(YOPOBase):
             grid_cfg=env.cfg.grid,
             device=device
         )
+    
+    def export(
+        self,
+        path: str,
+        export_cfg: DictConfig,
+        verbose: bool = False,
+    ):
+        pass

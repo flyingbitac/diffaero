@@ -1,7 +1,6 @@
 name: gridyopo
 l_rollout: 32
 odom_free: False
-n_epochs: 4
 
 actor:
   name: mlp
@@ -37,7 +36,7 @@ yopo:
   gamma: 0.99
   lmbda: 0.95
   expl_prob: 0.
-
+  n_epochs: 4
   t_next: 
 
 wm:
@@ -117,3 +116,4 @@ wm:
 
     batch_size: ${n_envs}
     buffer_size: 5e4
+    n_epochs: 4
