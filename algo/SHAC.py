@@ -8,7 +8,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from diffaero.algo.buffer import RolloutBufferSHAC, RolloutBufferSHACQ, RNNStateBuffer
+from diffaero.algo.buffer import RolloutBufferSHAC, RNNStateBuffer
 from diffaero.network.agents import (
     tensordict2tuple,
     StochasticActorCriticV,
