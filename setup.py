@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='diffaero',
-    version='1.0',
+    version='0.1',
     # packages=find_packages(),
     packages=[".", "env", "algo", "network", "utils", "script"],
     install_requires=[
@@ -33,7 +33,7 @@ setup(
         'onnxruntime'
     ],
     author='Xinhong Zhang',
-    author_email='zxh0916@126.com',
+    author_email='xhzhang@bit.edu.cn',
     description='',
-    url='https://github.com/zxh0916/diffaero'
+    url='https://github.com/flyingbitac/diffaero'
 )
