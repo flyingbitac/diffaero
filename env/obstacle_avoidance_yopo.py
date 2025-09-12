@@ -77,7 +77,7 @@ class ObstacleAvoidanceYOPO(ObstacleAvoidance):
         }
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
-        return self.get_observations(), (goal_reward, differentiable_reward), terminated, extra
+        return self.get_observations(), (goal_reward.squeeze(-1), differentiable_reward.squeeze(-1)), terminated, extra
     
     @timeit
     def reward_fn(

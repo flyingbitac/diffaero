@@ -1,2 +1,2 @@
-from .YOPO import YOPO
+from .YOPO import YOPOBase, YOPO
 from .YOPOT import YOPOT

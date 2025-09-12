@@ -199,8 +199,8 @@ class RolloutBufferGRID:
         self.obs = TensorDict({
             "state":       torch.zeros((buffer_size, l_rollout, obs_dim[0]), **factory_kwargs),
             "perception":  torch.zeros((buffer_size, l_rollout, obs_dim[1][0], obs_dim[1][1]), **factory_kwargs),
-            "occupancy":        torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
-            "visibility": torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
+            "occupancy":   torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
+            "visibility":  torch.zeros((buffer_size, self.n_bytes, grid_dim), device=device, dtype=torch.uint8),
         }, batch_size=(buffer_size, ))
         self.states = torch.zeros((buffer_size, l_rollout, state_dim), **factory_kwargs)
         self.actions = torch.zeros((buffer_size, l_rollout, action_dim), **factory_kwargs)
@@ -222,6 +222,7 @@ class RolloutBufferGRID:
         self.max_size = buffer_size
         self.size = 0
         self.ptr = 0
+        self.time = 0
     
     @timeit
     def compress_obs(self, obs: TensorDict):
@@ -266,32 +267,92 @@ class RolloutBufferGRID:
         return expanded
 
     @torch.no_grad()
-    def add(self, obs, state, action, reward, value, next_done, next_terminated, next_value):
-        # type: (TensorDict, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> None
+    def add(
+        self,
+        obs: TensorDict,
+        state: Optional[Tensor] = None,
+        action: Optional[Tensor] = None,
+        reward: Optional[Tensor] = None,
+        value: Optional[Tensor] = None,
+        next_done: Optional[Tensor] = None,
+        next_terminated: Optional[Tensor] = None,
+        next_value: Optional[Tensor] = None
+    ):
         n = obs.shape[0]
         start1, end1 = self.ptr, min(self.max_size, self.ptr + n)
         start2, end2 = 0, max(0, self.ptr + n - self.max_size)
         n1, n2 = end1 - start1, end2 - start2
+        
         obs = self.compress_obs(obs)
         self.obs[start1:end1] = obs[:n1]
-        self.states[start1:end1] = state[:n1]
-        self.actions[start1:end1] = action[:n1]
-        self.rewards[start1:end1] = reward[:n1]
-        self.values[start1:end1] = value[:n1]
-        self.dones[start1:end1] = next_done[:n1]
-        self.terminated[start1:end1] = next_terminated[:n1]
-        self.next_values[start1:end1] = next_value[:n1]
         if n2 > 0:
             self.obs[start2:end2] = obs[n1:]
-            self.states[start1:end1] = state[:n1]
-            self.actions[start2:end2] = action[n1:]
-            self.rewards[start2:end2] = reward[n1:]
-            self.values[start2:end2] = value[n1:]
-            self.dones[start2:end2] = next_done[n1:]
-            self.terminated[start2:end2] = next_terminated[n1:]
-            self.next_values[start2:end2] = next_value[n1:]
+        
+        buffers = [self.states, self.actions, self.rewards, self.values, self.dones, self.terminated, self.next_values]
+        data = [state, action, reward, value, next_done, next_terminated, next_value]
+        for i, (buf, dat) in enumerate(zip(buffers, data)):
+            if dat is None:
+                continue
+            buf[start1:end1] = dat[:n1]
+            if n2 > 0:
+                buf[start2:end2] = dat[n1:]
+        
         self.ptr = (self.ptr + n) % self.max_size
         self.size = min(self.size + n, self.max_size)
+    
+    @torch.no_grad()
+    def add_step(
+        self,
+        obs: TensorDict,
+        state: Optional[Tensor] = None,
+        action: Optional[Tensor] = None,
+        reward: Optional[Tensor] = None,
+        value: Optional[Tensor] = None,
+        next_done: Optional[Tensor] = None,
+        next_terminated: Optional[Tensor] = None,
+        next_value: Optional[Tensor] = None
+    ):
+        # compress occupancy and visibility
+        byte_idx, bit_idx = divmod(self.time, 8)
+        base = self.bitmask[bit_idx]
+        occupied_compressed = obs["occupancy"].to(torch.uint8) * base
+        visible_compressed = obs["visibility"].to(torch.uint8) * base
+        
+        n = obs.shape[0]
+        start1, end1 = self.ptr, min(self.max_size, self.ptr + n)
+        start2, end2 = 0, max(0, self.ptr + n - self.max_size)
+        n1, n2 = end1 - start1, end2 - start2
+        
+        if self.time == 0:
+            self.obs["occupancy"][start1:end1] = 0
+            self.obs["visibility"][start1:end1] = 0
+            if n2 > 0:
+                self.obs["occupancy"][start2:end2] = 0
+                self.obs["visibility"][start2:end2] = 0
+        self.obs["occupancy"][start1:end1, byte_idx] += occupied_compressed[:n1]
+        self.obs["visibility"][start1:end1, byte_idx] += visible_compressed[:n1]
+        self.obs["state"][start1:end1, self.time] = obs["state"][:n1]
+        self.obs["perception"][start1:end1, self.time] = obs["perception"][:n1]
+        if n2 > 0:
+            self.obs["occupancy"][start2:end2, byte_idx] += occupied_compressed[n1:]
+            self.obs["visibility"][start2:end2, byte_idx] += visible_compressed[n1:]
+            self.obs["state"][start2:end2, self.time] = obs["state"][n1:]
+            self.obs["perception"][start2:end2, self.time] = obs["perception"][n1:]
+        
+        buffers = [self.states, self.actions, self.rewards, self.values, self.dones, self.terminated, self.next_values]
+        data = [state, action, reward, value, next_done, next_terminated, next_value]
+        for i, (buf, dat) in enumerate(zip(buffers, data)):
+            if dat is None:
+                continue
+            buf[start1:end1, self.time] = dat[:n1]
+            if n2 > 0:
+                buf[start2:end2] = dat[n1:]
+        
+        self.time += 1
+        if self.time == self.l_rollout:
+            self.time = 0
+            self.ptr = (self.ptr + n) % self.max_size
+            self.size = min(self.size + n, self.max_size)
     
     def sample4wm(self, batch_size):
         # type: (int) -> Tuple[TensorDict, Tensor, Tensor, Tensor]

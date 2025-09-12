@@ -59,7 +59,6 @@ class YOPOBase(nn.Module, ABC):
         self.G = torch.tensor([[0., 0., 9.81]], device=device)
         self.gamma: float = cfg.gamma
         self.expl_prob: float = cfg.expl_prob
-        self.grad_norm: Optional[float] = cfg.grad_norm
         self.t_next = torch.tensor(cfg.t_next, device=device) if cfg.t_next is not None else self.t_vec[1]
         self.device = device
         self.img_h = img_h
@@ -120,6 +119,31 @@ class YOPOBase(nn.Module, ABC):
         state_input = torch.cat([target_vel_p, v_curr_p, a_curr_p], dim=-1) # [N, HW, 9]
         return state_input
 
+    def render_trajectories(self, env, policy_info, p_w, rotmat_b2w):
+        # type: (ObstacleAvoidanceYOPO, Dict[str, Tensor], Tensor, Tensor) -> None
+        if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
+            renderer_n_envs = env.renderer.n_envs
+            if not hasattr(self, "lines_tensor"):
+                self.lines_tensor = torch.empty(renderer_n_envs, self.n_pitch*self.n_yaw, self.n_points-1, 2, 3, device=self.device) # [N, HW, T-1, 2, 3]
+                self.lines_field = ti.Vector.field(3, dtype=ti.f32, shape=(renderer_n_envs * (self.n_pitch*self.n_yaw) * (self.n_points-1) * 2))
+                self.color_tensor = torch.ones(renderer_n_envs, self.n_pitch*self.n_yaw, self.n_points-1, 2, 3, device=self.device) # [N, HW, T-1, 2, 3]
+                self.color_field = ti.Vector.field(3, dtype=ti.f32, shape=(renderer_n_envs * (self.n_pitch*self.n_yaw) * (self.n_points-1) * 2))
+            
+            p_traj_b, _, _ = get_traj_points(self.coef_mats, policy_info["traj_coef"]) # [N, HW, T, 3]
+            p_traj_w = mvp(rotmat_b2w.unsqueeze(1).unsqueeze(1), p_traj_b) + p_w.unsqueeze(1).unsqueeze(1) # [N, HW, T, 3]
+            p_traj_render = p_traj_w[:renderer_n_envs].to(torch.float32) + env.renderer.env_origin.unsqueeze(1).unsqueeze(1) # [N, HW, T, 3]
+            self.lines_tensor[..., 0, :] = p_traj_render[..., :-1, :]
+            self.lines_tensor[..., 1, :] = p_traj_render[..., 1:, :]
+            self.lines_field.from_torch(torch2ti(self.lines_tensor.flatten(end_dim=-2)))
+            
+            best_idx = policy_info["best_idx"][:renderer_n_envs] # [N, ]
+            env_idx = torch.arange(renderer_n_envs, device=self.device)
+            self.color_tensor.fill_(1.)
+            self.color_tensor[env_idx, best_idx] = torch.tensor([0., 1., 0.], device=self.device).view(1, 1, 1, 3)
+            self.color_field.from_torch(self.color_tensor.flatten(end_dim=-2))
+            
+            env.renderer.gui_scene.lines(self.lines_field, per_vertex_color=self.color_field, width=3.)
+
     @abstractmethod
     def inference(self, obs: TensorDict) -> Tuple[Tensor, Tensor]:
         pass
@@ -150,6 +174,7 @@ class YOPO(YOPOBase):
             "out_dim": 10
         }
         self.net = YOPONet(layers=cfg.network, **kwargs).to(device)
+        self.grad_norm: Optional[float] = cfg.grad_norm
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
 
     @timeit
@@ -184,31 +209,6 @@ class YOPO(YOPOBase):
             "best_idx": best_idx
         }
         return a_next_w, policy_info
-
-    def render_trajectories(self, env, policy_info, p_w, rotmat_b2w):
-        # type: (ObstacleAvoidanceYOPO, Dict[str, Tensor], Tensor, Tensor) -> None
-        if env.renderer is not None and env.renderer.enable_rendering and not env.renderer.headless:
-            renderer_n_envs = env.renderer.n_envs
-            if not hasattr(self, "lines_tensor"):
-                self.lines_tensor = torch.empty(renderer_n_envs, self.n_pitch*self.n_yaw, self.n_points-1, 2, 3, device=self.device) # [N, HW, T-1, 2, 3]
-                self.lines_field = ti.Vector.field(3, dtype=ti.f32, shape=(renderer_n_envs * (self.n_pitch*self.n_yaw) * (self.n_points-1) * 2))
-                self.color_tensor = torch.ones(renderer_n_envs, self.n_pitch*self.n_yaw, self.n_points-1, 2, 3, device=self.device) # [N, HW, T-1, 2, 3]
-                self.color_field = ti.Vector.field(3, dtype=ti.f32, shape=(renderer_n_envs * (self.n_pitch*self.n_yaw) * (self.n_points-1) * 2))
-            
-            p_traj_b, _, _ = get_traj_points(self.coef_mats, policy_info["traj_coef"]) # [N, HW, T, 3]
-            p_traj_w = mvp(rotmat_b2w.unsqueeze(1).unsqueeze(1), p_traj_b) + p_w.unsqueeze(1).unsqueeze(1) # [N, HW, T, 3]
-            p_traj_render = p_traj_w[:renderer_n_envs].to(torch.float32) + env.renderer.env_origin.unsqueeze(1).unsqueeze(1) # [N, HW, T, 3]
-            self.lines_tensor[..., 0, :] = p_traj_render[..., :-1, :]
-            self.lines_tensor[..., 1, :] = p_traj_render[..., 1:, :]
-            self.lines_field.from_torch(torch2ti(self.lines_tensor.flatten(end_dim=-2)))
-            
-            best_idx = policy_info["best_idx"][:renderer_n_envs] # [N, ]
-            env_idx = torch.arange(renderer_n_envs, device=self.device)
-            self.color_tensor.fill_(1.)
-            self.color_tensor[env_idx, best_idx] = torch.tensor([0., 1., 0.], device=self.device).view(1, 1, 1, 3)
-            self.color_field.from_torch(self.color_tensor.flatten(end_dim=-2))
-            
-            env.renderer.gui_scene.lines(self.lines_field, per_vertex_color=self.color_field, width=3.)
 
     @timeit
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: TensorDict, on_step_cb=None):

@@ -11,7 +11,7 @@ from omegaconf import DictConfig
 from diffaero.network.networks import CNNBackbone
 from diffaero.utils.logger import Logger
 
-class YOPONet:
+class YOPONet(nn.Module):
     def __init__(
         self,
         layers: List[Tuple[int, int, int]],
