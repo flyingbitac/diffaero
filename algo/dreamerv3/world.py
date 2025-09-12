@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import numpy as np
 from omegaconf import DictConfig
 
-from diffaero.env import PositionControl, ObstacleAvoidance, ObstacleAvoidanceGrid, Racing
+from diffaero.env import PositionControl, ObstacleAvoidance, Racing
 from diffaero.algo.dreamerv3.models.state_predictor import DepthStateModel, onehotsample
 from diffaero.algo.dreamerv3.models.agent import ActorCriticAgent
 from diffaero.algo.dreamerv3.models.blocks import symlog
