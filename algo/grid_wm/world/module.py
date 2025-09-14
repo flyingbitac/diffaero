@@ -117,6 +117,27 @@ class ImageDecoderMLP(nn.Module):
         return preds.detach(), loss
 
 class GridDecoder(nn.Module):
+    @staticmethod
+    def upconv3d3x3(in_channels, out_channels):
+        return nn.ConvTranspose3d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            output_padding=1
+        )
+    
+    @staticmethod
+    def conv3d3x3(in_channels, out_channels):
+        return nn.Conv3d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1
+        )
+    
     def __init__(self, rssm_cfg: DictConfig, grid_cfg: DictConfig):
         super().__init__()
         input_dim = rssm_cfg.deter + rssm_cfg.stoch * rssm_cfg.classes
@@ -127,55 +148,30 @@ class GridDecoder(nn.Module):
         
         self.input_layer = nn.Sequential(
             nn.Linear(input_dim, self.fmap_channels * math.prod(self.fmap_shape)),
-            nn.SiLU())
+            nn.ELU()
+        )
         self.up_convs = nn.Sequential(
-            nn.ConvTranspose3d(
-                in_channels=self.fmap_channels,
-                out_channels=self.fmap_channels//2,
-                kernel_size=3,
-                stride=2,
-                padding=1,
-                output_padding=1
-            ),
-            nn.SiLU(),
-            nn.Conv3d(
-                in_channels=self.fmap_channels//2,
-                out_channels=self.fmap_channels//2,
-                kernel_size=3,
-                stride=1,
-                padding=1
-            ),
-            nn.SiLU(),
-            nn.ConvTranspose3d(
-                in_channels=self.fmap_channels//2,
-                out_channels=self.fmap_channels//4,
-                kernel_size=3,
-                stride=2,
-                padding=1,
-                output_padding=1
-            ),
-            nn.SiLU(),
-            nn.Conv3d(
-                in_channels=self.fmap_channels//4,
-                out_channels=1,
-                kernel_size=3,
-                stride=1,
-                padding=1
-            )
+            self.upconv3d3x3(self.fmap_channels, self.fmap_channels//2),
+            nn.ELU(),
+            # self.conv3d3x3(self.fmap_channels//2, self.fmap_channels//2),
+            # nn.ELU(),
+            self.upconv3d3x3(self.fmap_channels//2, self.fmap_channels//4),
+            nn.ELU(),
+            self.conv3d3x3(self.fmap_channels//4, 1)
         )
     
     def forward(self, x):
         flattened_fmap = self.input_layer(x)
         reshaped_fmap = flattened_fmap.reshape(
             *flattened_fmap.shape[:-1], self.fmap_channels, *self.fmap_shape)
-        flag = reshaped_fmap.ndim == 6
-        if flag:
+        rollout = reshaped_fmap.ndim == 6
+        if rollout:
             B, T, C, L, W, H = reshaped_fmap.shape
             reshaped_fmap = reshaped_fmap.reshape(B*T, C, L, W, H)
         else:
             B, C, L, W, H = reshaped_fmap.shape
         out = self.up_convs(reshaped_fmap)
-        if flag:
+        if rollout:
             out = out.reshape(B, T, self.n_grids)
         else:
             out = out.reshape(B, self.n_grids)
