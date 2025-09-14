@@ -1,5 +1,5 @@
 name: gridyopo
-l_rollout: 32
+l_rollout: 1
 odom_free: False
 
 actor:
@@ -115,5 +115,5 @@ wm:
     soft_label: 0.
 
     batch_size: ${n_envs}
-    buffer_size: 5e4
+    buffer_size: 1e4
     n_epochs: 4
