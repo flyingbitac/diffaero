@@ -1,0 +1,37 @@
+app_name: DiffAero Testing Script
+
+header: ===== ${hydra.help.app_name} =====
+
+footer: |-
+  View https://github.com/zxh0916/diffaero for more information.
+  Powered by Hydra (https://hydra.cc)
+  Use --hydra-help to view Hydra specific help and for Tab completion.
+
+# Basic Hydra flags:
+#   $FLAGS_HELP
+#
+# Config groups, choose one of:
+#   $APP_CONFIG_GROUPS: All config groups that does not start with hydra/.
+#   $HYDRA_CONFIG_GROUPS: All the Hydra config groups (starts with hydra/)
+#
+# Configuration generated with overrides:
+#   $CONFIG : Generated config
+#
+template: |-
+  ${hydra.help.header}
+  This is ${hydra.help.app_name}!
+  You can start the simulation and test your trained policy fully on GPU with this script!
+  If `checkpoint` not specified, the script will use the latest checkpoint in the `outputs` directory.
+
+  Compose your configuration from those groups:
+
+  ↓↓↓↓↓ Configuration groups ↓↓↓↓↓
+  $APP_CONFIG_GROUPS↑↑↑↑↑ Configuration groups ↑↑↑↑↑
+
+  Visualize the environment and your trained policy via GUI:
+  `python script/test.py checkpoint=/absolute/path/to/checkpoint headless=False`
+
+  Run many experiments in parallel by:
+  `python script/test.py -m checkpoint=/absolute/path/to/checkpoint seed=0,1,2,3 n_jobs=4`
+  
+  ${hydra.help.footer}

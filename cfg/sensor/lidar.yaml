@@ -1,0 +1,30 @@
+name: lidar
+
+depression_angle: -20.
+elevation_angle: 20.
+
+n_rays_vertical: 5
+n_rays_horizontal: 36
+
+max_dist: 20
+
+# pose randomization
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+pitch_angle_deg:
+  default: 0
+  enabled: True
+  min: -3
+  max: 3
+
+yaw_angle_deg:
+  default: 0
+  enabled: True
+  min: -10
+  max: 10
+
+roll_angle_deg:
+  default: 0
+  enabled: True
+  min: -3
+  max: 3

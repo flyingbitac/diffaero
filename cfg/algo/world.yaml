@@ -1,0 +1,102 @@
+name: world
+n_envs: ${n_envs}
+l_rollout: 1
+
+common:
+  device: cuda:1
+  run_name: v3oaa2cbigcontinu
+  use_checkpoint: False
+  use_symlog: True
+  total_timesteps: 200_000_000
+  # checkpoint_path: /home/zxh/ws/wrqws/diffaero/outputs/2024-12-27/22-18-41/checkpoints
+  checkpoint_path:
+  is_test: False
+  use_amp: False
+  
+world_state_env:
+  _target_: algo.dreamerv3.wmenv.DepthStateEnvConfig
+  horizon: 16
+  batch_size: 1024
+  batch_length: 4
+  use_perception: False
+  use_extern: False
+
+replaybuffer:
+  _target_: algo.dreamerv3.wmenv.buffercfg
+  perception_width: 16
+  perception_height: 9
+  state_dim: 13
+  action_dim: 3
+  num_envs: 64
+  max_length: 1048576
+  warmup_length: 5000
+  store_on_gpu: True
+  device: "cuda:1"
+  use_perception: True
+
+state_predictor:
+  state_model:
+    _target_: algo.dreamerv3.models.state_predictor.DepthStateModelCfg
+    state_dim: 13 
+    image_width: 16
+    image_height: 9
+    hidden_dim: 512
+    action_dim: 3
+    latent_dim: 1024
+    categoricals: 32
+    num_classes: 255
+    use_simnorm: False
+    only_state: False
+    img_recon_loss_weight: 1.
+    end_loss_pos_weight: 30
+    enable_rec: True
+    rec_coef: 1.0
+    rew_coef: 1.0
+    end_coef: 1.0
+    rep_coef: 0.1
+    dyn_coef: 0.5
+
+  training:
+    max_grad_norm: 100.0
+    total_steps: 500000
+    batch_size: 64
+    batch_length: 64
+    worldmodel_update_freq: 1
+    use_amp: ${algo.common.use_amp}
+
+  optimizer:
+    lr: 1e-4
+    weight_decay: 1e-2
+    eps: 1e-8
+
+actor_critic:
+  model:
+    __target__: algo.dreamerv3.models.agent.ActorCriticConfig
+    feat_dim: 1536 # hidden + latent
+    num_layers: 2
+    hidden_dim: 256
+    action_dim: 3
+    gamma: 0.985
+    lambd: 0.95
+    entropy_coef: 3e-4
+    device: cuda:1
+    max_std: 1
+    min_std: 0.1
+  training:
+    max_grad_norm: 100.0
+    total_steps: 500000
+    imagine_length: 16
+    use_states: False
+    scale_rewards: False
+
+training:
+  max_grad_norm: 1.0 
+  total_steps: 500000
+  batch_size: 64     
+  batch_length: 6    
+  total_episodes: 1000
+  imagine_period: 10000
+  use_amp: ${algo.common.use_amp}
+
+imagine:
+  imagine_length: 64 

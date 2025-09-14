@@ -1,0 +1,64 @@
+name: racing
+
+dynamics: ${dynamics}
+dt: 0.0333
+length:
+  default: 10
+  enabled: False
+  min: 10
+  max: 10
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+obs_frame: "world" # "world" or "local"
+max_time: 40
+wait_before_truncate: 40
+max_target_vel: 10.
+min_target_vel: 5.
+last_action_in_obs: False
+use_vel_track: False
+ref_path: ${ref_path}
+
+gates:
+  radius: 1.5
+  height: 1.5
+
+loss_weights:
+  pointmass:
+    vel: 0.5
+    jerk: 2e-6
+    pos: 3.
+    progress: 0.
+    track: 1.
+  quadrotor:
+    vel: 1.
+    jerk: 0.001
+    pos: 3.
+    attitude: 0.1
+
+reward_weights:
+  constant: 0.
+  pointmass:
+    vel: 0.
+    jerk: 0.
+    passed: 0.
+    oob: 0.
+    pos: 0.
+    collision: 10
+    progress: 1.
+    track: 0.
+  quadrotor:
+    vel: 0.
+    jerk: 0.1
+    pos: 0.
+    attitude: 0.
+    progress: 10.
+    collision: 10
+
+render:
+  env_spacing: 0.
+
+defaults:
+  - render: pc_render
+  - randomizer: default_randomizer
+  - imu: default_imu
+  - _self_

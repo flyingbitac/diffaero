@@ -1,0 +1,74 @@
+name: obstacle_avoidance
+
+sensor: ${sensor}
+dynamics: ${dynamics}
+dt: 0.0333
+length:
+  default: 5
+  enabled: True
+  min: 3
+  max: 7
+height_scale: 0.25
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+obs_frame: "local" # "world" or "local"
+max_time: 30
+wait_before_truncate: 5.
+max_target_vel: 4.
+min_target_vel: 2.
+last_action_in_obs: False
+r_drone: 0.14
+n_obstacles: 12
+ground_plane: True
+
+loss_weights:
+  pointmass:
+    vel: 1.
+    z: 2.
+    oa: 4.
+    jerk: 0.02
+    pos: 5.
+    collision: 0.
+  quadrotor:
+    vel: 1.
+    oa: 1.
+    jerk: 1.
+    pos: 5.
+    collision: 0.
+
+reward_weights:
+  # for Reinforcement Learning
+  # constant: 1.
+  # pointmass:
+  #   vel: 0.06
+  #   z: 0.2
+  #   oa: 0.6
+  #   jerk: 0.0005
+  #   pos: 0.5
+  #   arrive: 0.
+  #   collision: 5.
+
+  # for SHA2C
+  constant: 1.
+  pointmass:
+    vel: 0.
+    z: 0.
+    oa: 0.
+    jerk: 0.001
+    pos: 0.
+    arrive: 1.
+    collision: 50.
+  quadrotor:
+    vel: 1.
+    oa: 1.
+    jerk: 1.
+    pos: 5.
+    collision: 50.
+
+enable_grid: False
+defaults:
+  - render: oa_render
+  - randomizer: default_randomizer
+  - imu: default_imu
+  - obstacles: small_room
+  - _self_

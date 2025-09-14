@@ -1,0 +1,76 @@
+name: quadrotor
+
+n_envs: ${n_envs}
+n_agents: ${n_agents}
+dt: ${env.dt}
+action_frame: "body"
+alpha: 1.0              # gradient decay factor
+m:                      # total mass
+  default: 1.0
+  enabled: True
+  min: 0.8
+  max: 1.2
+arm_l:                  # arm length
+  default: 0.15
+  enabled: True
+  min: 0.1
+  max: 0.2
+c_tau:                  # torque constant
+  default: 0.0133
+  enabled: True
+  min: 0.01
+  max: 0.0166
+g: 9.81                 # gravity
+J:
+  xy:
+    default: 0.01
+    enabled: True
+    min: 0.008
+    max: 0.012
+  z:
+    default: 0.02
+    enabled: True
+    min: 0.015
+    max: 0.025
+D:
+  xy:
+    default: 0.6
+    enabled: True
+    min: 0.5
+    max: 0.7
+  z:
+    default: 0.6
+    enabled: True
+    min: 0.5
+    max: 0.7
+max_w_xy: 5.0           # max angular velocity (xy)
+max_w_z: 1.0            # max angular velocity (z)
+max_T: 4.179            # max thrust
+min_T: 0.0              # min thrust
+lmbda: 0.1              # acc exp smoothing
+
+solver_type: "rk4" # "rk4" or "euler"
+n_substeps: 1
+
+controller:
+  compensate_gravity: False
+
+  min_normed_thrust: 0.
+  max_normed_thrust: 5.
+
+  min_pitch_rate: -3.14
+  max_pitch_rate: 3.14
+
+  min_roll_rate: -3.14
+  max_roll_rate: 3.14
+
+  min_yaw_rate: -3.14
+  max_yaw_rate: 3.14
+
+  thrust_ratio: 1.
+  torque_ratio: 1.
+
+  min_normed_torque: [-15., -15., -15.]
+  max_normed_torque: [ 15.,  15.,  15.]
+
+  K_angvel: [1., 1., 1.]

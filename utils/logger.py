@@ -1,0 +1,206 @@
+from typing import Union, List
+import os
+import copy
+import inspect
+import logging
+from pathlib import Path
+
+import hydra
+from omegaconf import OmegaConf, DictConfig
+from torch.utils.tensorboard.writer import SummaryWriter
+from tqdm import tqdm
+
+from diffaero import DIFFAERO_ROOT_DIR
+
+class TensorBoardLogger:
+    def __init__(
+        self,
+        cfg: DictConfig,
+        logdir: str,
+        run_name: str = ""
+    ):
+        self.cfg = cfg
+        self.logdir = logdir
+        Logger.info("Using Tensorboard Logger.")
+        self.writer = SummaryWriter(log_dir=os.path.join(self.logdir, run_name))
+        self.log_hparams()
+    
+    def log_scalar(self, tag, value, step):
+            self.writer.add_scalar(tag, value, step)
+    
+    def log_scalars(self, value_dict, step):
+        for k, v in value_dict.items():
+            if isinstance(v, dict):
+                self.log_scalars({k+"/"+k_: v_ for k_, v_ in v.items()}, step)
+            else:
+                self.log_scalar(k, v, step)
+    
+    def log_histogram(self, tag, values, step):
+        self.writer.add_histogram(tag, values, step)
+
+    def log_image(self, tag, img, step):
+        self.writer.add_image(tag, img, step, dataformats='CHW')
+    
+    def log_images(self, tag, img, step):
+        self.writer.add_images(tag, img, step)
+            
+    def log_video(self, tag, video, step, fps):
+        self.writer.add_video(tag, video, step, fps=fps)
+            
+    def close(self):
+        self.writer.close()
+
+    def log_hparams(self):
+        to_yaml = lambda x: OmegaConf.to_yaml(x, resolve=True).replace("  ", "- ").replace("\n", "  \n")
+        if hasattr(self.cfg.env, "render"):
+            delattr(self.cfg.env, "render")
+        self.writer.add_text("Env HParams", to_yaml(self.cfg.env), 0)
+        self.writer.add_text("Train HParams", to_yaml(self.cfg.algo), 0)
+        overrides_path = os.path.join(self.logdir, ".hydra", "overrides.yaml")
+        if os.path.exists(overrides_path):
+            with open(overrides_path, "r") as f:
+                overrides = [line.strip('- ') for line in f.readlines()]
+                self.writer.add_text("Overrides", ' '.join(overrides), 0)
+
+
+class WandBLogger:
+    def __init__(
+        self,
+        cfg: DictConfig,
+        logdir: str,
+        run_name: str = ""
+    ):
+        self.cfg = cfg
+        self.logdir = logdir
+        Logger.info("Using WandB Logger.")
+        
+        overrides_path = os.path.join(self.logdir, ".hydra", "overrides.yaml")
+        if os.path.exists(overrides_path):
+            with open(overrides_path, "r") as f:
+                overrides = " ".join([line.strip('- ') for line in f.readlines()])
+        import wandb
+        wandb.init(
+            project=cfg.logger.project,
+            entity=cfg.logger.entity,
+            dir=self.logdir,
+            sync_tensorboard=False,
+            config={**dict(cfg), "overrides": overrides}, # type: ignore
+            name=run_name,
+            settings=wandb.Settings(
+                quiet=cfg.logger.quiet
+            )
+        )
+        self.writer = wandb
+    
+    def log_scalar(self, tag, value, step):
+        self.writer.log({tag: value}, step=step)
+    
+    def log_scalars(self, value_dict, step):
+        for k, v in value_dict.items():
+            if isinstance(v, dict):
+                self.log_scalars({k+"/"+k_: v_ for k_, v_ in v.items()}, step)
+            else:
+                self.log_scalar(k, v, step)
+    
+    def log_histogram(self, tag, values, step):
+        self.writer.log({tag: values}, step=step)
+    
+    def log_image(self, tag, img, step):
+        self.writer.log({tag: img}, step=step)
+    
+    def log_images(self, tag, img, step):
+        self.writer.log({tag: img}, step=step)
+            
+    def log_video(self, tag, video, step, fps):
+        self.writer.log({tag: video}, step=step)
+            
+    def close(self):
+        self.writer.finish()
+
+
+def msg2str(*msgs):
+    return " ".join([str(msg) for msg in msgs])
+
+class Logger:
+    logging = logging.getLogger()
+    def __init__(
+        self,
+        cfg: DictConfig,
+        run_name: str = ""
+    ):
+        logger_alias = {
+            "tensorboard": TensorBoardLogger,
+            "wandb": WandBLogger
+        }
+        self.cfg = copy.deepcopy(cfg)
+        assert str(cfg.log_level).upper() in logging._nameToLevel.keys()
+        Logger.logging.setLevel(logging._nameToLevel[str(cfg.log_level).upper()])
+        hydra_cfg = hydra.core.hydra_config.HydraConfig.get() # type: ignore
+        
+        self.logdir = hydra_cfg.runtime.output_dir
+        run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
+        type = cfg.logger.name.lower()
+        self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](self.cfg, self.logdir, run_name)
+        Logger.info("Output directory:", self.logdir)
+        
+        is_multirun = hydra_cfg.mode == hydra.types.RunMode.MULTIRUN # type: ignore
+        job_id = hydra_cfg.job.num if is_multirun else 0
+        desc = f"Job {job_id:2d}" if is_multirun else ""
+        n = cfg.n_updates if hasattr(cfg, "n_updates") else cfg.n_steps
+        self.pbar = tqdm(range(n), position=job_id%self.cfg.n_jobs, desc=desc)
+    
+    @staticmethod
+    def _get_logger(inspect_stack: List[inspect.FrameInfo]):
+        rel_path = Path(inspect_stack[1].filename).resolve().relative_to(DIFFAERO_ROOT_DIR)
+        Logger.logging.name = f"{str(rel_path)}:{inspect_stack[1].lineno}"
+        return Logger.logging
+    
+    @staticmethod
+    def debug(*msgs):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).debug(msg2str(*msgs))
+
+    @staticmethod
+    def info(*msgs):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).info(msg2str(*msgs))
+
+    @staticmethod
+    def warning(*msgs):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).warning(msg2str(*msgs))
+
+    @staticmethod
+    def error(*msgs):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).error(msg2str(*msgs))
+
+    @staticmethod
+    def critical(*msgs):
+        with tqdm.external_write_mode():
+            Logger._get_logger(inspect.stack()).critical(msg2str(*msgs))
+    
+    @property
+    def n(self):
+        return self.pbar.n
+
+    def log_scalar(self, tag, value):
+        return self._logger.log_scalar(tag, value, self.n)
+    
+    def log_scalars(self, value_dict):
+        return self._logger.log_scalars(value_dict, self.n)
+    
+    def log_histogram(self, tag, values):
+        return self._logger.log_histogram(tag, values, self.n)
+    
+    def log_image(self, tag, img):
+        return self._logger.log_image(tag, img, self.n)
+    
+    def log_images(self, tag, img):
+        return self._logger.log_images(tag, img, self.n)
+            
+    def log_video(self, tag, video, fps):
+        return self._logger.log_video(tag, video, self.n, fps)
+            
+    def close(self):
+        return self._logger.close()

@@ -1,0 +1,6 @@
+**/__pycache__
+run.sh
+outputs/
+imgui.ini
+diffaero.egg-info/
+*.log

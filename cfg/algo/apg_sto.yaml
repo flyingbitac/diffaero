@@ -1,0 +1,9 @@
+name: apg_sto
+network: ${network}
+
+l_rollout: 32
+
+lr: 0.001
+max_grad_norm: 1.
+
+entropy_weight: 0.03

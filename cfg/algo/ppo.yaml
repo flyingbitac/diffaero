@@ -1,0 +1,18 @@
+name: ppo
+network: ${network}
+
+l_rollout: 16
+
+lr: 0.0026
+eps: 1e-8
+gamma: 0.99
+lmbda: 0.95
+entropy_weight: 0.01
+value_weight: 2
+clip_coef: 0.2
+clip_value_loss: True
+norm_adv: True
+actor_grad_norm: 1.
+critic_grad_norm: 
+n_minibatch: 8
+n_epoch: 4

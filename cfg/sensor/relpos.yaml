@@ -1,0 +1,5 @@
+name: relpos
+
+n_obstacles: ${env.n_obstacles}
+walls: ${env.obstacles.walls}
+ceiling: ${env.obstacles.ceiling}
