@@ -233,7 +233,6 @@ class GRIDYOPO(YOPOBase):
         discount = self.gamma ** torch.arange(T_2, device=self.device).reshape(1, 1, T_2)
         traj_reward_discounted = traj_rewards * discount * survive[..., :-1]
         terminal_value = self.critic(states[..., -1, :]) * survive[..., -1].float() * (self.gamma ** T_2)
-        # Logger.debug(survive[0, 0], terminal_value[0, 0].item())
         assert terminal_value.requires_grad and states.requires_grad
         traj_value = torch.sum(traj_reward_discounted, dim=-1) + terminal_value
         traj_value = traj_value / survive.float().sum(dim=-1).clamp(min=1.)
@@ -257,18 +256,8 @@ class GRIDYOPO(YOPOBase):
         N, HW, T_1, T_2 = obs.shape[0], self.n_pitch * self.n_yaw, self.n_points - 1, self.n_points - 2
         for _ in range(self.yopo_n_epochs):
             coef_xyz, score, latent = self.inference(obs) # [N, HW, 6, 3]
-            
-            p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T-1, 3]
-            p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T_1, 3)) + p_w.unsqueeze(1)
-            v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T_1, 3))
-            a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T_1, 3)) + self.G.unsqueeze(1)
-            
+            goal_rewards, differentiable_rewards, survive, p_traj_w, v_traj_w, a_traj_w = self.eval_traj(coef_xyz, p_w, rotmat_b2w, env)
             states = env.get_state(p_traj_w, v_traj_w, a_traj_w).reshape(N, HW, T_1, -1) # [N, HW, T-1, state_dim]
-            goal_rewards, differentiable_rewards, _, dead, _ = env.reward_fn(p_traj_w, v_traj_w, a_traj_w) # [N, HW*(T-1)]
-            goal_rewards = goal_rewards.reshape(N, HW, T_1) # [N, HW, T-1]
-            differentiable_rewards = differentiable_rewards.reshape(N, HW, T_1) # [N, HW, T-1]
-            survive = dead.reshape(N, HW, T_1).int().cumsum(dim=2).eq(0) # [N, HW, T-1]
-            
             critic_losses, critic_grad_norms = self.update_critic(states, goal_rewards, survive)
             actor_losses, actor_grad_norms = self.update_backbone(states, differentiable_rewards, survive, score)
         

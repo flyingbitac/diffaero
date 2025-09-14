@@ -2,7 +2,7 @@ name: yopot
 
 # network architecture
 head_hidden_dim: 128
-network: [
+cnn_layers: [
   # [in_channels, out_channels, stride]
   [1, 8, 1],
   [8, 16, 2],

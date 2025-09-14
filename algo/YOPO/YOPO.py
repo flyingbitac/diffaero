@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Dict, Callable
+from typing import Tuple, Optional, Dict, Union
 from abc import ABC, abstractmethod
 import os
 import sys
@@ -22,7 +22,7 @@ from .functions import (
     get_traj_points
 )
 from .network import YOPONet
-from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
+from diffaero.env import ObstacleAvoidanceYOPO, ObstacleAvoidanceGridYOPO
 from diffaero.dynamics.pointmass import point_mass_quat
 from diffaero.utils.math import mvp, rk4, quat_rotate
 from diffaero.utils.render import torch2ti
@@ -83,12 +83,14 @@ class YOPOBase(nn.Module, ABC):
     def primitive2body(self, vec_p: Tensor):
         return mvp(self.rotmat_p2b, vec_p)
     
+    @torch.jit.export
     def post_process(
         self,
         net_output: Tensor,
         v_curr_b: Tensor,
         a_curr_b: Tensor,
     ) -> Tuple[Tensor, Tensor]:
+        """Convert network output to trajectory coefficients."""
         p_end_b, v_end_b, a_end_b, score = chunk_and_unsquash(
             output=net_output,
             rpy_base=self.rpy_base,
@@ -109,6 +111,28 @@ class YOPOBase(nn.Module, ABC):
             a_end_b  # [N, HW, 3]
         )
         return coef_xyz, score
+    
+    @torch.jit.export
+    def eval_traj(
+        self,
+        coef_xyz: Tensor,
+        p_w: Tensor,
+        rotmat_b2w: Tensor,
+        env: Union[ObstacleAvoidanceYOPO, ObstacleAvoidanceGridYOPO]
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Extract trajectory points from coefficients and evaluate the reward and survival status."""
+        N, HW, T_1 = env.n_envs, self.n_pitch * self.n_yaw, self.n_points - 1
+        p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T-1, 3]
+        p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T_1, 3)) + p_w.unsqueeze(1)
+        v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T_1, 3))
+        a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T_1, 3)) + self.G.unsqueeze(1)
+        
+        goal_reward, differentiable_reward, _, dead, _ = env.reward_fn(p_traj_w, v_traj_w, a_traj_w) # [N, HW*(T-1)]
+        goal_reward = goal_reward.reshape(N, HW, T_1) # [N, HW, T-1]
+        differentiable_reward = differentiable_reward.reshape(N, HW, T_1) # [N, HW, T-1]
+        survive = dead.reshape(N, HW, T_1).int().cumsum(dim=2).eq(0) # [N, HW, T-1]
+        
+        return goal_reward, differentiable_reward, survive, p_traj_w, v_traj_w, a_traj_w
     
     def make_state_input(self, obs: TensorDict) -> Tensor:
         target_vel_b, v_curr_b, a_curr_b = obs["state"][..., :3], obs["state"][..., 3:6], obs["state"][..., 6:9]
@@ -173,7 +197,7 @@ class YOPO(YOPOBase):
             "head_hidden_dim": cfg.head_hidden_dim,
             "out_dim": 10
         }
-        self.net = YOPONet(layers=cfg.network, **kwargs).to(device)
+        self.net = YOPONet(layers=cfg.cnn_layers, **kwargs).to(device)
         self.grad_norm: Optional[float] = cfg.grad_norm
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.lr)
 
@@ -212,22 +236,16 @@ class YOPO(YOPOBase):
 
     @timeit
     def step(self, cfg: DictConfig, env: ObstacleAvoidanceYOPO, logger: Logger, obs: TensorDict, on_step_cb=None):
-        N, HW, T = env.n_envs, self.n_pitch * self.n_yaw, self.n_points - 1
+        N, HW, T_1 = env.n_envs, self.n_pitch * self.n_yaw, self.n_points - 1
         p_w, rotmat_b2w = env.p, env.dynamics.R
         
         self.train()
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
             coef_xyz, score = self.inference(obs) # [N, HW, 6, 3]
-            
-            p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T, 3]
-            p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T, 3)) + p_w.unsqueeze(1)
-            v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T, 3))
-            a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T, 3)) + self.G.unsqueeze(1)
-            _, traj_reward, _, dead, _ = env.reward_fn(p_traj_w, v_traj_w, a_traj_w)
-            traj_reward, dead = traj_reward.reshape(N, HW, T), dead.reshape(N, HW, T).float().cumsum(dim=2)
-            survive = (dead == 0.).float()
-            traj_reward_avg = torch.sum(traj_reward * survive, dim=-1) / survive.sum(dim=-1).clamp(min=1.)
+            goal_reward, differentiable_reward, survive, p_traj_w, v_traj_w, a_traj_w = self.eval_traj(coef_xyz, p_w, rotmat_b2w, env)
+            survive = survive.float()
+            traj_reward_avg = torch.sum(differentiable_reward * survive, dim=-1) / survive.sum(dim=-1).clamp(min=1.)
             score_loss = F.mse_loss(score, traj_reward_avg.detach())
             
             total_loss = -traj_reward_avg.mean() + 0.01 * score_loss
@@ -253,7 +271,7 @@ class YOPO(YOPOBase):
                     env_info=env_info)
         
         losses = {
-            "traj_reward": traj_reward.mean().item(),
+            "traj_reward": differentiable_reward.mean().item(),
             "score_loss": score_loss.item(),
             "total_loss": total_loss.item()}
         grad_norms = {"actor_grad_norm": grad_norm}

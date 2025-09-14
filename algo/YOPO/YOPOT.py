@@ -13,7 +13,7 @@ import taichi as ti
 
 from .functions import get_traj_points
 from .YOPO import YOPO
-from diffaero.env.obstacle_avoidance_yopo import ObstacleAvoidanceYOPO
+from diffaero.env import ObstacleAvoidanceYOPO
 from diffaero.network.agents import CriticV
 from diffaero.utils.nn import clip_grad_norm
 from diffaero.utils.math import mvp, rk4
@@ -128,17 +128,8 @@ class YOPOT(YOPO):
         for _ in range(cfg.algo.n_epochs):
             # traverse the trajectory and cumulate the loss
             coef_xyz, score = self.inference(obs) # [N, HW, 6, 3]
-            
-            p_traj_b, v_traj_b, a_traj_b = get_traj_points(self.coef_mats[1:], coef_xyz) # [N, HW, T-1, 3]
-            p_traj_w = mvp(rotmat_b2w.unsqueeze(1), p_traj_b.reshape(N, HW*T_1, 3)) + p_w.unsqueeze(1)
-            v_traj_w = mvp(rotmat_b2w.unsqueeze(1), v_traj_b.reshape(N, HW*T_1, 3))
-            a_traj_w = mvp(rotmat_b2w.unsqueeze(1), a_traj_b.reshape(N, HW*T_1, 3)) + self.G.unsqueeze(1)
-            
+            goal_reward, differentiable_reward, survive, p_traj_w, v_traj_w, a_traj_w = self.eval_traj(coef_xyz, p_w, rotmat_b2w, env)
             states = env.get_state(p_traj_w, v_traj_w, a_traj_w).reshape(N, HW, T_1, -1) # [N, HW, T-1, state_dim]
-            goal_reward, differentiable_reward, _, dead, _ = env.reward_fn(p_traj_w, v_traj_w, a_traj_w) # [N, HW*(T-1)]
-            goal_reward = goal_reward.reshape(N, HW, T_1) # [N, HW, T-1]
-            differentiable_reward = differentiable_reward.reshape(N, HW, T_1) # [N, HW, T-1]
-            survive = dead.reshape(N, HW, T_1).int().cumsum(dim=2).eq(0) # [N, HW, T-1]
             
             critic_losses, critic_grad_norms = self.update_critic(states, goal_reward, survive)
             actor_losses, actor_grad_norms = self.update_backbone(states, differentiable_reward, survive, score)
