@@ -1,4 +1,5 @@
 name: obstacle_avoidance_yopo
+abbr: oa_yopo
 
 sensor: ${sensor}
 dynamics: ${dynamics}

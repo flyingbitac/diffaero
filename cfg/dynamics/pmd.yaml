@@ -1,4 +1,5 @@
 name: discrete_pointmass
+abbr: pmd
 
 n_envs: ${n_envs}
 n_agents: ${n_agents}
