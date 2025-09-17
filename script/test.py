@@ -17,8 +17,7 @@ def main(cfg: DictConfig):
     from diffaero.utils.logger import Logger
     from diffaero.utils.runner import TestRunner
 
-    runname = f"__{cfg.runname}" if len(cfg.runname) > 0 else ""
-    logger = Logger(cfg, run_name=runname)
+    logger = Logger(cfg, run_name=cfg.runname)
 
     device_idx = cfg.device
     device = f"cuda:{device_idx}" if torch.cuda.is_available() and device_idx != -1 else "cpu"

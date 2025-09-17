@@ -1,4 +1,5 @@
 name: quadrotor
+abbr: quad
 
 n_envs: ${n_envs}
 n_agents: ${n_agents}
