@@ -138,9 +138,20 @@ class Logger:
         hydra_cfg = hydra.core.hydra_config.HydraConfig.get() # type: ignore
         
         self.logdir = hydra_cfg.runtime.output_dir
-        run_name = f"{cfg.dynamics.name}__{cfg.env.name}__{cfg.algo.name}__{cfg.network.name}{run_name}__{cfg.seed}"
+        run_names = (
+            [
+                cfg.dynamics.abbr,
+                cfg.env.abbr,
+                cfg.algo.name
+            ] + 
+            ([cfg.algo.network.name] if hasattr(cfg.algo, "network") and hasattr(cfg.algo.network, "name") else []) + 
+            ([run_name] if len(run_name) > 0 else []) +
+            [
+                str(cfg.seed)
+            ]
+        )
         type = cfg.logger.name.lower()
-        self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](self.cfg, self.logdir, run_name)
+        self._logger: Union[TensorBoardLogger, WandBLogger] = logger_alias[type](self.cfg, self.logdir, run_name="__".join(run_names))
         Logger.info("Output directory:", self.logdir)
         
         is_multirun = hydra_cfg.mode == hydra.types.RunMode.MULTIRUN # type: ignore

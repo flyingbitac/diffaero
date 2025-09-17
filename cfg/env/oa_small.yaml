@@ -1,4 +1,5 @@
 name: obstacle_avoidance
+abbr: oa_small
 
 sensor: ${sensor}
 dynamics: ${dynamics}

@@ -1,4 +1,5 @@
 name: racing
+abbr: racing
 
 dynamics: ${dynamics}
 dt: 0.0333
