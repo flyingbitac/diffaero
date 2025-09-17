@@ -1,5 +1,7 @@
 # DiffAero: A GPU-Accelerated Differentiable Simulation Framework for Efficient Quadrotor Policy Learning
 
+This repository contains the code of the paper: [DiffAero: A GPU-Accelerated Differentiable Simulation Framework for Efficient Quadrotor Policy Learning](https://arxiv.org/abs/2509.10247)
+
 - [DiffAero: A GPU-Accelerated Differentiable Simulation Framework for Efficient Quadrotor Policy Learning](#diffaero-a-gpu-accelerated-differentiable-simulation-framework-for-efficient-quadrotor-policy-learning)
   - [Introduction](#introduction)
   - [Features](#features)
@@ -12,10 +14,16 @@
     - [Installing the DiffAero](#installing-the-diffaero)
   - [Usage](#usage)
     - [Basic usage](#basic-usage)
-    - [Recording first-person view videos](#recording-first-person-view-videos)
+    - [Visualization](#visualization)
+      - [Visualization with taichi GUI](#visualization-with-taichi-gui)
+      - [Visualize the depth camera and LiDAR data](#visualize-the-depth-camera-and-lidar-data)
+      - [Record First-Person View Videos](#record-first-person-view-videos)
     - [Sweep across multiple configurations](#sweep-across-multiple-configurations)
-      - [Sweep across multiple devices](#sweep-across-multiple-devices)
+      - [Sweep across multiple GPUs in parallel](#sweep-across-multiple-gpus-in-parallel)
+      - [Automatic Hyperparameter Tuning](#automatic-hyperparameter-tuning)
   - [Deploy](#deploy)
+  - [TODO-List](#todo-list)
+  - [Citation](#citation)
 
 ## Introduction
 
@@ -35,7 +43,7 @@ DiffAero is a GPU-accelerated differentiable quadrotor simulator that paralleliz
 
 DiffAero now supports three flight tasks: 
 - **Position Control** (`env=pc`): The goal is to navigate to and hover on the specified target positions from random initial positions, without colliding with other agents.
-- **Obstacle Avoidance** (`env=oa`): The goal is to must navigate to and hover on target positions while avoiding collision with environmental obstacles and other quadrotors, given exteroceptive informations:
+- **Obstacle Avoidance** (`env=oa`): The goal is to navigate to and hover on target positions while avoiding collision with environmental obstacles and other quadrotors, given exteroceptive informations:
   - Relative positions of obstacles w.r.t. the quadrotor, or
   - Image from the depth camera attached to the quadrotor, or
   - Ray distance from the LiDAR attached to the quadrotor.
@@ -89,15 +97,15 @@ cd diffaero && pip install -e .
 Under the repo's root directory, run the following command to train a policy (`[a,b,c]` means `a` or `b` or `c`, etc.):
 
 ```bash
-python script/train.py env=[pc,oa,racing] algo=[apg,apg_sto,shac,sha2c,ppo,world] n_envs=4096 algo.l_rollout=32 headless=True
+python script/train.py env=[pc,oa,racing] algo=[apg,apg_sto,shac,sha2c,ppo,world]
 ```
 
 Note that `env=[pc,oa]` means use `env=pc` or `env=oa`, etc.
 
-Once the training is done, run the following command to test and visualize the trained policy:
+Once the training is done, run the following command to test the trained policy:
 
 ```bash
-python script/test.py env=[pc,oa,racing] checkpoint=/absolute/path/to/checkpoints/directory use_training_cfg=True n_envs=64 headless=False
+python script/test.py env=[pc,oa,racing] checkpoint=/absolute/path/to/checkpoints/directory use_training_cfg=True n_envs=64
 ```
 
 To list all configuration choices, run:
@@ -106,33 +114,79 @@ To list all configuration choices, run:
 python script/train.py -h
 ```
 
-To enable tab-completion in cli, run:
+To enable tab-completion in command line, run:
 ```bash
 eval "$(python script/train.py -sc install=bash)"
 ```
 
-### Recording first-person view videos
+### Visualization
 
-The Obstacle Avoidance task supports recording first-person view videos from the quadrotor's perspective. To record videos, set `headless=True` and `record_video=True` in the training or testing script. The recorded videos will be saved in the `outputs` directory under the repo's root directory.
+#### Visualization with taichi GUI
+
+DiffAero supports real-time visualization using [taichi GGUI system](https://docs.taichi-lang.org/docs/ggui). To enable the GUI, set `headless=False` in the training or testing command. Note that the taichi GUI can only be used  with GPU0 (`device=0`) on workstation with multiple GPUs. For example, to visualize the training process of the Position Control task, run:
 ```bash
-python script/train.py env=oa checkpoint=/absolute/path/to/checkpoints/directory use_training_cfg=True n_envs=16 headless=True record_video=True
+python script/train.py env=pc headless=False device=0
 ```
+
+#### Visualize the depth camera and LiDAR data
+
+To visualize the depth camera and LiDAR data in the Obstacle Avoidance task, set `display_image=True` in the training or testing command. For example, to visualize the depth camera data during testing, run:
+```bash
+python script/train.py env=oa display_image=True
+```
+
+#### Record First-Person View Videos
+
+The Obstacle Avoidance task supports recording first-person view videos from the quadrotor's first-person perspective. To record videos, set `record_video=True` in the testing command:
+```bash
+python script/train.py env=oa checkpoint=/absolute/path/to/checkpoints/directory use_training_cfg=True n_envs=16 record_video=True
+```
+The recorded videos will be saved in the `outputs/test/YYYY-MM-DD/HH-MM/video` directory under the repo's root directory.a
 
 ### Sweep across multiple configurations
 
-DiffAero supports sweeping across multiple configurations using [hydra](https://hydra.cc) and [joblib](https://joblib.readthedocs.io/en/stable/). For example, you can specify multiple values to one argument by separating them with commas, and hydra will automatically generate all combinations of the specified values. For example, to sweep across different environments and algorithms, you can run:
+DiffAero supports sweeping across multiple configurations using [hydra](https://hydra.cc). For example, you can specify multiple values to one argument by separating them with commas, and hydra will automatically generate all combinations of the specified values. For example, to sweep across different environments and algorithms, you can run:
 ```bash
 python script/train.py -m env=pc,oa,racing algo=apg,apg_sto,shac,sha2c,ppo,world # generate 3x6=18 combinations, executed sequentially
 ```
 
-#### Sweep across multiple devices
+#### Sweep across multiple GPUs in parallel
 
-For workstations with multiple GPUs, you can specify multiple devices and `n_jobs` greater than 1 to sweep through configuation combinations in parallel. For example, to use the first 4 GPUs (GPU0, GPU1, GPU2, GPU3), you can run:
+For workstations with multiple GPUs, you can specify multiple devices by setting `device` to string containing multiple GPU indices and setting `n_jobs` greater than 1 to sweep through configuation combinations in parallel using [hydra-joblib-launcher](https://hydra.cc/docs/plugins/joblib_launcher/) and [joblib](https://joblib.readthedocs.io/en/stable/). For example, to use the first 4 GPUs (GPU0, GPU1, GPU2, GPU3), run:
 ```bash
 # generate 2x2x3=12 combinations, executed in parallel on 4 GPUs, with 3 jobs each
 python script/train.py -m env=pc,oa algo=apg_sto,shac algo.l_rollout=16,32,64 n_jobs=4 device="0123" 
 ```
 
+#### Automatic Hyperparameter Tuning
+
+DiffAero supports automatic hyperparameter tuning using [hydra-optuna-sweeper](https://hydra.cc/docs/plugins/optuna_sweeper/) and [Optuna](https://optuna.org/). To search for the hyperparameter configuration that maximizes the success rate, uncomment the `override hydra/sweeper: optuna_sweep` line in `cfg/config_train.yaml`, specify the hyperparameters to be optimized in the `cfg/hydra/sweeper/optuna_sweep.yaml` file, and run
+```python
+python script/train.py -m
+```
+This feature can be combined with multi-device parallel sweep to further speed up the hyperparameter search.
+
 ## Deploy
 
 If you want to evaluate and deploy your trained policy in Gazebo or in real world, please refer to this repository (Coming soon).
+
+## TODO-List
+- [ ] Add simplified quadrotor dynamics model.
+- [ ] Add support to train policies with [rsl_rl](https://github.com/leggedrobotics/rsl_rl) (maybe).
+- [ ] Update the LiDAR sensor to be more realistic.
+
+## Citation
+
+If you find DiffAero useful in your research, please consider citing:
+
+```bibtex
+@misc{zhang2025diffaero,
+      title={DiffAero: A GPU-Accelerated Differentiable Simulation Framework for Efficient Quadrotor Policy Learning}, 
+      author={Xinhong Zhang and Runqing Wang and Yunfan Ren and Jian Sun and Hao Fang and Jie Chen and Gang Wang},
+      year={2025},
+      eprint={2509.10247},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2509.10247}, 
+}
+```
