@@ -4,3 +4,4 @@ outputs/
 imgui.ini
 diffaero.egg-info/
 *.log
+.venv
