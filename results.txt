@@ -1,0 +1,62 @@
+racing (Default):
+    training:
+        loss: 0.073
+        l_episode: 37.0
+        success_rate: 0.91
+        survival_rate: 0.94
+
+    testing:
+        l_episode: 33.3
+        success_rate: 0.70
+        survival_rate: 0.78
+        
+racing (Goal alignment):
+    loss: 0.1
+    reward: 0.1
+
+    training:
+        loss: 0.051
+        l_episode: 39.7
+        success_rate: 0.99
+        survival_rate: 1.00
+    
+    python script/test.py checkpoint=/home/chenjia/diffaero/outputs/train/2025-11-29/17-51-27/checkpoints use_training_cfg=True
+
+    testing:
+        l_episode: 35.0
+        success_rate: 0.86
+        survival_rate: 0.91
+        
+racing (Goal alignment):
+    loss: 0.27
+    reward: 0.16
+    
+    training:
+        loss: 0.151
+        l_episode: 39.2
+        success_rate: 0.96
+        survival_rate: 0.96
+    
+    python script/test.py checkpoint=/home/chenjia/diffaero/outputs/train/2025-11-29/multirun/18-09-37/0/checkpoints use_training_cfg=True
+
+    testing:
+        l_episode: 39.9
+        success_rate: 0.99
+        survival_rate: 1.00
+        
+racing (Goal alignment):
+    loss: 0.07
+    reward: 0.20
+    
+    training:
+        loss: 0.04
+        l_episode: 40.0
+        success_rate: 1.0
+        survival_rate: 1.0
+    
+    python script/test.py checkpoint=/home/chenjia/diffaero/outputs/train/2025-11-29/multirun/18-09-37/1/checkpoints use_training_cfg=True
+
+    testing:
+        l_episode: 40.0
+        success_rate: 1.00
+        survival_rate: 1.00

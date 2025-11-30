@@ -30,11 +30,13 @@ loss_weights:
     pos: 3.
     progress: 0.
     track: 1.
+    align: 0.07
   quadrotor:
     vel: 1.
     jerk: 0.001
     pos: 3.
     attitude: 0.1
+    align: 0.1
 
 reward_weights:
   constant: 0.
@@ -47,6 +49,7 @@ reward_weights:
     collision: 10
     progress: 1.
     track: 0.
+    align: 0.2
   quadrotor:
     vel: 0.
     jerk: 0.1
@@ -54,6 +57,7 @@ reward_weights:
     attitude: 0.
     progress: 10.
     collision: 10
+    align: 0.1
 
 render:
   env_spacing: 0.

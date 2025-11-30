@@ -297,12 +297,21 @@ class Racing(BaseEnv):
             
             # forward = torch.tensor([[-1., 0., 0.]], device=self.device)
             # vel_loss = torch.sum(F.normalize(vel_g, dim=-1) * forward, dim=-1)
+
+            vel_dir = F.normalize(self.dynamics._vel_ema, dim=-1)
+
+            # Direction from drone to gate center
+            to_gate = F.normalize(gate_pos - curr_pos, dim=-1)
+
+            # Alignment loss: 0 when perfectly aligned, 2 when opposite
+            align_loss = 1. - torch.sum(vel_dir * to_gate, dim=-1).clamp(-1.0, 1.0)
             
             jerk_loss = F.mse_loss(self.a, action, reduction="none").sum(dim=-1)
             total_loss = (
                 self.loss_weights.pointmass.vel * vel_loss +
                 self.loss_weights.pointmass.jerk * jerk_loss +
-                self.loss_weights.pointmass.progress * progress_loss
+                self.loss_weights.pointmass.progress * progress_loss +
+                self.loss_weights.pointmass.align * align_loss
             )
             total_reward = (
                 self.reward_weights.constant - 
@@ -313,7 +322,8 @@ class Racing(BaseEnv):
                 self.reward_weights.pointmass.pos * pos_loss -
                 self.reward_weights.pointmass.progress * progress_loss -
                 self.reward_weights.pointmass.collision * collision_loss - 
-                self.reward_weights.pointmass.track * track_loss
+                self.reward_weights.pointmass.track * track_loss -
+                self.reward_weights.pointmass.align * align_loss
             ).detach()
 
             loss_components = {
@@ -326,6 +336,7 @@ class Racing(BaseEnv):
                 "total_loss": total_loss.mean().item(),
                 "total_reward": total_reward.mean().item(),
                 "track_loss": track_loss.mean().item(),
+                "align_loss": align_loss.mean().item()
             }
         else:
             rotation_matrix_b2i = T.quaternion_to_matrix(self._q.roll(1, dims=-1)).clamp_(min=-1.0+1e-6, max=1.0-1e-6)
@@ -334,12 +345,27 @@ class Racing(BaseEnv):
             vel_diff = (self._v - self.target_vel).norm(dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             jerk_loss = self._w.norm(dim=-1)
+
+            # forward_dir = rotation_matrix_b2i @ torch.tensor(
+            #     [1.0, 0.0, 0.0], device=self.device
+            # )
+
+            # # Direction from drone to current target gate
+            # to_gate = gate_pos - curr_pos
+            # to_gate = F.normalize(to_gate, dim=-1)
+
+            # # Alignment loss: 1 - cos(theta)
+            # align_loss = 1.0 - torch.sum(
+            #     forward_dir * to_gate,
+            #     dim=-1
+            # ).clamp(-1.0, 1.0)
             
             total_loss = (
                 self.loss_weights.quadrotor.vel * vel_loss +
                 self.loss_weights.quadrotor.jerk * jerk_loss +
                 self.loss_weights.quadrotor.pos * pos_loss +
                 self.loss_weights.quadrotor.attitude * attitude_loss
+                # self.loss_weights.quadrotor.align * align_loss
             )
             total_reward = (
                 self.reward_weights.constant - 
@@ -348,7 +374,8 @@ class Racing(BaseEnv):
                 self.reward_weights.quadrotor.pos * pos_loss -
                 self.reward_weights.quadrotor.attitude * attitude_loss - 
                 self.reward_weights.quadrotor.progress * progress_loss - 
-                self.reward_weights.quadrotor.collision * collision_loss 
+                self.reward_weights.quadrotor.collision * collision_loss
+                # self.reward_weights.quadrotor.align * align_loss
             ).detach()
             
             loss_components = {
@@ -360,6 +387,7 @@ class Racing(BaseEnv):
                 "collision_loss": collision_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
                 "total_reward": total_reward.mean().item()
+                # "align_loss": align_loss.mean().item()
             }
         return total_loss, total_reward, loss_components
 
