@@ -180,8 +180,10 @@ class ObstacleAvoidance(BaseEnv):
         arrive_loss = 1 - torch.norm(self.p - self.target_pos, dim=-1).lt(0.5).float()
         
         if self.dynamic_type == "pointmass":
-            pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
-            
+            #pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
+            #replace pos_loss below
+            dist = (self._p - self.target_pos).norm(dim=-1) #normalizes the distance tensor
+            pos_loss = torch.where(dist > 1, .5*dist**2, dist) # have to use torch.where because dist is a tensor
             vel_diff = torch.norm(self.dynamics._vel_ema - self.target_vel, dim=-1)
             vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
             z_loss = 1 - (-(self._p[..., 2]-self.target_pos[..., 2]).abs()).exp()
