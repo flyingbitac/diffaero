@@ -69,38 +69,49 @@ class PositionControl(BaseEnv):
         return obs if with_grad else obs.detach()
     
     @timeit
-    def step(self, action, next_obs_before_reset=False, next_state_before_reset=False):
+    def step(
+        self,
+        action: Tensor,
+        next_obs_before_reset: bool = False,
+        next_state_before_reset: bool = False,
+    ):
         # type: (Tensor, bool, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor], Tensor, Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]]]
         terminated, truncated, success, avg_vel = super()._step(action)
         reset = terminated | truncated
         reset_indices = reset.nonzero().view(-1)
+
         loss, reward, loss_components = self.loss_and_reward(action)
-        extra = {
+
+        progress_clone = self.progress.clone()
+        arrive_time_clone = self.arrive_time.clone()
+
+        extra: Dict[str, Union[Dict[str, Tensor], Dict[str, float], Tensor]] = {
             "truncated": truncated,
-            "l": self.progress.clone(),
+            "l": progress_clone,
             "reset": reset,
             "reset_indices": reset_indices,
             "success": success,
-            "arrive_time": self.arrive_time.clone(),
+            "arrive_time": arrive_time_clone,
             "loss_components": loss_components,
-            # Ddata dictionary that contains all the statistical metrics
-            # need to be calculated and logged in a sliding-window manner
-            # Note: all items in dictionary "stats_raw" should have ndim=1
             "stats_raw": {
                 "success_rate": success[reset],
                 "survive_rate": truncated[reset],
-                "l_episode": ((self.progress.clone() - 1) * self.dt)[reset],
+                "l_episode": ((progress_clone - 1) * self.dt)[reset],
                 "avg_vel": avg_vel[success],
-                "arrive_time": self.arrive_time.clone()[success]
+                "arrive_time": arrive_time_clone[success],
             },
         }
+
         if next_obs_before_reset:
             extra["next_obs_before_reset"] = self.get_observations(with_grad=True)
         if next_state_before_reset:
             extra["next_state_before_reset"] = self.get_state(with_grad=True)
+
         if reset_indices.numel() > 0:
             self.reset_idx(reset_indices)
+
         return self.get_observations(), (loss, reward), terminated, extra
+
     
     def states_for_render(self) -> Dict[str, Tensor]:
         pos = self.p.unsqueeze(1) if self.n_agents == 1 else self.p
@@ -117,92 +128,158 @@ class PositionControl(BaseEnv):
         return {k: v[:self.renderer.n_envs] for k, v in states_for_render.items()}
     
     @timeit
-    def loss_and_reward(self, action):
+    def loss_and_reward(
+        self,
+        action: Tensor,
+    ) -> Tuple[Tensor, Tensor, Dict[str, float]]:
         # type: (Tensor) -> Tuple[Tensor, Tensor, Dict[str, float]]
+        # Shared geometry
+        rel = self._p - self.target_pos
+        dist = rel.norm(dim=-1).clamp(min=1e-6)
+        dir_to_target = (-rel / dist.unsqueeze(-1)).detach()
+
         if self.dynamic_type == "pointmass":
             vel_diff = (self.dynamics._vel_ema - self.target_vel).norm(dim=-1)
-            vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-            pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
+            vel_loss = F.smooth_l1_loss(
+                vel_diff, torch.zeros_like(vel_diff), reduction="none"
+            )
+
+            pos_loss = F.smooth_l1_loss(
+                dist, torch.zeros_like(dist), reduction="none"
+            )
+
+            vel_toward = (self._v * dir_to_target).sum(dim=-1)
+            heading_loss = F.relu(-vel_toward)
+
             if self.dynamics.action_frame == "local":
-                action = self.dynamics.local2world(action)
-            jerk_loss = F.mse_loss(self.dynamics.a_thrust, action, reduction="none").sum(dim=-1)
+                action_world = self.dynamics.local2world(action)
+            else:
+                action_world = action
+
+            jerk_loss = F.mse_loss(
+                self.dynamics.a_thrust, action_world, reduction="none"
+            ).sum(dim=-1)
+
             total_loss = (
-                self.loss_weights.pointmass.vel * vel_loss +
-                self.loss_weights.pointmass.jerk * jerk_loss +
-                self.loss_weights.pointmass.pos * pos_loss
+                self.loss_weights.pointmass.vel * vel_loss
+                + self.loss_weights.pointmass.jerk * jerk_loss
+                + self.loss_weights.pointmass.pos * pos_loss
+                + 0.5 * self.loss_weights.pointmass.pos * heading_loss
             )
+
             total_reward = (
-                self.reward_weights.constant - 
-                self.reward_weights.pointmass.vel * vel_loss -
-                self.reward_weights.pointmass.jerk * jerk_loss -
-                self.reward_weights.pointmass.pos * pos_loss
+                self.reward_weights.constant
+                - self.reward_weights.pointmass.vel * vel_loss
+                - self.reward_weights.pointmass.jerk * jerk_loss
+                - self.reward_weights.pointmass.pos * pos_loss
+                - 0.5 * self.reward_weights.pointmass.pos * heading_loss
             ).detach()
-            
+
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
+                "heading_loss": heading_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
-                "total_reward": total_reward.mean().item()
+                "total_reward": total_reward.mean().item(),
             }
+
         else:
-            rotation_matrix_b2i = T.quaternion_to_matrix(self._q.roll(1, dims=-1)).clamp_(min=-1.0+1e-6, max=1.0-1e-6)
-            yaw, pitch, roll = T.matrix_to_euler_angles(rotation_matrix_b2i, "ZYX").unbind(dim=-1)
+            rotation_matrix_b2i = T.quaternion_to_matrix(
+                self._q.roll(1, dims=-1)
+            ).clamp_(min=-1.0 + 1e-6, max=1.0 - 1e-6)
+            yaw, pitch, roll = T.matrix_to_euler_angles(
+                rotation_matrix_b2i, "ZYX"
+            ).unbind(dim=-1)
             attitude_loss = roll**2 + pitch**2
+
             vel_diff = (self._v - self.target_vel).norm(dim=-1)
-            vel_loss = F.smooth_l1_loss(vel_diff, torch.zeros_like(vel_diff), reduction="none")
-            jerk_loss = self._w.norm(dim=-1)
-            pos_loss = 1 - (-(self._p-self.target_pos).norm(dim=-1)).exp()
-            
-            total_loss = (
-                self.loss_weights.quadrotor.vel * vel_loss +
-                self.loss_weights.quadrotor.jerk * jerk_loss +
-                self.loss_weights.quadrotor.pos * pos_loss +
-                self.loss_weights.quadrotor.attitude * attitude_loss
+            vel_loss = F.smooth_l1_loss(
+                vel_diff, torch.zeros_like(vel_diff), reduction="none"
             )
+
+            pos_loss = F.smooth_l1_loss(
+                dist, torch.zeros_like(dist), reduction="none"
+            )
+
+            vel_toward = (self._v * dir_to_target).sum(dim=-1)
+            heading_loss = F.relu(-vel_toward)
+
+            jerk_loss = self._w.norm(dim=-1)
+
+            total_loss = (
+                self.loss_weights.quadrotor.vel * vel_loss
+                + self.loss_weights.quadrotor.jerk * jerk_loss
+                + self.loss_weights.quadrotor.pos * pos_loss
+                + self.loss_weights.quadrotor.attitude * attitude_loss
+                + 0.5 * self.loss_weights.quadrotor.pos * heading_loss
+            )
+
             total_reward = (
-                self.reward_weights.constant - 
-                self.reward_weights.quadrotor.vel * vel_loss -
-                self.reward_weights.quadrotor.jerk * jerk_loss -
-                self.reward_weights.quadrotor.pos * pos_loss -
-                self.reward_weights.quadrotor.attitude * attitude_loss
+                self.reward_weights.constant
+                - self.reward_weights.quadrotor.vel * vel_loss
+                - self.reward_weights.quadrotor.jerk * jerk_loss
+                - self.reward_weights.quadrotor.pos * pos_loss
+                - self.reward_weights.quadrotor.attitude * attitude_loss
+                - 0.5 * self.reward_weights.quadrotor.pos * heading_loss
             ).detach()
-            
+
             loss_components = {
                 "vel_loss": vel_loss.mean().item(),
                 "jerk_loss": jerk_loss.mean().item(),
-                "attitute_loss": attitude_loss.mean().item(),
+                "attitude_loss": attitude_loss.mean().item(),
                 "pos_loss": pos_loss.mean().item(),
+                "heading_loss": heading_loss.mean().item(),
                 "total_loss": total_loss.mean().item(),
-                "total_reward": total_reward.mean().item()
+                "total_reward": total_reward.mean().item(),
             }
+
         return total_loss, total_reward, loss_components
 
     @timeit
-    def reset_idx(self, env_idx):
+    def reset_idx(self, env_idx: Tensor) -> None:
         self.randomizer.refresh(env_idx)
         self.imu.reset_idx(env_idx)
+
         n_resets = len(env_idx)
         state_mask = torch.zeros_like(self.dynamics._state, dtype=torch.bool)
         state_mask[env_idx] = True
-        
-        L = self.L.unsqueeze(-1) # [n_envs, 1]
-        p_min, p_max = -L+0.5, L-0.5
-        p_new = torch.rand((self.n_envs, 3), device=self.device) * (p_max - p_min) + p_min
+
+        L = self.L.unsqueeze(-1)
+        p_min, p_max = -L + 0.5, L - 0.5
+        p_new = (
+            torch.rand((self.n_envs, 3), device=self.device) * (p_max - p_min) + p_min
+        )
+
         self.init_pos[env_idx] = p_new[env_idx]
-        new_state = torch.cat([p_new, torch.zeros(self.n_envs, self.dynamics.state_dim-3, device=self.device)], dim=-1)
+
+        new_state = torch.cat(
+            [
+                p_new,
+                torch.zeros(
+                    self.n_envs, self.dynamics.state_dim - 3, device=self.device
+                ),
+            ],
+            dim=-1,
+        )
+
         if self.dynamic_type == "pointmass":
             new_state[:, 8] = 9.8
         elif self.dynamic_type == "quadrotor":
-            new_state[:, 6] = 1 # real part of the quaternion
+            new_state[:, 6] = 1
+
         self.dynamics._state = torch.where(state_mask, new_state, self.dynamics._state)
         self.dynamics.reset_idx(env_idx)
-        self.target_pos.fill_(0.)
+
+        self.target_pos.fill_(0.0)
         self.progress[env_idx] = 0
         self.arrive_time[env_idx] = 0
-        self.last_action[env_idx] = 0.
-        self.max_vel[env_idx] = torch.rand(
-            n_resets, device=self.device) * (self.max_target_vel - self.min_target_vel) + self.min_target_vel
+        self.last_action[env_idx] = 0.0
+        self.max_vel[env_idx] = (
+            torch.rand(n_resets, device=self.device)
+            * (self.max_target_vel - self.min_target_vel)
+            + self.min_target_vel
+        )
     
     def terminated(self) -> Tensor:
         p_range = self.L.value.unsqueeze(-1)
