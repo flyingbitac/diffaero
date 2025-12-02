@@ -45,11 +45,18 @@ class PositionControl(BaseEnv):
         if self.obs_frame == "local":
             target_vel = self.dynamics.world2local(self.target_vel)
             _v = self.dynamics.world2local(self._v)
+        elif self.obs_frame == "body":
+            target_vel = self.world2body(self.target_vel)
+            vel = self.world2body(self._v)
         elif self.obs_frame == "world":
             target_vel = self.target_vel
             _v = self._v
         
         if self.dynamic_type == "pointmass":
+            if self.obs_frame == "local":
+                orient = self.dynamics.uz
+            else:
+                orient = self.q
             obs = torch.cat([
                 target_vel,
                 self.dynamics.uz if self.obs_frame == "local" else self.q,
