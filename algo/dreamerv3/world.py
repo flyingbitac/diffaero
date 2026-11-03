@@ -221,8 +221,8 @@ class World_Agent:
         torch.save(self.agent.state_dict(), f"{path}/agent.pth")
 
     def load(self, path):
-        self.state_model.load_state_dict(torch.load(os.path.join(path, "statemodel.pth")))
-        self.agent.load_state_dict(torch.load(os.path.join(path, "agent.pth")))
+        self.state_model.load_state_dict(torch.load(os.path.join(path, "statemodel.pth"), weights_only=True))
+        self.agent.load_state_dict(torch.load(os.path.join(path, "agent.pth"), weights_only=True))
 
     @staticmethod
     def build(cfg, env, device):
